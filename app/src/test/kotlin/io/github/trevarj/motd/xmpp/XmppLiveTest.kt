@@ -97,7 +97,7 @@ class XmppLiveTest {
     private suspend inline fun <reified T : XmppEvent> receiveUntil(
         channel: ReceiveChannel<XmppEvent>,
         deadline: Duration = 20.seconds,
-        predicate: (T) -> Boolean = { true },
+        crossinline predicate: (T) -> Boolean = { true },
     ): T? = withTimeoutOrNull(deadline) {
         var found: T? = null
         while (found == null) {
