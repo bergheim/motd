@@ -286,16 +286,25 @@ class ChatViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     /**
-     * Composer/UI affordances for the buffer's network protocol (Task 9), for DISPLAY ONLY (hint
-     * filtering, hiding reply/reaction affordances in `ChatScreen`). Defaults to IRC until this
-     * combine's two independent sources (`buffer`, `networkDao.observeAll()`) have both emitted at
-     * least once, so it can briefly read as the IRC default right after a buffer first loads.
+     * Composer/UI affordances for the buffer's network protocol (Task 9). Defaults to IRC
+     * (permissive) until this combine's two independent sources (`buffer`,
+     * `networkDao.observeAll()`) have both emitted at least once, and likewise whenever a buffer's
+     * `networkId` has no matching row — deliberately, matching
+     * `RoutingConnectionManager.protocolOf`'s `?: Protocol.IRC` fallback (service package), the
+     * same "unknown network defaults to IRC" rule already used where protocol routing decisions
+     * are made. `submit()`/`react()` read this `.value` synchronously: they must not themselves
+     * suspend on a fresh Room read to decide whether to proceed (a prior attempt at that — CI
+     * commit aad8bc8 — broke `channel commands use wire target...`, an existing test that expects
+     * `submit()` to finish sending within a single `runCurrent()`, with no added async hop).
      *
-     * Never gate an actual send/react on this cached value (CI caught exactly that: the two new
-     * XMPP tests raced this default and let the action through). [submit] and [react] instead call
-     * [resolveCapabilities], a fresh one-shot Room read with no synthetic default to race — the same
-     * pattern `RoutingConnectionManager.protocolOf` (service package) already uses to make
-     * protocol-routing decisions authoritative.
+     * This ChatViewModel-level gate is a client-side, best-effort early rejection, not the sole
+     * safety net: `ConnectionManager.clientFor` already returns null for an XMPP-routed network id,
+     * so IRC-only wire commands (`/topic`, `/kick`, `/nick`, `/away`, `/ban`, raw lines) silently
+     * no-op regardless of this gate's timing, and `canSendReactionTags` already requires an IRC
+     * `message-tags` cap that an XMPP connection never reports. The one place this gate carries
+     * real weight is `/whois`, which otherwise opens the nick-detail sheet unconditionally before
+     * checking for a client. A brief stale-IRC-default window right after a buffer first loads is
+     * an accepted tradeoff (matches the deeper layer's own established default), not a regression.
      */
     val capabilities: StateFlow<ProtocolCapabilities> = buffer
         .combine(networkDao.observeAll()) { current, networks ->
@@ -305,18 +314,6 @@ class ChatViewModel @Inject constructor(
         }
         .distinctUntilChanged()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ProtocolCapabilities.IRC)
-
-    /**
-     * Authoritative capabilities for [networkId], resolved fresh from Room at the moment of a
-     * gated send/react action (Task 9 CI fix). Unlike [capabilities] above, this has no cached
-     * default that could race ahead of the real network row: the network a buffer references
-     * always already exists (buffers are created after their network row), so this suspend read
-     * is a cheap indexed PK lookup, never a "waiting on first Flow emission" race.
-     */
-    private suspend fun resolveCapabilities(networkId: Long?): ProtocolCapabilities {
-        val protocol = networkId?.let { networkDao.byId(it)?.protocol } ?: Protocol.IRC
-        return ProtocolCapabilities.forProtocol(protocol)
-    }
 
     private val persistedIdentity = buffer
         .flatMapLatest { current ->
@@ -677,7 +674,7 @@ class ChatViewModel @Inject constructor(
      * arrived) surface a snackbar rather than failing silently.
      */
     fun react(message: MessageEntity, emoji: String) = viewModelScope.launch {
-        if (!resolveCapabilities(state.value.buffer?.networkId).reactions) {
+        if (!capabilities.value.reactions) {
             uiEventQueue.enqueue(ChatUiEvent.ReactionBlocked)
             return@launch
         }
@@ -786,7 +783,7 @@ class ChatViewModel @Inject constructor(
             return@launch
         }
         val cmd = parseCommand(raw)
-        if (!resolveCapabilities(networkId).slashCommands && !ProtocolCapabilities.xmppAllowed(cmd)) {
+        if (!capabilities.value.slashCommands && !ProtocolCapabilities.xmppAllowed(cmd)) {
             uiEventQueue.enqueue(ChatUiEvent.CommandUnsupported)
             return@launch
         }

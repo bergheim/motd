@@ -465,16 +465,18 @@ class ChatViewModelTest {
         val manager = FakeConnectionManager(xmppNetwork.id)
         val vm = viewModel(xmppBuffer, manager)
         vm.state.first { it.buffer != null }
+        // `capabilities` combines `buffer` (already-eager) with a real `networkDao.observeAll()`
+        // Room read and defaults to IRC until both have emitted, so `it.buffer != null` alone does
+        // not guarantee the network row has been read yet. Wait for the real, protocol-specific
+        // value with a strong predicate before exercising the (synchronous) gate below it —
+        // submit()/react() read `capabilities.value` directly and must not themselves suspend on a
+        // fresh Room read (that regressed `channel commands use wire target...`, CI on aad8bc8).
+        vm.capabilities.first { it == ProtocolCapabilities.XMPP }
 
         vm.submit("/whois bob", {}, {})
-        // The gate resolves the network row fresh from Room (a real suspend, not the cached
-        // `capabilities` StateFlow's possibly-still-default value) before enqueuing the event, so
-        // this must be awaited via a genuine suspend rather than advanceUntilIdle() + a synchronous
-        // `.value` read: advanceUntilIdle() only drains what is already queued on the test
-        // dispatcher and does not block for a real async completion arriving afterward.
-        val event = vm.uiEvents.first { it.isNotEmpty() }.single()
+        advanceUntilIdle()
 
-        assertEquals(ChatUiEvent.CommandUnsupported, event.value)
+        assertEquals(ChatUiEvent.CommandUnsupported, vm.uiEvents.value.single().value)
         assertTrue(manager.sentLines.isEmpty())
         assertTrue(manager.messages.isEmpty())
         assertNull(vm.nickSheet.value)
@@ -501,13 +503,14 @@ class ChatViewModelTest {
         val manager = FakeConnectionManager(xmppNetwork.id)
         val vm = viewModel(xmppBuffer, manager)
         vm.state.first { it.buffer != null }
+        // See the comment in the `/whois` test above: force the real Room-backed value before
+        // relying on the synchronous `capabilities.value` gate inside react().
+        vm.capabilities.first { it == ProtocolCapabilities.XMPP }
 
         vm.react(message(xmppBuffer.id, "hi", "m1", "alice"), "👍")
-        // See the comment in the `/whois` test above: await the real event rather than trusting
-        // advanceUntilIdle() to have raced the fresh Room lookup to completion.
-        val event = vm.uiEvents.first { it.isNotEmpty() }.single()
+        advanceUntilIdle()
 
-        assertEquals(ChatUiEvent.ReactionBlocked, event.value)
+        assertEquals(ChatUiEvent.ReactionBlocked, vm.uiEvents.value.single().value)
         assertTrue(manager.reactions.isEmpty())
     }
 
