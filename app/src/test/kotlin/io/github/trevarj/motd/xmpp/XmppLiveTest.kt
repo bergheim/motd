@@ -4,6 +4,7 @@ import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import org.jivesoftware.smack.util.stringencoder.Base64
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assume.assumeTrue
@@ -52,6 +53,30 @@ import kotlin.time.Duration.Companion.seconds
  */
 class XmppLiveTest {
 
+    /**
+     * `smack-android` (pulled in transitively by `:app`) service-loads `AndroidBase64Encoder` as
+     * Smack's default [Base64.Encoder], which delegates to `android.util.Base64`. On the plain
+     * JVM these live tests run on, AGP's unit-test stub of that class throws
+     * `"Method encodeToString ... not mocked"` the moment Smack needs it — e.g.
+     * `EntityCapsManager.generateVerificationString` while building the initial presence/caps
+     * hash — which kills the connection pre-auth. Installing this encoder before any session is
+     * created replaces it with one backed by `java.util.Base64`, mirroring Smack's own
+     * `Java7Base64Encoder` (smack-java8): standard alphabet, padded for [encodeToString],
+     * unpadded for [encodeToStringWithoutPadding], no MIME line wrapping — equivalent to what
+     * Android's `Base64.NO_WRAP` would have produced.
+     */
+    private object JvmBase64Encoder : Base64.Encoder {
+        private val encoder = java.util.Base64.getEncoder()
+        private val encoderWithoutPadding = encoder.withoutPadding()
+        private val decoder = java.util.Base64.getDecoder()
+
+        override fun decode(string: String): ByteArray = decoder.decode(string)
+        override fun encodeToString(input: ByteArray): String = encoder.encodeToString(input)
+        override fun encodeToStringWithoutPadding(input: ByteArray): String =
+            encoderWithoutPadding.encodeToString(input)
+        override fun encode(input: ByteArray): ByteArray = encoder.encode(input)
+    }
+
     private fun env(name: String): String? = System.getenv(name)?.takeIf { it.isNotBlank() }
 
     private val domain: String? get() = env("MOTD_XMPP_LIVE_DOMAIN")
@@ -84,6 +109,8 @@ class XmppLiveTest {
             "Live XMPP tests require MOTD_XMPP_LIVE_DOMAIN/USER1/PASS1/USER2/PASS2 to be set; skipping.",
             account1 != null && account2 != null,
         )
+        // Must run before any SmackXmppSession/XMPPTCPConnection is created — see JvmBase64Encoder KDoc.
+        Base64.setEncoder(JvmBase64Encoder)
     }
 
     /**
