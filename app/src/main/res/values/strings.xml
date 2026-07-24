@@ -567,12 +567,18 @@
     <string name="add_network_plaintext_continue">Connect anyway</string>
     <string name="add_network_kind_network">IRC network</string>
     <string name="add_network_kind_bouncer">Bouncer</string>
+    <string name="add_network_kind_xmpp">XMPP account</string>
     <string name="add_network_connect_save">Connect &amp; save</string>
     <string name="add_network_testing">Testing connection…</string>
     <string name="add_network_edit">Edit</string>
     <string name="add_network_save_anyway">Save anyway</string>
     <string name="add_network_retry">Retry</string>
     <string name="add_network_failed">Couldn\'t connect — %1$s</string>
+    <string name="network_settings_xmpp_jid">Address (user@domain)</string>
+    <string name="network_settings_xmpp_password">Password</string>
+    <string name="network_settings_xmpp_muc_nick">Group chat nickname</string>
+    <string name="network_settings_xmpp_direct_tls">Direct TLS (port 5223)</string>
+    <string name="network_settings_xmpp_advanced">Advanced</string>
 
     <!-- soju bound-network manager (WP-V2, §5.5) -->
     <string name="bouncer_control_title">Soju control center</string>

@@ -27,7 +27,9 @@ enum class OnboardingStep {
 }
 
 /** Top-level path chosen on the CHOICE page. */
-enum class ConnectionChoice { BOUNCER, NETWORK }
+// XMPP is only reachable from the settings add-network flow (AddNetworkViewModel); onboarding's
+// own CHOICE step does not offer it (xmpp-support Task 8).
+enum class ConnectionChoice { BOUNCER, NETWORK, XMPP }
 
 /** Auth mechanism selected on the AUTH page. Mirrors SaslMechanism names for persistence. */
 enum class AuthMode { NONE, PLAIN, EXTERNAL }
