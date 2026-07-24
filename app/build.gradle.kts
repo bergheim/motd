@@ -266,6 +266,10 @@ tasks.matching { it.name == "check" || it.name.startsWith("assemble") }.configur
 
 kotlin { jvmToolchain(21) }
 
+// Smack pulls both xpp3 and its strict-subset xpp3_min, which carry identical org.xmlpull
+// classes and trip the duplicate-classes check; keep only the superset jar.
+configurations.all { exclude(group = "xpp3", module = "xpp3_min") }
+
 dependencies {
     implementation(project(":irc"))
     debugImplementation(files(libboxAar))
