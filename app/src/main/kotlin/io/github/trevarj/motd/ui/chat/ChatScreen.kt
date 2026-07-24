@@ -126,6 +126,10 @@ private const val REACTION_PREFETCH_ROWS = 12
 private const val MAX_VISIBLE_REACTION_MSGIDS = 80
 private const val MAX_UNREAD_BADGE_COUNT = 100
 
+/** Reactions capability off (Task 9): no chips render regardless of stored reaction rows. */
+private val EMPTY_REACTION_CHIPS: (String) -> List<io.github.trevarj.motd.ui.components.ReactionChip> =
+    { emptyList() }
+
 internal class ChatForegroundLifecycleGate(
     private val onResume: () -> Unit,
     private val onPause: () -> Unit,
@@ -612,6 +616,7 @@ fun ChatContent(
                 event.limit,
             )
             is ChatUiEvent.ReplyJumpUnavailable -> jumpNotLoaded
+            ChatUiEvent.CommandUnsupported -> stringResource(R.string.chat_command_unsupported)
         }
     }
     val retryLabel = stringResource(R.string.chat_retry)
@@ -1187,7 +1192,9 @@ fun ChatContent(
                         networkId = state.buffer?.networkId,
                         // Frozen read-marker so the "New messages" divider stays put (plans/15 #2).
                         readMarkerTime = readMarkerSnapshot,
-                        reactionChips = reactionChips,
+                        // XMPP has no shared-reaction wire mechanism yet (Task 9): hide any chips
+                        // rather than rely solely on the VM blocking a tap.
+                        reactionChips = if (state.capabilities.reactions) reactionChips else EMPTY_REACTION_CHIPS,
                         replyPreview = replyPreview,
                         onReplyPreviewClick = onReplyPreviewClick,
                         onLongPress = { sheetTarget = it },
@@ -1240,6 +1247,7 @@ fun ChatContent(
                             }
                         },
                         onSenderClick = onSenderClick,
+                        repliesEnabled = state.capabilities.replies,
                     )
                     }
                     }
@@ -1271,8 +1279,18 @@ fun ChatContent(
                     )
                 }
 
-                val completions = remember(composerText, memberNicks, recentSpeakers) {
-                    autocompleteFor(composerText, memberNicks, recentSpeakers, nickNormalizer)
+                val completions = remember(composerText, memberNicks, recentSpeakers, state.capabilities) {
+                    autocompleteFor(
+                        composerText,
+                        memberNicks,
+                        recentSpeakers,
+                        nickNormalizer,
+                        commandHints = if (state.capabilities.slashCommands) {
+                            COMMAND_HINTS
+                        } else {
+                            XMPP_COMMAND_HINTS
+                        },
+                    )
                 }
                 val needsMemberCompletion = remember(composerText) {
                     composerNeedsMemberNicks(composerText)
@@ -1436,6 +1454,8 @@ fun ChatContent(
                 } == true
                 ready != null && canSendReactionTags(ready.caps, ready.isupport, remove = mine)
             },
+            reactionsEnabled = state.capabilities.reactions,
+            repliesEnabled = state.capabilities.replies,
             onCopy = {
                 hideThen {
                     scope.launch {

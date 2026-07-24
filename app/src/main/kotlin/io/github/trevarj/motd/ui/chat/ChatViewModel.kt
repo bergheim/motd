@@ -10,7 +10,9 @@ import io.github.trevarj.motd.data.db.BufferEntity
 import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.db.MemberEntity
 import io.github.trevarj.motd.data.db.MessageEntity
+import io.github.trevarj.motd.data.db.NetworkDao
 import io.github.trevarj.motd.data.db.NetworkIdentityDao
+import io.github.trevarj.motd.data.db.Protocol
 import io.github.trevarj.motd.data.db.ComposerDraftEntity
 import io.github.trevarj.motd.data.db.TimelineAnchor
 import io.github.trevarj.motd.data.db.effectiveLocalReadAnchor
@@ -97,6 +99,8 @@ data class ChatState(
     val connState: IrcClientState? = null,
     val presence: Map<PresenceKey, PresenceState> = emptyMap(),
     val conversationLayout: ConversationLayoutState = ConversationLayoutState(),
+    /** Composer/UI affordances gated by the buffer's network protocol (Task 9). */
+    val capabilities: ProtocolCapabilities = ProtocolCapabilities.IRC,
 )
 
 data class ComposerDraftState(
@@ -163,6 +167,7 @@ class ChatViewModel @Inject constructor(
     private val messageRepository: MessageRepository,
     private val bufferRepository: BufferRepository,
     private val networkIdentityDao: NetworkIdentityDao,
+    private val networkDao: NetworkDao,
     private val connectionManager: ConnectionManager,
     private val typingTracker: TypingTracker,
     private val foregroundBufferTracker: ForegroundBufferTracker,
@@ -279,6 +284,17 @@ class ChatViewModel @Inject constructor(
             buffer?.let { states[it.networkId] ?: IrcClientState.Disconnected }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    /** Composer/UI affordances for the buffer's network protocol (Task 9). Defaults to IRC while
+     *  the buffer/network rows are still loading, matching every existing IRC-only buffer. */
+    val capabilities: StateFlow<ProtocolCapabilities> = buffer
+        .combine(networkDao.observeAll()) { current, networks ->
+            val protocol = current?.let { b -> networks.firstOrNull { it.id == b.networkId }?.protocol }
+                ?: Protocol.IRC
+            ProtocolCapabilities.forProtocol(protocol)
+        }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ProtocolCapabilities.IRC)
 
     private val persistedIdentity = buffer
         .flatMapLatest { current ->
@@ -444,6 +460,8 @@ class ChatViewModel @Inject constructor(
         )
     }.combine(conversationLayout) { current, layout ->
         current.copy(conversationLayout = layout)
+    }.combine(capabilities) { current, caps ->
+        current.copy(capabilities = caps)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ChatState())
 
     /** Persist to the canonical id captured at the time of selection; Room then drives the UI. */
@@ -637,6 +655,10 @@ class ChatViewModel @Inject constructor(
      * arrived) surface a snackbar rather than failing silently.
      */
     fun react(message: MessageEntity, emoji: String) = viewModelScope.launch {
+        if (!capabilities.value.reactions) {
+            uiEventQueue.enqueue(ChatUiEvent.ReactionBlocked)
+            return@launch
+        }
         val ready = connState.value as? IrcClientState.Ready
         val removing = message.msgid?.let { msgid ->
             reactionChips.value[msgid]?.firstOrNull { it.emoji == emoji }?.mine
@@ -741,7 +763,12 @@ class ChatViewModel @Inject constructor(
             submitRawLine(networkId, raw)
             return@launch
         }
-        when (val cmd = parseCommand(raw)) {
+        val cmd = parseCommand(raw)
+        if (!capabilities.value.slashCommands && !ProtocolCapabilities.xmppAllowed(cmd)) {
+            uiEventQueue.enqueue(ChatUiEvent.CommandUnsupported)
+            return@launch
+        }
+        when (cmd) {
             is ChatCommand.None -> Unit
             is ChatCommand.Message -> {
                 val roomId = operationalBufferId.value

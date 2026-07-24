@@ -14,6 +14,7 @@ import io.github.trevarj.motd.data.db.MotdDatabase
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkIdentityEntity
 import io.github.trevarj.motd.data.db.NetworkRole
+import io.github.trevarj.motd.data.db.Protocol
 import io.github.trevarj.motd.data.db.MessageEntity
 import io.github.trevarj.motd.data.db.MessageKind
 import io.github.trevarj.motd.data.db.ReactionEntity
@@ -441,6 +442,67 @@ class ChatViewModelTest {
 
         assertEquals(ChatUiEvent.InvalidCommand, vm.uiEvents.value.single().value)
         assertTrue(manager.sentLines.isEmpty())
+    }
+
+    @Test
+    fun `whois on an XMPP buffer is rejected client-side without any wire effect`() = runTest {
+        val xmppNetwork = NetworkEntity(
+            name = "xmpp-test",
+            protocol = Protocol.XMPP,
+            role = NetworkRole.DIRECT,
+            host = "xmpp.example",
+            port = 5222,
+            nick = "me",
+            username = "me",
+            realname = "Me",
+        ).let { it.copy(id = db.networkDao().insert(it)) }
+        val xmppBuffer = BufferEntity(
+            networkId = xmppNetwork.id,
+            name = "alice@xmpp.example",
+            displayName = "alice",
+            type = BufferType.QUERY,
+        ).let { it.copy(id = db.bufferDao().insert(it)) }
+        val manager = FakeConnectionManager(xmppNetwork.id)
+        val vm = viewModel(xmppBuffer, manager)
+        vm.state.first { it.buffer != null }
+
+        vm.submit("/whois bob", {}, {})
+        advanceUntilIdle()
+
+        assertEquals(ChatUiEvent.CommandUnsupported, vm.uiEvents.value.single().value)
+        assertTrue(manager.sentLines.isEmpty())
+        assertTrue(manager.messages.isEmpty())
+        assertNull(vm.nickSheet.value)
+    }
+
+    @Test
+    fun `reaction on an XMPP buffer is blocked without calling sendReact`() = runTest {
+        val xmppNetwork = NetworkEntity(
+            name = "xmpp-test-2",
+            protocol = Protocol.XMPP,
+            role = NetworkRole.DIRECT,
+            host = "xmpp.example",
+            port = 5222,
+            nick = "me",
+            username = "me",
+            realname = "Me",
+        ).let { it.copy(id = db.networkDao().insert(it)) }
+        val xmppBuffer = BufferEntity(
+            networkId = xmppNetwork.id,
+            name = "alice@xmpp.example",
+            displayName = "alice",
+            type = BufferType.QUERY,
+        ).let { it.copy(id = db.bufferDao().insert(it)) }
+        val manager = FakeConnectionManager(xmppNetwork.id)
+        val vm = viewModel(xmppBuffer, manager)
+        vm.state.first { it.buffer != null }
+        assertFalse(vm.capabilities.value.reactions)
+
+        vm.react(message(xmppBuffer.id, "hi", "m1", "alice"), "👍")
+        advanceUntilIdle()
+
+        assertEquals(ChatUiEvent.ReactionBlocked, vm.uiEvents.value.single().value)
+        assertTrue(manager.reactions.isEmpty())
     }
 
     @Test
@@ -910,6 +972,7 @@ class ChatViewModelTest {
             messageRepository = messages,
             bufferRepository = buffers,
             networkIdentityDao = db.networkIdentityDao(),
+            networkDao = db.networkDao(),
             connectionManager = manager,
             typingTracker = FakeTypingTracker(),
             foregroundBufferTracker = foreground,

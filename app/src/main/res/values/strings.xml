@@ -42,6 +42,8 @@
     <string name="new_sheet_channel_prefix">#</string>
     <string name="new_sheet_channel_hint">Channel name</string>
     <string name="new_sheet_nick_hint">Nickname</string>
+    <string name="new_sheet_room_jid_hint">room@conference.example.net</string>
+    <string name="new_sheet_jid_hint">user@example.net</string>
     <string name="new_sheet_join">Join</string>
     <string name="new_sheet_message">Message</string>
     <string name="new_sheet_browse">Browse channels…</string>
@@ -732,6 +734,7 @@
     <string name="chat_react_failed">Couldn\'t react — message not confirmed</string>
     <string name="chat_reaction_blocked">This server does not allow shared reactions</string>
     <string name="chat_reaction_send_failed">Couldn\'t update reaction — try again</string>
+    <string name="chat_command_unsupported">This command isn’t available in XMPP chats.</string>
 
     <!-- Topic edit from ChannelInfo (WP-V3, §5.8) -->
     <string name="channelinfo_topic_edit_title">Edit topic</string>

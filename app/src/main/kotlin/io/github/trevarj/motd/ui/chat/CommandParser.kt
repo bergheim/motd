@@ -60,6 +60,9 @@ val COMMAND_HINTS: List<String> = listOf(
     "/away", "/whois", "/list", "/kick", "/ban",
 )
 
+/** Commands still meaningful on XMPP buffers (Task 9); the composer hints to this subset there. */
+val XMPP_COMMAND_HINTS: List<String> = listOf("/me", "/join", "/part", "/msg", "/query")
+
 /**
  * Parse [raw] composer input into a [ChatCommand]. See the type doc for the rules. This is the
  * single source of truth for slash-command behavior and its parser unit tests.

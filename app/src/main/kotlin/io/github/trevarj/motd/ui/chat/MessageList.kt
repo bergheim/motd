@@ -213,6 +213,8 @@ fun MessageList(
     onSenderClick: (String) -> Unit = {},
     onAcceptInvite: (Long) -> Unit = {},
     onDismissInvite: (Long) -> Unit = {},
+    // False hides the swipe-to-reply gesture (e.g. XMPP buffers, Task 9).
+    repliesEnabled: Boolean = true,
 ) {
     val scrolling by remember(listState) { derivedStateOf { listState.isScrollInProgress } }
     // Scrolling postpones only cache misses. Parsed URLs and resolved previews remain renderable so
@@ -348,6 +350,7 @@ fun MessageList(
                         onSenderClick = onSenderClick,
                         replyPreview = replyPreview,
                         onReplyPreviewClick = onReplyPreviewClick,
+                        repliesEnabled = repliesEnabled,
                     )
                 }
             }
@@ -652,6 +655,7 @@ private fun MessageRow(
     onReplyPreviewClick: (String) -> Unit,
     // Non-null for an expanded fool row: renders a "hide" chip above the bubble that re-collapses it.
     onCollapseFool: (() -> Unit)? = null,
+    repliesEnabled: Boolean = true,
 ) {
     // Read-marker divider sits below the first message newer than the marker (drawn after the
     // bubble because the list is reversed => "above" the newer message visually).
@@ -756,6 +760,7 @@ private fun MessageRow(
             semanticsTestTag = messageTag(msg)
             mentionDescription?.let { stateDescription = it }
         },
+        enabled = repliesEnabled,
         onReply = { onReply(msg) },
     ) { rowModifier ->
         MessageBubble(

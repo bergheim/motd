@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import io.github.trevarj.motd.R
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
+import io.github.trevarj.motd.data.db.Protocol
 import io.github.trevarj.motd.ui.theme.MotdTheme
 
 /**
@@ -94,6 +95,12 @@ internal fun NewConversationSheetContent(
         )
     }
     var input by remember { mutableStateOf("") }
+    val isXmppNetwork = selectedNetwork?.protocol == Protocol.XMPP
+    val trimmedInput = input.trim()
+    // Room/user JIDs have no channel-style prefix; only the message-user JID is validated so a
+    // malformed address cannot be dispatched as a nick (Task 9).
+    val inputValid = trimmedInput.isNotEmpty() &&
+        (tab == 0 || !isXmppNetwork || isValidJid(trimmedInput))
 
     Column(
         modifier = Modifier
@@ -129,7 +136,7 @@ internal fun NewConversationSheetContent(
             onValueChange = { input = it },
             singleLine = true,
             modifier = Modifier.fillMaxWidth().testTag("new_conversation_input"),
-            prefix = if (tab == 0) {
+            prefix = if (tab == 0 && !isXmppNetwork) {
                 { Text(stringResource(R.string.new_sheet_channel_prefix)) }
             } else {
                 null
@@ -137,8 +144,11 @@ internal fun NewConversationSheetContent(
             label = {
                 Text(
                     stringResource(
-                        if (tab == 0) R.string.new_sheet_channel_hint
-                        else R.string.new_sheet_nick_hint,
+                        if (isXmppNetwork) {
+                            if (tab == 0) R.string.new_sheet_room_jid_hint else R.string.new_sheet_jid_hint
+                        } else {
+                            if (tab == 0) R.string.new_sheet_channel_hint else R.string.new_sheet_nick_hint
+                        },
                     ),
                 )
             },
@@ -150,12 +160,13 @@ internal fun NewConversationSheetContent(
                 val value = input.trim()
                 if (value.isEmpty()) return@Button
                 if (tab == 0) {
-                    onJoinChannel(net.id, channelJoinTarget(value))
+                    onJoinChannel(net.id, joinTarget(net, value))
                 } else {
+                    if (net.protocol == Protocol.XMPP && !isValidJid(value)) return@Button
                     onMessageUser(net.id, value)
                 }
             },
-            enabled = selectedNetwork != null && input.isNotBlank(),
+            enabled = selectedNetwork != null && inputValid,
             modifier = Modifier.fillMaxWidth().testTag("new_conversation_submit"),
         ) {
             Text(
@@ -188,6 +199,26 @@ internal fun NewConversationSheetContent(
 }
 
 internal fun channelJoinTarget(channelName: String): String = "#${channelName.trim()}"
+
+/**
+ * Join target for [net]: IRC keeps the `#`-prefix convention via [channelJoinTarget]; XMPP MUC
+ * rooms are addressed by a bare room JID, so the trimmed value is used as-is (Task 9).
+ */
+internal fun joinTarget(net: NetworkEntity, value: String): String =
+    if (net.protocol == Protocol.XMPP) value.trim() else channelJoinTarget(value)
+
+/**
+ * Minimal client-side JID shape check (local@domain[/resource]): rejects obviously malformed
+ * addresses before dispatching a message-user request on an XMPP network (Task 9). Full JID
+ * validation (XEP-0106 escaping, Unicode nodeprep) is left to the server.
+ */
+internal fun isValidJid(value: String): Boolean {
+    val withoutResource = value.trim().substringBefore('/')
+    val at = withoutResource.indexOf('@')
+    if (at <= 0 || at == withoutResource.length - 1) return false
+    val domain = withoutResource.substring(at + 1)
+    return domain.contains('.') && !domain.startsWith('.') && !domain.endsWith('.')
+}
 
 @Composable
 private fun NetworkDropdown(
