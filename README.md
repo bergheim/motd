@@ -55,7 +55,7 @@ nix develop -c ./test/e2e/headless.sh showcase
 | Delivery | Persistent-socket foreground service, or UnifiedPush + `soju.im/webpush` with on-device RFC 8291 (aes128gcm) decryption. |
 | Theming | Material You dynamic color, curated editor/terminal palettes, custom nick colors, and refined generated chat wallpapers. |
 | Transport | okio over `SSLSocket`, SASL PLAIN/EXTERNAL, client certificates via Android KeyChain, IRCv3 STS pinning. |
-| XMPP | Native accounts alongside IRC: SASL login (STARTTLS default), roster, 1:1 chats, MUC, typing. v1: no MAM, carbons, OMEMO, or push — a persistent connection instead. |
+| XMPP | Native accounts alongside IRC: SASL login (STARTTLS default), roster, 1:1 chats, MUC, typing. v1: no MAM, carbons, OMEMO, or push — a persistent connection instead, and no message notifications yet. |
 
 Requires Android 8.0 (API 26) or newer.
 

@@ -215,11 +215,12 @@ class RoutingConnectionManager @Inject constructor(
     // -- Unconditional IRC delegation: no XMPP counterpart exists for these yet. --
 
     override suspend fun retryMessage(eventId: TimelineEventId): SendAcceptance =
-        // retryMessage takes an event id, not a buffer id. Resolving its owning buffer cheaply would
-        // need a message-table lookup this router doesn't otherwise perform; IRC and XMPP occupy
-        // disjoint event-id spaces from the one shared DB, so an XMPP-originated event id can never
-        // match an IRC row. Delegating to `irc` unconditionally is therefore safe: it reports
-        // EVENT_NOT_RETRYABLE for anything it doesn't recognize.
+        // retryMessage takes an event id, not a buffer id, and `irc`'s byCanonicalId lookup DOES
+        // resolve XMPP rows too (both protocols share one timeline table — the id spaces are not
+        // disjoint). What actually makes unconditional delegation safe is the eligibility gate:
+        // isGenericRetryEligible requires msgid == null, and every XMPP row always carries a msgid
+        // (originId while pending, stanzaId once received), so an XMPP event is never retry-eligible
+        // and `irc` returns EVENT_NOT_RETRYABLE for it. XMPP v1 has no retry path of its own.
         irc.retryMessage(eventId)
 
     override suspend fun acceptInvite(messageId: Long) = irc.acceptInvite(messageId)

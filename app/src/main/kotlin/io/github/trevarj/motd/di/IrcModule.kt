@@ -5,6 +5,7 @@ import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.irc.transport.OkioLineTransport
 import io.github.trevarj.motd.irc.transport.TransportFactory
 import io.github.trevarj.motd.service.ConnectionManager
@@ -16,7 +17,6 @@ import io.github.trevarj.motd.service.XmppConnectionSurface
 import io.github.trevarj.motd.xmpp.XmppConnectionManager
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.StateFlow
-import io.github.trevarj.motd.irc.event.IrcClientState
 
 /**
  * IRC/service seam wiring (xmpp-support Task 7). [ConnectionManager] → [RoutingConnectionManager],

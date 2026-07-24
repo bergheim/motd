@@ -73,13 +73,16 @@ only unique per sender rather than globally.
 The UI stays capability-gated rather than protocol-specific: a per-buffer
 `ProtocolCapabilities` value hides reactions, replies, and slash commands
 beyond the small XMPP-supported set (`/me`, MUC nick autocomplete) on XMPP
-buffers, and 1:1 typing indicators ride XEP-0085 chat states. XMPP accounts
+buffers, and 1:1 typing indicators ride XEP-0085 chat states. Incoming XMPP
+messages do not yet raise notifications: `MessageNotifier` is IRC-typed, and a
+protocol-neutral notification hook is the planned follow-up. XMPP accounts
 always use the persistent-socket delivery path — `BootReceiver` and the
 push-idle teardown both treat any configured XMPP network as requiring the
 socket, since XMPP has no push mode of its own yet. XEP-0198 is enabled for
 send acknowledgements only, not stream resumption: every reconnect is a clean
 login and MUC rejoin, and any pending row left unacknowledged across that
-reconnect flips to `failed`, surfacing through the existing retry UI.
+reconnect flips to `failed`. Unlike IRC there is no retry affordance in v1, so a
+failed XMPP send must be re-typed.
 
 ## Where to work
 

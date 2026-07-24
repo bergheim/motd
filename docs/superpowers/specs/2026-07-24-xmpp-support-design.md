@@ -74,7 +74,8 @@ XMPP data lives in the existing tables, discriminated at the network level.
    persisted as identity.
 3. **Send confirmation:** 1:1 sends confirm via XEP-0198 ack; MUC sends confirm by matching the
    reflected message's origin-id. Both map onto the existing `pendingLabel`/`failed` columns;
-   timeout marks `failed` → existing retry UI.
+   timeout marks `failed`. Unlike IRC there is no retry affordance in v1 — a failed send must be
+   re-typed (XMPP rows always carry a msgid, so `isGenericRetryEligible` never admits them).
 4. **MUC occupants:** `(bufferId, nick)` is the only occupant key (per-room, so no cross-room
    collisions). Real JID, affiliation, and role metadata are deferred.
 
@@ -102,8 +103,9 @@ Lifecycle invariants (from review):
   room listeners **before** `join()`. No missed-stanza windows.
 - An account is **Ready** only after authentication *and* initial roster load; MUC joins happen
   after Ready and surface per-room via the existing `joined` flag.
-- Every reconnect is a clean login + MUC rejoin. Unacked pending rows flip to `failed` (retry
-  UI), same as IRC's echo timeout; origin-id dedup collapses any edge-case replays.
+- Every reconnect is a clean login + MUC rejoin. Unacked pending rows flip to `failed` (no retry
+  affordance in v1 — must be re-typed), same as IRC's echo timeout; origin-id dedup collapses any
+  edge-case replays.
 - The wanted-MUC set is exactly the buffers with `joined=true`. Reconnect rejoins them and
   refreshes occupants wholesale. Explicit leave increments `membershipCycle`; reconnect rejoin
   does not.
