@@ -299,6 +299,9 @@ dependencies {
     // Explicit for the IRC-over-WebSocket transport (plans/19 §3.3); already present transitively
     // via Coil, pinned to the same resolved version in libs.versions.toml so nothing new resolves.
     implementation(libs.okhttp)
+    implementation(libs.smack.android)
+    implementation(libs.smack.extensions)
+    implementation(libs.smack.tcp)
     implementation(libs.coroutines.android)
     implementation(libs.serialization.json)
     implementation(libs.unifiedpush.connector)
