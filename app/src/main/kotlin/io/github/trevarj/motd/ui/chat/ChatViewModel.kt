@@ -285,8 +285,18 @@ class ChatViewModel @Inject constructor(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-    /** Composer/UI affordances for the buffer's network protocol (Task 9). Defaults to IRC while
-     *  the buffer/network rows are still loading, matching every existing IRC-only buffer. */
+    /**
+     * Composer/UI affordances for the buffer's network protocol (Task 9), for DISPLAY ONLY (hint
+     * filtering, hiding reply/reaction affordances in `ChatScreen`). Defaults to IRC until this
+     * combine's two independent sources (`buffer`, `networkDao.observeAll()`) have both emitted at
+     * least once, so it can briefly read as the IRC default right after a buffer first loads.
+     *
+     * Never gate an actual send/react on this cached value (CI caught exactly that: the two new
+     * XMPP tests raced this default and let the action through). [submit] and [react] instead call
+     * [resolveCapabilities], a fresh one-shot Room read with no synthetic default to race — the same
+     * pattern `RoutingConnectionManager.protocolOf` (service package) already uses to make
+     * protocol-routing decisions authoritative.
+     */
     val capabilities: StateFlow<ProtocolCapabilities> = buffer
         .combine(networkDao.observeAll()) { current, networks ->
             val protocol = current?.let { b -> networks.firstOrNull { it.id == b.networkId }?.protocol }
@@ -295,6 +305,18 @@ class ChatViewModel @Inject constructor(
         }
         .distinctUntilChanged()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ProtocolCapabilities.IRC)
+
+    /**
+     * Authoritative capabilities for [networkId], resolved fresh from Room at the moment of a
+     * gated send/react action (Task 9 CI fix). Unlike [capabilities] above, this has no cached
+     * default that could race ahead of the real network row: the network a buffer references
+     * always already exists (buffers are created after their network row), so this suspend read
+     * is a cheap indexed PK lookup, never a "waiting on first Flow emission" race.
+     */
+    private suspend fun resolveCapabilities(networkId: Long?): ProtocolCapabilities {
+        val protocol = networkId?.let { networkDao.byId(it)?.protocol } ?: Protocol.IRC
+        return ProtocolCapabilities.forProtocol(protocol)
+    }
 
     private val persistedIdentity = buffer
         .flatMapLatest { current ->
@@ -655,7 +677,7 @@ class ChatViewModel @Inject constructor(
      * arrived) surface a snackbar rather than failing silently.
      */
     fun react(message: MessageEntity, emoji: String) = viewModelScope.launch {
-        if (!capabilities.value.reactions) {
+        if (!resolveCapabilities(state.value.buffer?.networkId).reactions) {
             uiEventQueue.enqueue(ChatUiEvent.ReactionBlocked)
             return@launch
         }
@@ -764,7 +786,7 @@ class ChatViewModel @Inject constructor(
             return@launch
         }
         val cmd = parseCommand(raw)
-        if (!capabilities.value.slashCommands && !ProtocolCapabilities.xmppAllowed(cmd)) {
+        if (!resolveCapabilities(networkId).slashCommands && !ProtocolCapabilities.xmppAllowed(cmd)) {
             uiEventQueue.enqueue(ChatUiEvent.CommandUnsupported)
             return@launch
         }

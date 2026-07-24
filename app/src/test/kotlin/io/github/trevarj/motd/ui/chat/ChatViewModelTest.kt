@@ -467,9 +467,14 @@ class ChatViewModelTest {
         vm.state.first { it.buffer != null }
 
         vm.submit("/whois bob", {}, {})
-        advanceUntilIdle()
+        // The gate resolves the network row fresh from Room (a real suspend, not the cached
+        // `capabilities` StateFlow's possibly-still-default value) before enqueuing the event, so
+        // this must be awaited via a genuine suspend rather than advanceUntilIdle() + a synchronous
+        // `.value` read: advanceUntilIdle() only drains what is already queued on the test
+        // dispatcher and does not block for a real async completion arriving afterward.
+        val event = vm.uiEvents.first { it.isNotEmpty() }.single()
 
-        assertEquals(ChatUiEvent.CommandUnsupported, vm.uiEvents.value.single().value)
+        assertEquals(ChatUiEvent.CommandUnsupported, event.value)
         assertTrue(manager.sentLines.isEmpty())
         assertTrue(manager.messages.isEmpty())
         assertNull(vm.nickSheet.value)
@@ -496,12 +501,13 @@ class ChatViewModelTest {
         val manager = FakeConnectionManager(xmppNetwork.id)
         val vm = viewModel(xmppBuffer, manager)
         vm.state.first { it.buffer != null }
-        assertFalse(vm.capabilities.value.reactions)
 
         vm.react(message(xmppBuffer.id, "hi", "m1", "alice"), "👍")
-        advanceUntilIdle()
+        // See the comment in the `/whois` test above: await the real event rather than trusting
+        // advanceUntilIdle() to have raced the fresh Room lookup to completion.
+        val event = vm.uiEvents.first { it.isNotEmpty() }.single()
 
-        assertEquals(ChatUiEvent.ReactionBlocked, vm.uiEvents.value.single().value)
+        assertEquals(ChatUiEvent.ReactionBlocked, event.value)
         assertTrue(manager.reactions.isEmpty())
     }
 
