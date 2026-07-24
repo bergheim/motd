@@ -35,6 +35,7 @@ import org.jxmpp.jid.Jid
 import org.jxmpp.jid.impl.JidCreate
 import org.jxmpp.jid.parts.Resourcepart
 import java.util.concurrent.ConcurrentHashMap
+import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLSocketFactory
 
 class SmackXmppSession(private val config: XmppAccountConfig) : XmppSession {
@@ -57,6 +58,10 @@ class SmackXmppSession(private val config: XmppAccountConfig) : XmppSession {
             .setXmppAddressAndPassword(config.bareJid, config.password)
             .setHost(config.host).setPort(config.port)
             .setResource(Resourcepart.from("motd"))
+            // Smack's default hostname verifier comes from legacy Apache HTTP classes that are
+            // absent on modern Android (and stubbed on the unit-test JVM); the platform default
+            // is correct in both environments.
+            .setHostnameVerifier(HttpsURLConnection.getDefaultHostnameVerifier())
             .apply {
                 if (config.directTls) {
                     setSocketFactory(SSLSocketFactory.getDefault())

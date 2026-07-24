@@ -109,6 +109,9 @@ class XmppLiveTest {
             "Live XMPP tests require MOTD_XMPP_LIVE_DOMAIN/USER1/PASS1/USER2/PASS2 to be set; skipping.",
             account1 != null && account2 != null,
         )
+        // Force Smack's lazy static initialization FIRST — it service-loads smack-android's
+        // initializer, which would otherwise overwrite the encoder installed below.
+        org.jivesoftware.smack.SmackConfiguration.getVersion()
         // Must run before any SmackXmppSession/XMPPTCPConnection is created — see JvmBase64Encoder KDoc.
         Base64.setEncoder(JvmBase64Encoder)
     }
