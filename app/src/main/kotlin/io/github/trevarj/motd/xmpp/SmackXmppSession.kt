@@ -76,6 +76,10 @@ class SmackXmppSession(private val config: XmppAccountConfig) : XmppSession {
     ).apply {
         setUseStreamManagement(true)
         setUseStreamManagementResumption(false)
+        // Smack's default callback disconnects on any stanza it cannot parse (e.g. ejabberd's
+        // HTTP-upload disco form uses a field type unknown to Smack 4.4). Drop the stanza and
+        // keep the stream alive instead.
+        setParsingExceptionCallback { }
     }
 
     override suspend fun connectAndLogin() {
