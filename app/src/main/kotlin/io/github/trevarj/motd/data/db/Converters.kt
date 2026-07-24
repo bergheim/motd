@@ -13,6 +13,12 @@ internal class Converters {
     fun stringToNetworkRole(v: String): NetworkRole = NetworkRole.valueOf(v)
 
     @TypeConverter
+    fun protocolToString(v: Protocol): String = v.name
+
+    @TypeConverter
+    fun stringToProtocol(v: String): Protocol = Protocol.valueOf(v)
+
+    @TypeConverter
     fun bufferTypeToString(v: BufferType): String = v.name
 
     @TypeConverter

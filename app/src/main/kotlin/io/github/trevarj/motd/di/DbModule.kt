@@ -27,6 +27,7 @@ import io.github.trevarj.motd.data.db.MIGRATION_12_13
 import io.github.trevarj.motd.data.db.MIGRATION_13_14
 import io.github.trevarj.motd.data.db.MIGRATION_14_15
 import io.github.trevarj.motd.data.db.MIGRATION_15_16
+import io.github.trevarj.motd.data.db.MIGRATION_16_17
 import io.github.trevarj.motd.data.db.MotdDatabase
 import io.github.trevarj.motd.data.db.NetworkDao
 import io.github.trevarj.motd.data.db.NetworkIdentityDao
@@ -68,6 +69,7 @@ internal object DbModule {
                 MIGRATION_13_14,
                 MIGRATION_14_15,
                 MIGRATION_15_16,
+                MIGRATION_16_17,
             )
             // Downgrades only happen in dev when switching between branches with different schema
             // versions (e.g. the obfs branch's v3 vs main's v2); released builds only ever move the
