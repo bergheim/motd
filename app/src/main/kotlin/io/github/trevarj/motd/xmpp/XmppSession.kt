@@ -1,0 +1,29 @@
+package io.github.trevarj.motd.xmpp
+
+import kotlinx.coroutines.channels.ReceiveChannel
+
+/** Config subset the session needs; derived from NetworkEntity by the actor. */
+data class XmppAccountConfig(
+    val bareJid: String, val password: String, val host: String, val port: Int,
+    val directTls: Boolean, val mucNick: String,
+)
+
+/**
+ * Protocol seam over one Smack connection. Implementations MUST register all account-level
+ * listeners before login and room listeners before join; every callback is surfaced only
+ * through [events]. One instance = one connection attempt; create a fresh session per (re)connect.
+ */
+interface XmppSession {
+    val events: ReceiveChannel<XmppEvent>
+    suspend fun connectAndLogin()
+    suspend fun joinMuc(roomJid: String, nick: String)
+    suspend fun leaveMuc(roomJid: String)
+    suspend fun sendChat(toBareJid: String, text: String, originId: String)
+    suspend fun sendMuc(roomJid: String, text: String, originId: String)
+    suspend fun sendChatState(toBareJid: String, composing: Boolean)
+    suspend fun close()
+}
+
+fun interface XmppSessionFactory {
+    fun create(config: XmppAccountConfig): XmppSession
+}
