@@ -200,6 +200,10 @@ interface BufferDao {
     @Query("SELECT id FROM buffers WHERE networkId = :networkId AND type = 'CHANNEL' AND pendingCloseAt IS NULL")
     suspend fun channelIds(networkId: Long): List<Long>
 
+    /** Joined MUC rooms for XMPP reconnect rejoin: full rows so the actor can read the room JID. */
+    @Query("SELECT * FROM buffers WHERE networkId = :networkId AND type = 'CHANNEL' AND joined = 1")
+    suspend fun joinedChannels(networkId: Long): List<BufferEntity>
+
     @Query("SELECT displayName FROM buffers WHERE networkId = :networkId AND type = 'CHANNEL' AND joined = 1 AND pendingCloseAt IS NULL ORDER BY id")
     suspend fun joinedChannelNames(networkId: Long): List<String>
 

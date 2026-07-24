@@ -105,6 +105,20 @@ class XmppEventProcessor @Inject constructor(
         }
     }
 
+    /**
+     * Fail exactly one still-pending XMPP row identified by its [originId] (the per-send 30s
+     * timeout). No-op when the row was already confirmed — a [SendConfirmed] / MUC reflection clears
+     * its `pendingLabel`, so [MessageDao.byPendingLabel] returns null and nothing is touched.
+     */
+    suspend fun failPending(networkId: Long, originId: String): Unit = withNetworkLock(networkId) {
+        val messageDao = db.messageDao()
+        for (target in db.bufferDao().openTargets(networkId)) {
+            val pending = messageDao.byPendingLabel(target.id, originId) ?: continue
+            messageDao.update(pending.copy(failed = true, pendingLabel = null))
+            return@withNetworkLock
+        }
+    }
+
     suspend fun ensureQueryBuffer(networkId: Long, bareJid: String): Long =
         withNetworkLock(networkId) { ensureQueryBufferLocked(networkId, normalizeJid(bareJid)) }
 

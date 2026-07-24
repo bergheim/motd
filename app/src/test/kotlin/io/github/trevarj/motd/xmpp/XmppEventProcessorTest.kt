@@ -129,6 +129,24 @@ class XmppEventProcessorTest {
     }
 
     @Test
+    fun failPending_flipsOnlyMatchingRow_andIsNoOpAfterConfirm() = runTest {
+        val buf = p.ensureQueryBuffer(nid, "carl@x.net")
+        val keep = p.createPending(nid, buf, "one", "keep")!!
+        val doomed = p.createPending(nid, buf, "two", "boom")!!
+        p.failPending(nid, "boom")
+        assertTrue(db.messageDao().byId(doomed)!!.failed)
+        assertNull(db.messageDao().byId(doomed)!!.pendingLabel)
+        // The unrelated row is untouched and still pending.
+        assertFalse(db.messageDao().byId(keep)!!.failed)
+        assertEquals("keep", db.messageDao().byId(keep)!!.pendingLabel)
+        // Confirm then time out: the already-confirmed row must not be flipped to failed.
+        p.process(nid, XmppEvent.SendConfirmed("keep"))
+        p.failPending(nid, "keep")
+        assertFalse(db.messageDao().byId(keep)!!.failed)
+        assertNull(db.messageDao().byId(keep)!!.pendingLabel)
+    }
+
+    @Test
     fun mucSelfJoined_setsJoined_andReplacesMembers() = runTest {
         p.process(nid, XmppEvent.MucOccupantJoined("room@conf.x.net", "stale"))
         p.process(nid, XmppEvent.MucSelfJoined("room@conf.x.net", listOf("me", "alice")))
