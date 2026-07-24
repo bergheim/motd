@@ -16,6 +16,7 @@ import io.github.trevarj.motd.data.db.MotdDatabase
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkIdentityEntity
 import io.github.trevarj.motd.data.db.NetworkRole
+import io.github.trevarj.motd.data.db.Protocol
 import io.github.trevarj.motd.data.db.ReactionEntity
 import io.github.trevarj.motd.data.db.TimelineAnchor
 import io.github.trevarj.motd.data.db.ircTarget
@@ -453,12 +454,15 @@ class ConnectionManagerImpl @Inject constructor(
             }
             if (!shouldStart) return
             // Seed actors from the current full set (reconcile applies autoConnect + sticky intent),
-            // then keep reconciling on every DB change. The collector no longer pre-filters: reconcile
-            // owns the wanted-set computation so manual connect/disconnect intents survive DB writes.
-            reconcile(networkDao.observeAll().first())
+            // then keep reconciling on every DB change. The collector no longer pre-filters by
+            // wanted-set: reconcile owns that computation so manual connect/disconnect intents
+            // survive DB writes. It does pre-filter to IRC rows (xmpp-support): XMPP networks are
+            // XmppConnectionManager's exclusively, and RoutingConnectionManager never routes an
+            // XMPP-protocol networkId to this class anyway.
+            reconcile(networkDao.observeAll().first().filter { it.protocol == Protocol.IRC })
             val reconcileJob = scope.launch {
                 networkDao.observeAll().collect { all ->
-                    reconcile(all)
+                    reconcile(all.filter { it.protocol == Protocol.IRC })
                 }
             }
             // Delivery-mode reaction: UNIFIED_PUSH tears verified sockets down only after Android
@@ -466,7 +470,7 @@ class ConnectionManagerImpl @Inject constructor(
             val deliveryModeJob = scope.launch {
                 settings.settings.map { it.deliveryMode }.distinctUntilChanged().collect { mode ->
                     if (mode == DeliveryMode.UNIFIED_PUSH) {
-                        val all = networkDao.observeAll().first()
+                        val all = networkDao.observeAll().first().filter { it.protocol == Protocol.IRC }
                         if (appForeground && hasWantedEmbeddedReality(all)) {
                             startForegroundKeeper()
                         } else if (!appForeground) {
@@ -476,7 +480,7 @@ class ConnectionManagerImpl @Inject constructor(
                     } else {
                         backgroundRetention.cancel()
                         pushSuspendedIds.clear()
-                        reconcile(networkDao.observeAll().first())
+                        reconcile(networkDao.observeAll().first().filter { it.protocol == Protocol.IRC })
                     }
                 }
             }
@@ -525,7 +529,7 @@ class ConnectionManagerImpl @Inject constructor(
             )
         ) return
         if (backgroundRetention.isRetaining) return
-        val all = networkDao.observeAll().first()
+        val all = networkDao.observeAll().first().filter { it.protocol == Protocol.IRC }
         val wanted = wantedNetworkIds(all, userIntents, connectionStates.value)
         val endpoints = pushPrefs.endpoints()
         val health = pushHealthStore.snapshot()
@@ -553,7 +557,7 @@ class ConnectionManagerImpl @Inject constructor(
         backgroundRetention.cancel()
         pushSuspendedIds.clear()
         startAll()
-        val all = networkDao.observeAll().first()
+        val all = networkDao.observeAll().first().filter { it.protocol == Protocol.IRC }
         reconcile(all)
         if (settings.settings.first().deliveryMode == DeliveryMode.UNIFIED_PUSH &&
             hasWantedEmbeddedReality(all)
@@ -570,7 +574,7 @@ class ConnectionManagerImpl @Inject constructor(
     internal fun onAppBackgrounded() {
         appForeground = false
         scope.launch {
-            val all = networkDao.observeAll().first()
+            val all = networkDao.observeAll().first().filter { it.protocol == Protocol.IRC }
             beginEmbeddedRealityBackgroundRetention(all)
             if (deviceIdle) maybeStopForPush()
         }
@@ -612,7 +616,7 @@ class ConnectionManagerImpl @Inject constructor(
      */
     private suspend fun releaseKeeperWhenPushCanOwnEverything() {
         if (appForeground || settings.settings.first().deliveryMode != DeliveryMode.UNIFIED_PUSH) return
-        val all = networkDao.observeAll().first()
+        val all = networkDao.observeAll().first().filter { it.protocol == Protocol.IRC }
         val wanted = wantedNetworkIds(all, userIntents, connectionStates.value)
         val pushOwned = pushSuspendedNetworkIds(
             all,
@@ -695,7 +699,7 @@ class ConnectionManagerImpl @Inject constructor(
         // current socket; a healthy Ready connection is never unconditionally rebuilt. No-op until
         // started.
         if (!registry.snapshot.value.started) return
-        reconcile(networkDao.observeAll().first())
+        reconcile(networkDao.observeAll().first().filter { it.protocol == Protocol.IRC })
         registry.wakeNonReady()
         registry.probeReady()
     }

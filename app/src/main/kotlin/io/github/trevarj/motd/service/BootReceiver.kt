@@ -8,8 +8,11 @@ import android.os.Build
 import androidx.core.content.ContextCompat
 import dagger.hilt.android.AndroidEntryPoint
 import io.github.trevarj.motd.data.db.MotdDatabase
+import io.github.trevarj.motd.data.db.NetworkEntity
+import io.github.trevarj.motd.data.db.Protocol
 import io.github.trevarj.motd.data.prefs.SettingsRepository
 import io.github.trevarj.motd.data.prefs.PushPrefs
+import io.github.trevarj.motd.push.NetworkPushHealth
 import io.github.trevarj.motd.push.PushHealthStore
 import io.github.trevarj.motd.push.socketFallbackNetworkIds
 import io.github.trevarj.motd.di.ApplicationScope
@@ -36,16 +39,13 @@ class BootReceiver : BroadcastReceiver() {
         launchAsync(applicationScope, TAG) {
             val mode = settings.settings.first().deliveryMode
             val networks = db.networkDao().connectable()
-            val shouldRun = if (mode == DeliveryMode.PERSISTENT_SOCKET) {
-                networks.isNotEmpty()
-            } else {
-                socketFallbackNetworkIds(
-                    networks,
-                    pushPrefs.endpoints(),
-                    pushHealthStore.snapshot(),
-                ).isNotEmpty()
-            }
-            if (shouldRun) startService(context)
+            val start = shouldStartOnBoot(
+                mode = mode,
+                networks = networks,
+                endpoints = pushPrefs.endpoints(),
+                health = pushHealthStore.snapshot(),
+            )
+            if (start) startService(context)
         }
     }
 
@@ -65,4 +65,26 @@ class BootReceiver : BroadcastReceiver() {
     private companion object {
         const val TAG = "BootReceiver"
     }
+}
+
+/**
+ * Whether BootReceiver should start the foreground service (plans/05, xmpp-support). PERSISTENT_SOCKET
+ * always wants the socket alive whenever any network is configured; UNIFIED_PUSH only needs it for
+ * networks push cannot currently protect ([socketFallbackNetworkIds]). XMPP has no push-mode fallback
+ * of its own yet, so any autoConnect-eligible XMPP row (already filtered by [connectable]) always
+ * requires the persistent socket regardless of delivery mode. Extracted for unit testing.
+ */
+internal fun shouldStartOnBoot(
+    mode: DeliveryMode,
+    networks: List<NetworkEntity>,
+    endpoints: Map<Long, String>,
+    health: Map<Long, NetworkPushHealth>,
+): Boolean {
+    val shouldRun = if (mode == DeliveryMode.PERSISTENT_SOCKET) {
+        networks.isNotEmpty()
+    } else {
+        socketFallbackNetworkIds(networks, endpoints, health).isNotEmpty()
+    }
+    val hasXmpp = networks.any { it.protocol == Protocol.XMPP }
+    return shouldRun || hasXmpp
 }

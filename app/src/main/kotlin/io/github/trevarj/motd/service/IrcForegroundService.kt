@@ -24,9 +24,11 @@ class IrcForegroundService : LifecycleService() {
 
     override fun onCreate() {
         super.onCreate()
-        // Reflect live connection state in the status notification.
+        // Reflect live connection state in the status notification. connectionStates is part of
+        // the ConnectionManager interface itself (no cast needed); since ConnectionManager now
+        // routes to both IRC and XMPP (xmpp-support Task 7), this naturally reflects both.
         lifecycleScope.launch {
-            (connectionManager as? ConnectionManagerImpl)?.connectionStates?.collect { states ->
+            connectionManager.connectionStates.collect { states ->
                 updateStatus(states)
             }
         }
