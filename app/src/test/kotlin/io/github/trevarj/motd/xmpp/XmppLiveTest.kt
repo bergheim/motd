@@ -86,14 +86,23 @@ class XmppLiveTest {
         )
     }
 
-    /** Drains this channel until an event of type [T] arrives, or returns null past [deadline]. */
-    private suspend inline fun <reified T : XmppEvent> ReceiveChannel<XmppEvent>.receiveUntil(
+    /**
+     * Drains [channel] until an event of type [T] matching [predicate] arrives, or returns null
+     * past [deadline]. Matching by type alone is not enough here: a reused MUC room replays
+     * discussion history on join, and either account may have offline-queued messages left over
+     * from a previous run of this same test — both would otherwise be consumed as a false match
+     * ahead of the live message we're actually waiting for. Every call site therefore filters on
+     * the unique payload/originId generated for that assertion.
+     */
+    private suspend inline fun <reified T : XmppEvent> receiveUntil(
+        channel: ReceiveChannel<XmppEvent>,
         deadline: Duration = 20.seconds,
+        predicate: (T) -> Boolean = { true },
     ): T? = withTimeoutOrNull(deadline) {
         var found: T? = null
         while (found == null) {
-            val event = receive()
-            if (event is T) found = event
+            val event = channel.receive()
+            if (event is T && predicate(event)) found = event
         }
         found
     }
@@ -104,7 +113,7 @@ class XmppLiveTest {
             val session = SmackXmppSession(account1!!)
             try {
                 session.connectAndLogin()
-                val ready = session.events.receiveUntil<XmppEvent.Ready>()
+                val ready = receiveUntil<XmppEvent.Ready>(session.events)
                 assertNotNull("expected a Ready event after STARTTLS login", ready)
             } finally {
                 session.close()
@@ -115,66 +124,78 @@ class XmppLiveTest {
     @Test
     fun oneToOneRoundtrip() = runBlocking {
         withTimeout(60.seconds) {
-            val testSession = SmackXmppSession(account1!!)
-            val peerSession = SmackXmppSession(account2!!)
+            var testSession: SmackXmppSession? = null
+            var peerSession: SmackXmppSession? = null
             try {
+                testSession = SmackXmppSession(account1!!)
+                peerSession = SmackXmppSession(account2!!)
+
                 testSession.connectAndLogin()
-                assertNotNull(testSession.events.receiveUntil<XmppEvent.Ready>())
+                assertNotNull(receiveUntil<XmppEvent.Ready>(testSession.events))
                 peerSession.connectAndLogin()
-                assertNotNull(peerSession.events.receiveUntil<XmppEvent.Ready>())
+                assertNotNull(receiveUntil<XmppEvent.Ready>(peerSession.events))
 
                 val payload = "ping-${UUID.randomUUID()}"
                 val originId = UUID.randomUUID().toString()
                 peerSession.sendChat(account1!!.bareJid, payload, originId)
 
-                val received = testSession.events.receiveUntil<XmppEvent.ChatMessage>()
-                assertNotNull("expected the receiver to see a ChatMessage", received)
+                val received = receiveUntil<XmppEvent.ChatMessage>(testSession.events) { it.text == payload }
+                assertNotNull("expected the receiver to see our ChatMessage (matched by payload)", received)
                 assertEquals(payload, received!!.text)
 
-                val confirmed = peerSession.events.receiveUntil<XmppEvent.SendConfirmed>()
-                assertNotNull("expected the sender to see a SendConfirmed ack", confirmed)
+                val confirmed =
+                    receiveUntil<XmppEvent.SendConfirmed>(peerSession.events) { it.originId == originId }
+                assertNotNull("expected the sender to see our SendConfirmed (matched by originId)", confirmed)
                 assertEquals(originId, confirmed!!.originId)
             } finally {
-                testSession.close()
-                peerSession.close()
+                testSession?.close()
+                peerSession?.close()
             }
         }
     }
 
     @Test
     fun mucRoundtrip() = runBlocking {
-        withTimeout(60.seconds) {
+        withTimeout(120.seconds) {
             val roomJid = "motd-e2e@conference.$domain"
-            val testSession = SmackXmppSession(account1!!)
-            val peerSession = SmackXmppSession(account2!!)
+            var testSession: SmackXmppSession? = null
+            var peerSession: SmackXmppSession? = null
             try {
+                testSession = SmackXmppSession(account1!!)
+                peerSession = SmackXmppSession(account2!!)
+
                 testSession.connectAndLogin()
-                assertNotNull(testSession.events.receiveUntil<XmppEvent.Ready>())
+                assertNotNull(receiveUntil<XmppEvent.Ready>(testSession.events))
                 peerSession.connectAndLogin()
-                assertNotNull(peerSession.events.receiveUntil<XmppEvent.Ready>())
+                assertNotNull(receiveUntil<XmppEvent.Ready>(peerSession.events))
 
                 testSession.joinMuc(roomJid, account1!!.mucNick)
-                assertNotNull(testSession.events.receiveUntil<XmppEvent.MucSelfJoined>())
+                assertNotNull(receiveUntil<XmppEvent.MucSelfJoined>(testSession.events))
                 peerSession.joinMuc(roomJid, account2!!.mucNick)
-                assertNotNull(peerSession.events.receiveUntil<XmppEvent.MucSelfJoined>())
+                assertNotNull(receiveUntil<XmppEvent.MucSelfJoined>(peerSession.events))
 
                 val payload = "muc-ping-${UUID.randomUUID()}"
                 val originId = UUID.randomUUID().toString()
                 peerSession.sendMuc(roomJid, payload, originId)
 
-                val received = testSession.events.receiveUntil<XmppEvent.MucMessage>()
-                assertNotNull("expected the other occupant to see a MucMessage", received)
+                val received = receiveUntil<XmppEvent.MucMessage>(testSession.events) { it.text == payload }
+                assertNotNull("expected the other occupant to see our MucMessage (matched by payload)", received)
                 assertEquals(payload, received!!.text)
 
                 // The sender also receives its own message reflected back by the room, tagged
-                // with its own occupant nick.
-                val reflected = peerSession.events.receiveUntil<XmppEvent.MucMessage>()
-                assertNotNull("expected the sender's own reflection", reflected)
+                // with its own occupant nick — match on both so stale room history can't satisfy it.
+                val peerNick = account2!!.mucNick
+                val reflected = receiveUntil<XmppEvent.MucMessage>(peerSession.events) {
+                    it.text == payload && it.occupantNick == peerNick
+                }
+                assertNotNull("expected the sender's own reflection (matched by payload + occupant nick)", reflected)
                 assertEquals(payload, reflected!!.text)
-                assertEquals(account2!!.mucNick, reflected.occupantNick)
+                assertEquals(peerNick, reflected.occupantNick)
             } finally {
-                testSession.close()
-                peerSession.close()
+                runCatching { testSession?.leaveMuc(roomJid) }
+                runCatching { peerSession?.leaveMuc(roomJid) }
+                testSession?.close()
+                peerSession?.close()
             }
         }
     }
@@ -191,7 +212,7 @@ class XmppLiveTest {
             val session = SmackXmppSession(config)
             try {
                 session.connectAndLogin()
-                val ready = session.events.receiveUntil<XmppEvent.Ready>()
+                val ready = receiveUntil<XmppEvent.Ready>(session.events)
                 assertNotNull("expected a Ready event over direct TLS on 5223", ready)
             } finally {
                 session.close()
