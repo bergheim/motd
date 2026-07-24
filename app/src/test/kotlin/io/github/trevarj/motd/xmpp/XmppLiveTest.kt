@@ -123,7 +123,8 @@ class XmppLiveTest {
 
     @Test
     fun oneToOneRoundtrip() = runBlocking {
-        withTimeout(60.seconds) {
+        // Four sequential 20s receiveUntil budgets + network time for connect/login/send.
+        withTimeout(100.seconds) {
             var testSession: SmackXmppSession? = null
             var peerSession: SmackXmppSession? = null
             try {
@@ -156,7 +157,8 @@ class XmppLiveTest {
 
     @Test
     fun mucRoundtrip() = runBlocking {
-        withTimeout(120.seconds) {
+        // Six sequential 20s receiveUntil budgets + network time for connect/login/join/send.
+        withTimeout(150.seconds) {
             val roomJid = "motd-e2e@conference.$domain"
             var testSession: SmackXmppSession? = null
             var peerSession: SmackXmppSession? = null
