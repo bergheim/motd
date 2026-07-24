@@ -146,7 +146,12 @@ internal class XmppAccountActor(
 
     private suspend fun rejoinChannels(current: XmppSession) {
         for (buffer in db.bufferDao().joinedChannels(networkId)) {
-            current.joinMuc(buffer.name, config.mucNick)
+            // Guard each rejoin like the user-initiated join path: a bare joinMuc can throw
+            // (NoResponseException, XMPPErrorException, …) and, because this runs after Ready has
+            // already reset the attempt counter, an unguarded throw would propagate out of
+            // consumeEvents and trigger a full reconnect — one bad room would loop the whole account.
+            // swallowTransport degrades that to "this room did not rejoin" while the rest proceed.
+            swallowTransport { current.joinMuc(buffer.name, config.mucNick) }
         }
     }
 

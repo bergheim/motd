@@ -11,9 +11,15 @@ class FakeXmppSession : XmppSession {
     var connectCalls = 0; var closed = false
     var failLoginWith: Exception? = null
 
+    /** Room JIDs whose [joinMuc] should throw, to exercise per-room rejoin degradation. */
+    var failJoinFor: Set<String> = emptySet()
+
     suspend fun emit(event: XmppEvent) = channel.send(event)
     override suspend fun connectAndLogin() { connectCalls++; failLoginWith?.let { throw it } }
-    override suspend fun joinMuc(roomJid: String, nick: String) { joinedRooms += roomJid }
+    override suspend fun joinMuc(roomJid: String, nick: String) {
+        if (roomJid in failJoinFor) throw RuntimeException("simulated MUC join failure for $roomJid")
+        joinedRooms += roomJid
+    }
     override suspend fun leaveMuc(roomJid: String) { joinedRooms -= roomJid }
     override suspend fun sendChat(toBareJid: String, text: String, originId: String) {
         sentChats += Triple(toBareJid, text, originId)

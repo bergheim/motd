@@ -147,6 +147,33 @@ class XmppConnectionManagerTest {
     }
 
     @Test
+    fun rejoin_oneRoomFails_staysReady_rejoinsHealthyRoom() = runTest {
+        val badRoom = "bad@conf.glvortex.net"
+        val goodRoom = "good@conf.glvortex.net"
+        val s1 = FakeXmppSession().apply { failJoinFor = setOf(badRoom) }
+        bootstrap(listOf(s1))
+        // Seed two joined MUCs; one will throw on rejoin.
+        for (room in listOf(badRoom, goodRoom)) {
+            val id = db.bufferDao().insertIgnore(
+                BufferEntity(networkId = nid, name = room, displayName = room, type = BufferType.CHANNEL),
+            )
+            db.bufferDao().setJoined(id, true)
+        }
+
+        manager.connect(nid)
+        advanceUntilIdle()
+        s1.emit(XmppEvent.Ready(selfJid))
+        advanceUntilIdle()
+
+        // The failing room's join threw, but it degraded to that room only: the actor stayed Ready,
+        // still rejoined the healthy room, and never tore down / reconnected (one session created).
+        assertTrue(manager.connectionStates.value[nid] is IrcClientState.Ready)
+        assertTrue(s1.joinedRooms.contains(goodRoom))
+        assertFalse(s1.joinedRooms.contains(badRoom))
+        assertEquals(1, factory.created.size)
+    }
+
+    @Test
     fun fatalAuthFailure_doesNotRetry() = runTest {
         val s1 = FakeXmppSession()
         val s2 = FakeXmppSession()
