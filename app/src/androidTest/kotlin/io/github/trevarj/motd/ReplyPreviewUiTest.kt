@@ -26,7 +26,7 @@ class ReplyPreviewUiTest {
                     reply = ReplyPreviewData(sender = "alice", text = "original"),
                     nickColors = NickColorScheme(
                         enabled = true,
-                        palette = NickColorPalette.DEFAULT,
+                        palette = NickColorPalette.THEME,
                         overrides = emptyMap(),
                         isDark = false,
                     ),
