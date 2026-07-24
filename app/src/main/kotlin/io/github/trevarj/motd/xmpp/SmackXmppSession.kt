@@ -35,7 +35,9 @@ import org.jxmpp.jid.Jid
 import org.jxmpp.jid.impl.JidCreate
 import org.jxmpp.jid.parts.Resourcepart
 import java.util.concurrent.ConcurrentHashMap
-import javax.net.ssl.HttpsURLConnection
+import java.security.cert.X509Certificate
+import javax.net.ssl.HostnameVerifier
+import javax.net.ssl.SSLSession
 import javax.net.ssl.SSLSocketFactory
 
 class SmackXmppSession(private val config: XmppAccountConfig) : XmppSession {
@@ -59,9 +61,9 @@ class SmackXmppSession(private val config: XmppAccountConfig) : XmppSession {
             .setHost(config.host).setPort(config.port)
             .setResource(Resourcepart.from("motd"))
             // Smack's default hostname verifier comes from legacy Apache HTTP classes that are
-            // absent on modern Android (and stubbed on the unit-test JVM); the platform default
-            // is correct in both environments.
-            .setHostnameVerifier(HttpsURLConnection.getDefaultHostnameVerifier())
+            // absent on modern Android, and the JVM's HttpsURLConnection default is deny-all;
+            // neither works in both environments, so verify SAN dNSNames directly.
+            .setHostnameVerifier(SanHostnameVerifier)
             .apply {
                 if (config.directTls) {
                     setSocketFactory(SSLSocketFactory.getDefault())
@@ -322,4 +324,37 @@ class SmackXmppSession(private val config: XmppAccountConfig) : XmppSession {
 
 object SmackXmppSessionFactory : XmppSessionFactory {
     override fun create(config: XmppAccountConfig): XmppSession = SmackXmppSession(config)
+}
+
+/**
+ * RFC 6125-style verification of the peer certificate's subjectAltName dNSName entries against
+ * the XMPP domain. Deliberately strict: no CN fallback (deprecated; SAN-less certs fail), and a
+ * wildcard only matches a single leftmost label ("*.example.net" matches "a.example.net", never
+ * "example.net" or "a.b.example.net"). TLS chain trust is already enforced by the socket layer;
+ * this only binds the validated chain to the expected host.
+ */
+internal object SanHostnameVerifier : HostnameVerifier {
+    private const val SAN_DNS_NAME = 2
+
+    override fun verify(hostname: String, session: SSLSession): Boolean {
+        val cert = session.peerCertificates.firstOrNull() as? X509Certificate ?: return false
+        val host = hostname.lowercase()
+        val sans = try {
+            cert.subjectAlternativeNames ?: return false
+        } catch (_: java.security.cert.CertificateParsingException) {
+            return false
+        }
+        return sans.any { entry ->
+            entry != null && entry.size >= 2 && entry[0] == SAN_DNS_NAME &&
+                (entry[1] as? String)?.lowercase()?.let { matches(host, it) } == true
+        }
+    }
+
+    internal fun matches(host: String, pattern: String): Boolean {
+        if (!pattern.startsWith("*.")) return host == pattern
+        val suffix = pattern.substring(1) // ".example.net"
+        if (!host.endsWith(suffix)) return false
+        val label = host.dropLast(suffix.length)
+        return label.isNotEmpty() && !label.contains('.')
+    }
 }
