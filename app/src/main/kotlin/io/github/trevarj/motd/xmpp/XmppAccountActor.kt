@@ -175,6 +175,9 @@ internal class XmppAccountActor(
         }
         // Independent 30s watchdog: fail the row only if it is still pending (no SendConfirmed /
         // MUC reflection has cleared it). Idempotent, so an already-confirmed row is untouched.
+        // Intentionally launched on the shared scope (not the actor job) so it outlives an actor
+        // stop/restart: failPending is idempotent at the DB level (byPendingLabel finds nothing once
+        // the row is confirmed/failed), so a watchdog surviving a reconnect can never corrupt state.
         scope.launch {
             delay(SEND_TIMEOUT_MS)
             processor.failPending(networkId, originId)

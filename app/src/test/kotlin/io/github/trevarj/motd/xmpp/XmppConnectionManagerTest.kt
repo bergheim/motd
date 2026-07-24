@@ -28,6 +28,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -213,6 +214,120 @@ class XmppConnectionManagerTest {
         // No actor, no session, and no published state for an IRC row.
         assertTrue(factory.created.isEmpty())
         assertFalse(manager.connectionStates.value.containsKey(ircNid))
+    }
+
+    @Test
+    fun sendMessage_watchdog_failsRow_after30sWithoutConfirm() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+        manager.connect(nid)
+        advanceUntilIdle()
+        s1.emit(XmppEvent.Ready(selfJid))
+        advanceUntilIdle()
+
+        val queryBufferId = manager.ensureQueryBuffer(nid, "bob@glvortex.net")
+        val result = manager.sendMessage(queryBufferId, "hi")
+        assertTrue(result is SendAcceptance.Accepted)
+        val eventId = (result as SendAcceptance.Accepted).eventIds.single()
+        assertEquals(1, s1.sentChats.size) // wire write attempted, still pending
+
+        // No SendConfirmed ever arrives: the 30s actor-level watchdog must fail the row.
+        advanceTimeBy(30_001L)
+        runCurrent()
+
+        val row = db.messageDao().byId(eventId)!!
+        assertTrue(row.failed)
+        assertNull(row.pendingLabel)
+    }
+
+    @Test
+    fun sendMessage_watchdog_noOp_whenConfirmedBefore30s() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+        manager.connect(nid)
+        advanceUntilIdle()
+        s1.emit(XmppEvent.Ready(selfJid))
+        advanceUntilIdle()
+
+        val queryBufferId = manager.ensureQueryBuffer(nid, "bob@glvortex.net")
+        val result = manager.sendMessage(queryBufferId, "hi")
+        val eventId = (result as SendAcceptance.Accepted).eventIds.single()
+        val originId = s1.sentChats.single().third
+
+        // SendConfirmed arrives (through the actor's own event loop) at +10s.
+        advanceTimeBy(10_000L)
+        runCurrent()
+        s1.emit(XmppEvent.SendConfirmed(originId))
+        runCurrent()
+
+        // Advance well past the 30s deadline: the watchdog must be a no-op on the confirmed row.
+        advanceTimeBy(30_001L)
+        runCurrent()
+
+        val row = db.messageDao().byId(eventId)!!
+        assertFalse(row.failed)
+        assertNull(row.pendingLabel)
+        assertEquals(originId, row.msgid)
+    }
+
+    @Test
+    fun disconnect_midBackoff_cancelsPendingRetry() = runTest {
+        val s1 = FakeXmppSession()
+        val s2 = FakeXmppSession()
+        bootstrap(listOf(s1, s2))
+        manager.connect(nid)
+        advanceUntilIdle()
+
+        s1.emit(XmppEvent.Disconnected(reason = null, fatal = false))
+        runCurrent() // enter the 1s backoff wait
+        assertEquals(1, factory.created.size)
+
+        advanceTimeBy(500L) // partway into the backoff, before it elapses
+        runCurrent()
+        assertEquals(1, factory.created.size)
+
+        // Manual disconnect while mid-backoff must cancel the pending retry delay outright.
+        manager.disconnect(nid)
+        advanceUntilIdle()
+        assertEquals(1, factory.created.size) // no fresh session was ever created
+        assertFalse(manager.connectionStates.value.containsKey(nid))
+    }
+
+    @Test
+    fun manualConnect_survivesReconcile_forNonAutoConnectRow() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+        // Make the XMPP row opt-out of autoConnect so only a manual intent can spawn it.
+        val row = db.networkDao().byId(nid)!!
+        db.networkDao().update(row.copy(autoConnect = false))
+
+        manager.startAll()
+        advanceUntilIdle()
+        // Reconcile with autoConnect=false and no manual intent spawns nothing.
+        assertTrue(factory.created.isEmpty())
+
+        manager.connect(nid)
+        advanceUntilIdle()
+        s1.emit(XmppEvent.Ready(selfJid))
+        advanceUntilIdle()
+        assertEquals(1, factory.created.size)
+        assertTrue(manager.connectionStates.value[nid] is IrcClientState.Ready)
+
+        // A DB write re-emits observeAll → reconcile runs again. Manual intent must survive it.
+        db.networkDao().insert(
+            NetworkEntity(
+                name = "libera", protocol = Protocol.IRC, role = NetworkRole.DIRECT,
+                host = "irc.libera.chat", port = 6697,
+                nick = "me", username = "me", realname = "Me",
+            ),
+        )
+        advanceUntilIdle()
+
+        assertEquals(1, factory.created.size) // no duplicate actor
+        assertTrue(manager.connectionStates.value[nid] is IrcClientState.Ready)
+
+        manager.stopAll()
+        advanceUntilIdle()
     }
 
     @Test

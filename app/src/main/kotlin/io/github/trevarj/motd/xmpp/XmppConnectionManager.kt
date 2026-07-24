@@ -94,6 +94,8 @@ class XmppConnectionManager @Inject constructor(
     }
 
     suspend fun disconnect(networkId: Long) {
+        // Same guard as connect(): a non-XMPP (or vanished) row is not ours to touch.
+        if (db.networkDao().byId(networkId)?.protocol != Protocol.XMPP) return
         userIntents[networkId] = false
         mutex.withLock {
             actors.remove(networkId)?.stop()
@@ -143,11 +145,26 @@ class XmppConnectionManager @Inject constructor(
         db.bufferDao().advanceMembershipCycle(bufferId)
     }
 
-    suspend fun ensureQueryBuffer(networkId: Long, bareJid: String): Long =
-        processor.ensureQueryBuffer(networkId, bareJid)
+    suspend fun ensureQueryBuffer(networkId: Long, bareJid: String): Long {
+        requireXmpp(networkId)
+        return processor.ensureQueryBuffer(networkId, bareJid)
+    }
 
-    suspend fun ensureServerBuffer(networkId: Long): Long =
-        processor.ensureServerBuffer(networkId)
+    suspend fun ensureServerBuffer(networkId: Long): Long {
+        requireXmpp(networkId)
+        return processor.ensureServerBuffer(networkId)
+    }
+
+    /**
+     * These entry points return a buffer id, so a silent wrong answer for a non-XMPP row is worse
+     * than failing fast: guard by protocol and reject with [IllegalArgumentException].
+     */
+    private suspend fun requireXmpp(networkId: Long) {
+        val protocol = db.networkDao().byId(networkId)?.protocol
+        require(protocol == Protocol.XMPP) {
+            "ensure*Buffer is XMPP-only; network $networkId is $protocol"
+        }
+    }
 
     // ---- internal reconciliation (always called while holding [mutex]) ----
 
