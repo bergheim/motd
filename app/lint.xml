@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!-- Smack ships an opt-in AcceptAllTrustManager inside its published jars; the app never
+         constructs it (TLS is SecurityMode.required / a platform-default SSLSocketFactory).
+         Ignore only the library jars so the check stays active for app sources. -->
+    <issue id="TrustAllX509TrustManager">
+        <ignore path="**/smack-core*.jar" />
+        <ignore path="**/smack-tcp*.jar" />
+        <ignore path="**/smack-extensions*.jar" />
+        <ignore path="**/smack-android*.jar" />
+    </issue>
+</lint>
