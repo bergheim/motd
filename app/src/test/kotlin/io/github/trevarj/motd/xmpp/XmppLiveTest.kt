@@ -7,6 +7,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.jivesoftware.smack.util.stringencoder.Base64
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
@@ -249,6 +250,46 @@ class XmppLiveTest {
             } finally {
                 session.close()
             }
+        }
+    }
+
+    /**
+     * Negative counterpart to [directTls5223_alsoWorks]: proves the direct-TLS (5223) path actually
+     * verifies the peer identity. Smack runs the configured `HostnameVerifier` only on the STARTTLS
+     * path, so without [EndpointIdentifyingSSLSocketFactory] a 5223 connection would accept any
+     * chain-valid certificate. Here the bare JID's domainpart — which drives TLS endpoint
+     * identification — is `wrong-host.invalid`, while the socket is pointed at the REAL server. The
+     * server's certificate authenticates the real domain, not `wrong-host.invalid`, so the handshake
+     * must fail endpoint identification BEFORE any SASL exchange. Asserted broadly: `connectAndLogin`
+     * throws AND no [XmppEvent.Ready] is ever emitted.
+     */
+    @Test
+    fun directTls5223_rejectsWrongHostname() = runBlocking {
+        withTimeout(30.seconds) {
+            val config = XmppAccountConfig(
+                bareJid = "motd-test@wrong-host.invalid",
+                password = env("MOTD_XMPP_LIVE_PASS1") ?: "unused",
+                host = domain!!, // real server; only the verification domain is wrong
+                port = 5223,
+                directTls = true,
+                mucNick = "motd-test",
+            )
+            val session = SmackXmppSession(config)
+            var threw = false
+            var ready: XmppEvent.Ready? = null
+            try {
+                session.connectAndLogin()
+                // Should not get here; if it somehow does, give Ready a short window to (not) arrive.
+                ready = receiveUntil<XmppEvent.Ready>(session.events, deadline = 5.seconds)
+            } catch (_: Exception) {
+                threw = true
+            } finally {
+                runCatching { session.close() }
+            }
+            assertTrue(
+                "expected the wrong-hostname direct-TLS handshake to fail before Ready",
+                threw && ready == null,
+            )
         }
     }
 }

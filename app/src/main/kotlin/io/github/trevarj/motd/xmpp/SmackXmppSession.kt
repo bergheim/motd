@@ -34,10 +34,17 @@ import org.jxmpp.jid.EntityFullJid
 import org.jxmpp.jid.Jid
 import org.jxmpp.jid.impl.JidCreate
 import org.jxmpp.jid.parts.Resourcepart
+import java.net.InetAddress
+import java.net.Socket
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.logging.Level
+import java.util.logging.Logger
 import java.security.cert.X509Certificate
 import javax.net.ssl.HostnameVerifier
+import javax.net.ssl.SNIHostName
 import javax.net.ssl.SSLSession
+import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
 
 class SmackXmppSession(private val config: XmppAccountConfig) : XmppSession {
@@ -55,18 +62,33 @@ class SmackXmppSession(private val config: XmppAccountConfig) : XmppSession {
     // Accessed from suspend methods dispatched on Dispatchers.IO without caller-side serialization.
     private val roomListeners = ConcurrentHashMap<String, RoomListeners>()
 
+    /**
+     * Per-session XMPP resource. Two devices signed into one account must NOT present an identical
+     * resource: a server's conflict policy (RFC 6120 §7.7.2.2) typically kills the older session
+     * when a newer one binds the same resource, so a fixed "motd" resource would make two devices
+     * repeatedly kick each other in a reconnect loop. A random per-instance suffix (UUID-derived,
+     * no wall-clock) keeps each session's resource distinct. Declared before [connection] so it is
+     * initialized by the time the builder reads it.
+     */
+    private val resource: Resourcepart =
+        Resourcepart.from("motd-" + UUID.randomUUID().toString().take(4))
+
     private val connection: XMPPTCPConnection = XMPPTCPConnection(
         XMPPTCPConnectionConfiguration.builder()
             .setXmppAddressAndPassword(config.bareJid, config.password)
             .setHost(config.host).setPort(config.port)
-            .setResource(Resourcepart.from("motd"))
+            .setResource(resource)
             // Smack's default hostname verifier comes from legacy Apache HTTP classes that are
             // absent on modern Android, and the JVM's HttpsURLConnection default is deny-all;
             // neither works in both environments, so verify SAN dNSNames directly.
             .setHostnameVerifier(SanHostnameVerifier)
             .apply {
                 if (config.directTls) {
-                    setSocketFactory(SSLSocketFactory.getDefault())
+                    // Verify the peer against the XMPP service domain — the bare JID's domainpart,
+                    // NOT config.host (which may be a routing override). See
+                    // EndpointIdentifyingSSLSocketFactory for why SanHostnameVerifier alone is not
+                    // enough on the direct-TLS path.
+                    setSocketFactory(EndpointIdentifyingSSLSocketFactory(config.bareJid.substringAfter('@')))
                     setSecurityMode(ConnectionConfiguration.SecurityMode.disabled) // TLS already on the socket
                 } else {
                     setSecurityMode(ConnectionConfiguration.SecurityMode.required) // STARTTLS mandatory
@@ -78,8 +100,16 @@ class SmackXmppSession(private val config: XmppAccountConfig) : XmppSession {
         setUseStreamManagementResumption(false)
         // Smack's default callback disconnects on any stanza it cannot parse (e.g. ejabberd's
         // HTTP-upload disco form uses a field type unknown to Smack 4.4). Drop the stanza and
-        // keep the stream alive instead.
-        setParsingExceptionCallback { }
+        // keep the stream alive instead — but log it at WARN so silent drops are observable.
+        setParsingExceptionCallback { unparseable ->
+            val content = unparseable.content?.toString().orEmpty()
+            val truncated = if (content.length > MAX_LOGGED_STANZA_CHARS) {
+                content.take(MAX_LOGGED_STANZA_CHARS) + "…(${content.length} chars total)"
+            } else {
+                content
+            }
+            LOGGER.log(Level.WARNING, "Dropping unparsable XMPP stanza: $truncated", unparseable.parsingException)
+        }
     }
 
     override suspend fun connectAndLogin() {
@@ -324,10 +354,69 @@ class SmackXmppSession(private val config: XmppAccountConfig) : XmppSession {
             channel.close()
         }
     }
+
+    private companion object {
+        private val LOGGER = Logger.getLogger(SmackXmppSession::class.java.name)
+        private const val MAX_LOGGED_STANZA_CHARS = 500
+    }
 }
 
 object SmackXmppSessionFactory : XmppSessionFactory {
     override fun create(config: XmppAccountConfig): XmppSession = SmackXmppSession(config)
+}
+
+/**
+ * Wraps the platform default [SSLSocketFactory] so every [SSLSocket] it hands back to Smack has
+ * HTTPS endpoint identification and SNI pinned to the XMPP service domain BEFORE the handshake.
+ *
+ * Why this is necessary: Smack only invokes the configured [HostnameVerifier] on the STARTTLS path
+ * (`XMPPTCPConnection.proceedTLSReceived`). The direct-TLS (port 5223) path just wraps the socket
+ * produced by the configured [SSLSocketFactory] and never calls the verifier, so a plain
+ * `SSLSocketFactory.getDefault()` there would accept ANY chain-valid certificate regardless of
+ * which host it authenticates. Setting `endpointIdentificationAlgorithm = "HTTPS"` makes the
+ * JDK/Android TLS stack itself verify the peer certificate against [xmppDomain] during the
+ * handshake, and the matching SNI server name both advertises the expected host and is used by
+ * JSSE as the reference identity for that check.
+ *
+ * [xmppDomain] must be the XMPP service domain (the bare JID's domainpart), NOT the connect-host
+ * override: the certificate has to authenticate the service identity the user configured, not
+ * whatever host the connection happened to be routed through.
+ *
+ * Every `createSocket` overload applies the parameters, including the no-arg one: Smack's non-proxy
+ * path builds the socket via `SmackFuture.SocketFuture`, which calls `createSocket()` unconnected
+ * and connects it afterwards, so an overload that returned a bare socket would skip verification.
+ */
+internal class EndpointIdentifyingSSLSocketFactory(private val xmppDomain: String) : SSLSocketFactory() {
+    private val delegate = SSLSocketFactory.getDefault() as SSLSocketFactory
+
+    override fun getDefaultCipherSuites(): Array<String> = delegate.defaultCipherSuites
+    override fun getSupportedCipherSuites(): Array<String> = delegate.supportedCipherSuites
+
+    override fun createSocket(): Socket = identify(delegate.createSocket())
+    override fun createSocket(s: Socket?, host: String?, port: Int, autoClose: Boolean): Socket =
+        identify(delegate.createSocket(s, host, port, autoClose))
+    override fun createSocket(host: String?, port: Int): Socket =
+        identify(delegate.createSocket(host, port))
+    override fun createSocket(host: String?, port: Int, localHost: InetAddress?, localPort: Int): Socket =
+        identify(delegate.createSocket(host, port, localHost, localPort))
+    override fun createSocket(host: InetAddress?, port: Int): Socket =
+        identify(delegate.createSocket(host, port))
+    override fun createSocket(
+        address: InetAddress?,
+        port: Int,
+        localAddress: InetAddress?,
+        localPort: Int,
+    ): Socket = identify(delegate.createSocket(address, port, localAddress, localPort))
+
+    private fun identify(socket: Socket): Socket {
+        if (socket is SSLSocket) {
+            socket.sslParameters = socket.sslParameters.apply {
+                endpointIdentificationAlgorithm = "HTTPS"
+                serverNames = listOf(SNIHostName(xmppDomain))
+            }
+        }
+        return socket
+    }
 }
 
 /**
