@@ -519,7 +519,9 @@ class ConnectionManagerImpl @Inject constructor(
      * holds a persisted endpoint (and at least one such client exists). This gates teardown on
      * push actually being armed on all push-eligible networks, so a network still awaiting its
      * endpoint keeps its socket. Non-webpush DIRECT networks are ignored here (documented
-     * limitation — plans/11 risk 6).
+     * limitation — plans/11 risk 6). XMPP has no push-mode fallback of its own (xmpp-support): an
+     * autoConnect XMPP account always keeps the persistent socket regardless of what IRC's push
+     * suspension computed, matching BootReceiver.shouldStartOnBoot / MainActivity's launch predicate.
      */
     private suspend fun maybeStopForPush() {
         if (!shouldApplyDozePushHandoff(
@@ -529,7 +531,8 @@ class ConnectionManagerImpl @Inject constructor(
             )
         ) return
         if (backgroundRetention.isRetaining) return
-        val all = networkDao.observeAll().first().filter { it.protocol == Protocol.IRC }
+        val allRows = networkDao.observeAll().first()
+        val all = allRows.filter { it.protocol == Protocol.IRC }
         val wanted = wantedNetworkIds(all, userIntents, connectionStates.value)
         val endpoints = pushPrefs.endpoints()
         val health = pushHealthStore.snapshot()
@@ -539,7 +542,8 @@ class ConnectionManagerImpl @Inject constructor(
         pushSuspendedIds.addAll(suspend)
         reconcile(all)
 
-        val needsSocket = wanted.any { it !in pushSuspendedIds }
+        val hasXmpp = allRows.any { it.protocol == Protocol.XMPP && it.autoConnect }
+        val needsSocket = needsSocketForPush(hasXmpp, wanted, pushSuspendedIds)
         if (needsSocket) {
             startForegroundKeeper()
         } else {
@@ -612,11 +616,14 @@ class ConnectionManagerImpl @Inject constructor(
 
     /**
      * The grace keeper is no longer needed once every wanted network has healthy push delivery.
-     * Outside Doze we leave actors alone, preserving the existing keep-until-Doze semantics.
+     * Outside Doze we leave actors alone, preserving the existing keep-until-Doze semantics. Same
+     * XMPP guard as [maybeStopForPush]: an autoConnect XMPP account keeps the socket regardless of
+     * IRC's push-ownership state.
      */
     private suspend fun releaseKeeperWhenPushCanOwnEverything() {
         if (appForeground || settings.settings.first().deliveryMode != DeliveryMode.UNIFIED_PUSH) return
-        val all = networkDao.observeAll().first().filter { it.protocol == Protocol.IRC }
+        val allRows = networkDao.observeAll().first()
+        val all = allRows.filter { it.protocol == Protocol.IRC }
         val wanted = wantedNetworkIds(all, userIntents, connectionStates.value)
         val pushOwned = pushSuspendedNetworkIds(
             all,
@@ -624,7 +631,8 @@ class ConnectionManagerImpl @Inject constructor(
             pushPrefs.endpoints(),
             pushHealthStore.snapshot(),
         )
-        if (wanted.all { it in pushOwned }) stopForegroundKeeper()
+        val hasXmpp = allRows.any { it.protocol == Protocol.XMPP && it.autoConnect }
+        if (shouldReleaseKeeperForPush(hasXmpp, wanted, pushOwned)) stopForegroundKeeper()
     }
 
     private fun startForegroundKeeper() {
@@ -1825,6 +1833,29 @@ internal fun shouldApplyDozePushHandoff(
     deviceIdle: Boolean,
     deliveryMode: DeliveryMode,
 ): Boolean = !appForeground && deviceIdle && deliveryMode == DeliveryMode.UNIFIED_PUSH
+
+/**
+ * Whether [ConnectionManagerImpl.maybeStopForPush] must (re)start the foreground keeper rather than
+ * let push own delivery (xmpp-support). An autoConnect XMPP account has no push-mode fallback of its
+ * own, so its mere presence always wins regardless of what IRC's own push-suspension computed —
+ * mirrors BootReceiver.shouldStartOnBoot / MainActivity's launch predicate. Extracted for unit tests.
+ */
+internal fun needsSocketForPush(
+    hasXmpp: Boolean,
+    wanted: Set<Long>,
+    pushSuspended: Set<Long>,
+): Boolean = hasXmpp || wanted.any { it !in pushSuspended }
+
+/**
+ * Whether [ConnectionManagerImpl.releaseKeeperWhenPushCanOwnEverything] may drop the grace keeper.
+ * Same XMPP guard as [needsSocketForPush]: an autoConnect XMPP account blocks release even once
+ * every IRC network has healthy push delivery. Extracted for unit tests.
+ */
+internal fun shouldReleaseKeeperForPush(
+    hasXmpp: Boolean,
+    wanted: Set<Long>,
+    pushOwned: Set<Long>,
+): Boolean = !hasXmpp && wanted.all { it in pushOwned }
 
 internal fun wantedNetworkUsesEmbeddedReality(
     networkId: Long,

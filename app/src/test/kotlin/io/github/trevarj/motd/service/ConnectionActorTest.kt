@@ -421,4 +421,34 @@ class ConnectionActorTest {
         assertTrue(!shouldApplyDozePushHandoff(false, false, DeliveryMode.UNIFIED_PUSH))
         assertTrue(!shouldApplyDozePushHandoff(false, true, DeliveryMode.PERSISTENT_SOCKET))
     }
+
+    // xmpp-support follow-up: an autoConnect XMPP account has no push-mode fallback of its own, so
+    // it must keep the foreground keeper alive regardless of what IRC's own push bookkeeping says.
+
+    @Test
+    fun needsSocketForPush_xmppPresent_alwaysTrue() {
+        // Every IRC network fully push-suspended (nothing in `wanted` is outside pushSuspended) would
+        // normally release the socket; an XMPP account overrides that.
+        assertTrue(needsSocketForPush(hasXmpp = true, wanted = setOf(1L), pushSuspended = setOf(1L)))
+        assertTrue(needsSocketForPush(hasXmpp = true, wanted = emptySet(), pushSuspended = emptySet()))
+    }
+
+    @Test
+    fun needsSocketForPush_noXmpp_fallsBackToIrcSuspension() {
+        assertTrue(!needsSocketForPush(hasXmpp = false, wanted = setOf(1L), pushSuspended = setOf(1L)))
+        assertTrue(needsSocketForPush(hasXmpp = false, wanted = setOf(1L), pushSuspended = emptySet()))
+    }
+
+    @Test
+    fun shouldReleaseKeeperForPush_xmppPresent_neverReleases() {
+        // Every IRC network push-owned would normally release the keeper; an XMPP account blocks it.
+        assertTrue(!shouldReleaseKeeperForPush(hasXmpp = true, wanted = setOf(1L), pushOwned = setOf(1L)))
+        assertTrue(!shouldReleaseKeeperForPush(hasXmpp = true, wanted = emptySet(), pushOwned = emptySet()))
+    }
+
+    @Test
+    fun shouldReleaseKeeperForPush_noXmpp_releasesOnceAllOwned() {
+        assertTrue(shouldReleaseKeeperForPush(hasXmpp = false, wanted = setOf(1L), pushOwned = setOf(1L)))
+        assertTrue(!shouldReleaseKeeperForPush(hasXmpp = false, wanted = setOf(1L), pushOwned = emptySet()))
+    }
 }
