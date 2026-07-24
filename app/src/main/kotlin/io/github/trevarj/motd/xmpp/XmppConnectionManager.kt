@@ -190,10 +190,13 @@ class XmppConnectionManager @Inject constructor(
 
     /** Create, register, and start an actor for [n]. Caller must hold [mutex]. */
     private fun spawnActor(n: NetworkEntity) {
+        // A corrupt XMPP row with a null JID cannot build a config; skip it rather than throw, so
+        // one bad row can't crash the whole reconcile pass and take every other account down with it.
+        val jid = n.jid ?: return
         val actor = XmppAccountActor(
             networkId = n.id,
             config = XmppAccountConfig(
-                bareJid = n.jid!!,
+                bareJid = jid,
                 password = n.saslPassword.orEmpty(),
                 host = n.host,
                 port = n.port,

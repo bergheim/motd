@@ -92,6 +92,12 @@ class XmppEventProcessor @Inject constructor(
         )
     }
 
+    /**
+     * Test-facing convenience: acquires the per-network lock and delegates to [confirmSendLocked].
+     * Production confirmation runs inline through `process(SendConfirmed)`, which already holds the
+     * lock; this public wrapper lets tests confirm a send directly without routing a full
+     * [XmppEvent] through [process].
+     */
     suspend fun confirmSend(networkId: Long, originId: String): Unit =
         withNetworkLock(networkId) { confirmSendLocked(networkId, originId) }
 
@@ -349,7 +355,7 @@ class XmppEventProcessor @Inject constructor(
                 text = text,
                 isSelf = isSelf,
                 hasMention = hasMention,
-                dedupKey = "xmpp:$bufferId:$senderIdentity:$stanzaId",
+                dedupKey = "xmpp:$bufferId\u0000$senderIdentity\u0000$stanzaId",
                 serverTimeAuthoritative = delayedAtMs != null,
             ),
         )
@@ -393,8 +399,12 @@ class XmppEventProcessor @Inject constructor(
         )
     }
 
+    // NUL ('\u0000') separator, not a space: a MUC occupant nick can legally contain spaces, so a
+    // space-joined key would let one nick forge another tuple's ($bufferId, $sender, $stanzaId)
+    // identity and suppress-dedup a targeted message. NUL cannot appear in a JID resourcepart/nick
+    // or a stanza id, so the joined components can never collide. Purely in-memory — no migration.
     private fun aliasBytes(bufferId: Long, senderIdentity: String, stanzaId: String): ByteArray =
-        "$bufferId $senderIdentity $stanzaId".toByteArray(StandardCharsets.UTF_8)
+        "$bufferId\u0000$senderIdentity\u0000$stanzaId".toByteArray(StandardCharsets.UTF_8)
 
     private companion object {
         const val SERVER_BUFFER_NAME = "*"
