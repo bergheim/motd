@@ -616,6 +616,12 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE bufferId = :bufferId AND pendingLabel = :label")
     suspend fun byPendingLabel(bufferId: Long, label: String): MessageEntity?
 
+    /** Every still-pending row in a buffer, regardless of label — used by XmppEventProcessor's
+     * network-wide failAllPending (XMPP pending rows already carry a non-null msgid, so the IRC
+     * msgid-IS-NULL pending queries above don't apply to them). */
+    @Query("SELECT * FROM messages WHERE bufferId = :bufferId AND pendingLabel IS NOT NULL")
+    suspend fun pendingInBuffer(bufferId: Long): List<MessageEntity>
+
     @Query("SELECT * FROM messages WHERE id IN (:eventIds) ORDER BY id")
     suspend fun byIds(eventIds: List<TimelineEventId>): List<MessageEntity>
 
