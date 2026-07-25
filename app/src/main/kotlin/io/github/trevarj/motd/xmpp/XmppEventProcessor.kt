@@ -267,6 +267,15 @@ class XmppEventProcessor @Inject constructor(
         val roomJid = normalizeJid(event.roomJid)
         val bufferId = ensureMucBufferLocked(networkId, roomJid)
         db.bufferDao().setJoined(bufferId, true)
+        // Refresh the gateway pretty name the same way the roster path refreshes a QUERY displayName:
+        // a buffer created before this feature (or by the actor's raw-JID join path) gets its
+        // "#channel · server" name applied on join. The canonical `name` is never touched.
+        val prettyName = biboumiRoomDisplayName(roomJid)
+        if (prettyName != null) {
+            db.bufferDao().byName(networkId, roomJid)
+                ?.takeIf { it.displayName != prettyName }
+                ?.let { db.bufferDao().update(it.copy(displayName = prettyName)) }
+        }
         db.memberDao().replaceAll(bufferId, event.occupants.map { MemberEntity(bufferId = bufferId, nick = it) })
     }
 
@@ -299,7 +308,11 @@ class XmppEventProcessor @Inject constructor(
     private suspend fun ensureQueryBufferLocked(networkId: Long, bareJid: String): Long {
         val bufferDao = db.bufferDao()
         bufferDao.byName(networkId, bareJid)?.let { return it.id }
-        val displayName = db.userDao().byNick(networkId, bareJid)?.realname ?: bareJid
+        // A Biboumi private-message JID (`<nick>!<server>@<gateway>`) shows just the IRC nick; every
+        // other 1:1 falls back to the roster realname, then the bare JID.
+        val displayName = biboumiNickDisplayName(bareJid)
+            ?: db.userDao().byNick(networkId, bareJid)?.realname
+            ?: bareJid
         val candidate = BufferEntity(
             networkId = networkId,
             name = bareJid,
@@ -316,7 +329,9 @@ class XmppEventProcessor @Inject constructor(
         val candidate = BufferEntity(
             networkId = networkId,
             name = roomJid,
-            displayName = roomJid,
+            // A Biboumi IRC-channel room (`<channel>%<server>@<gateway>`) shows "#channel · server";
+            // the canonical `name` stays the full JID. Plain MUCs fall back to the raw JID.
+            displayName = biboumiRoomDisplayName(roomJid) ?: roomJid,
             type = BufferType.CHANNEL,
         )
         val insertedId = bufferDao.insertIgnore(candidate)

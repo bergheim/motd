@@ -203,4 +203,32 @@ class XmppEventProcessorTest {
         assertEquals(BufferType.SERVER, buf.type)
         assertEquals("me@glvortex.net", buf.displayName)
     }
+
+    @Test
+    fun gatewayRoom_getsPrettyDisplayName_butKeepsFullJidAsName() = runTest {
+        val roomJid = "#systemcrafters%irc.libera.chat@irc.xmpp.glvortex.net"
+        p.process(nid, XmppEvent.MucSelfJoined(roomJid, listOf("me")))
+        val buf = db.bufferDao().byName(nid, roomJid)!!
+        // Canonical identity stays the full JID; only the display name is prettified.
+        assertEquals(roomJid, buf.name)
+        assertEquals("#systemcrafters · libera.chat", buf.displayName)
+    }
+
+    @Test
+    fun gatewayPrivateMessage_getsNickDisplayName() = runTest {
+        val pmJid = "someone!irc.libera.chat@irc.xmpp.glvortex.net"
+        p.process(nid, XmppEvent.ChatMessage(pmJid, "hi", "s1", null))
+        val buf = db.bufferDao().byName(nid, pmJid)!!
+        assertEquals(BufferType.QUERY, buf.type)
+        assertEquals("someone", buf.displayName)
+    }
+
+    @Test
+    fun plainRoomAndQuery_displayNamesUnaffected() = runTest {
+        // A plain MUC never contains '%'; a plain 1:1 never contains '!' — both pass through unchanged.
+        p.process(nid, XmppEvent.MucSelfJoined("room@conf.x.net", listOf("me")))
+        assertEquals("room@conf.x.net", db.bufferDao().byName(nid, "room@conf.x.net")!!.displayName)
+        p.process(nid, XmppEvent.ChatMessage("bob@example.net", "hi", "s1", null))
+        assertEquals("bob@example.net", db.bufferDao().byName(nid, "bob@example.net")!!.displayName)
+    }
 }

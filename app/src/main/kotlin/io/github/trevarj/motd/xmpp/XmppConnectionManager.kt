@@ -44,6 +44,11 @@ class XmppConnectionManager @Inject constructor(
 ) {
     private val actors = ConcurrentHashMap<Long, XmppAccountActor>()
 
+    // Per-network IRC-gateway discovery result, cached for the session lifetime so the join sheet
+    // doesn't re-disco on every open. Cleared whenever an actor is stopped/restarted (a fresh
+    // session may see a different component set), so it never outlives the connection it describes.
+    private val gatewayCache = ConcurrentHashMap<Long, List<String>>()
+
     // Sticky manual override of autoConnect: true = force-connect, false = force-disconnect,
     // absent = follow the row's autoConnect flag. Survives reconcile emissions.
     private val userIntents = ConcurrentHashMap<Long, Boolean>()
@@ -74,6 +79,7 @@ class XmppConnectionManager @Inject constructor(
             reconcileJob = null
             for ((_, actor) in actors) actor.stop()
             actors.clear()
+            gatewayCache.clear()
             _connectionStates.value = emptyMap()
         }
     }
@@ -88,6 +94,7 @@ class XmppConnectionManager @Inject constructor(
                 spawnActor(entity)
             } else if (existing.state.value.isTerminal()) {
                 // Manual connect overrides even a fatal (auth) park — the user may have fixed creds.
+                gatewayCache.remove(networkId)
                 existing.restart()
             }
         }
@@ -99,6 +106,7 @@ class XmppConnectionManager @Inject constructor(
         userIntents[networkId] = false
         mutex.withLock {
             actors.remove(networkId)?.stop()
+            gatewayCache.remove(networkId)
             _connectionStates.update { it - networkId }
         }
     }
@@ -106,8 +114,11 @@ class XmppConnectionManager @Inject constructor(
     /** Wake any actor parked in a non-fatal Failed/Disconnected state; leave healthy ones alone. */
     suspend fun reconnectStale() {
         mutex.withLock {
-            for ((_, actor) in actors) {
-                if (actor.state.value.isReconnectable()) actor.restart()
+            for ((id, actor) in actors) {
+                if (actor.state.value.isReconnectable()) {
+                    gatewayCache.remove(id)
+                    actor.restart()
+                }
             }
         }
     }
@@ -137,6 +148,19 @@ class XmppConnectionManager @Inject constructor(
 
     /** Channel-browser MUC discovery; no live actor for [networkId] means no rooms. */
     suspend fun listRooms(networkId: Long): List<MucRoomListing> = actors[networkId]?.listRooms() ?: emptyList()
+
+    /**
+     * IRC-gateway discovery for the humane join sheet, cached per network for the session lifetime
+     * ([gatewayCache], cleared on actor stop/restart). Only a non-empty result is cached: an empty
+     * list usually means "no live session yet" or a transient discovery hiccup, and caching that
+     * would wrongly suppress a real gateway once the connection settles.
+     */
+    suspend fun listIrcGateways(networkId: Long): List<String> {
+        gatewayCache[networkId]?.let { return it }
+        val gateways = actors[networkId]?.listIrcGateways() ?: emptyList()
+        if (gateways.isNotEmpty()) gatewayCache[networkId] = gateways
+        return gateways
+    }
 
     suspend fun partChannel(bufferId: Long, reason: String?) {
         val buffer = db.bufferDao().rawById(bufferId) ?: return
@@ -179,6 +203,7 @@ class XmppConnectionManager @Inject constructor(
             for (id in actors.keys.toList()) {
                 if (id !in wanted) {
                     actors.remove(id)?.stop()
+                    gatewayCache.remove(id)
                     _connectionStates.update { it - id }
                 }
             }

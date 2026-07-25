@@ -216,6 +216,14 @@ internal class XmppAccountActor(
      */
     suspend fun listRooms(): List<MucRoomListing> = session?.listRooms() ?: emptyList()
 
+    /**
+     * IRC-gateway discovery for the humane join sheet; no live session (not yet connected/dropped)
+     * means no gateways. Reads the volatile [session] like every other outbound call (see the
+     * concurrency contract in the class KDoc): a session closed mid-discovery degrades to an
+     * empty/failed listing inside [XmppSession.listIrcGateways]'s own catch-all — never a crash.
+     */
+    suspend fun listIrcGateways(): List<String> = session?.listIrcGateways() ?: emptyList()
+
     /** Run a best-effort wire write: a dead/closed transport must not crash the caller, but
      *  cancellation must still propagate (unlike [runCatching], which would swallow it). */
     private inline fun swallowTransport(block: () -> Unit) {
@@ -236,7 +244,9 @@ internal class XmppAccountActor(
             BufferEntity(
                 networkId = networkId,
                 name = roomJid,
-                displayName = roomJid,
+                // Biboumi IRC-channel rooms show "#channel · server" immediately on join; a plain MUC
+                // (or non-gateway room) keeps the raw JID. The MucSelfJoined path re-asserts this.
+                displayName = biboumiRoomDisplayName(roomJid) ?: roomJid,
                 type = BufferType.CHANNEL,
             ),
         )

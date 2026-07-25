@@ -24,6 +24,7 @@ import org.jivesoftware.smack.tcp.XMPPTCPConnectionConfiguration
 import org.jivesoftware.smackx.chatstates.ChatState
 import org.jivesoftware.smackx.chatstates.packet.ChatStateExtension
 import org.jivesoftware.smackx.delay.packet.DelayInformation
+import org.jivesoftware.smackx.disco.ServiceDiscoveryManager
 import org.jivesoftware.smackx.muc.MultiUserChat
 import org.jivesoftware.smackx.muc.MultiUserChatException
 import org.jivesoftware.smackx.muc.MultiUserChatManager
@@ -378,6 +379,37 @@ class SmackXmppSession(private val config: XmppAccountConfig) : XmppSession {
                 // none of these are worth crashing browse over; a server with no reachable MUC
                 // service (or a hiccup discovering one) just lists no rooms.
                 LOGGER.log(Level.WARNING, "MUC room discovery failed", e)
+                emptyList()
+            }
+        }
+    }
+
+    override suspend fun listIrcGateways(): List<String> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val disco = ServiceDiscoveryManager.getInstanceFor(connection)
+                // Enumerate the account domain's advertised components, then disco#info each to keep
+                // only those whose identity is an IRC gateway (Biboumi advertises category=conference
+                // type=irc). One bad component's info query shouldn't drop the rest — guard each.
+                val accountDomain = JidCreate.domainBareFrom(config.bareJid.substringAfter('@'))
+                disco.discoverItems(accountDomain).items.mapNotNull { item ->
+                    val jid = item.entityID
+                    val isIrcGateway = try {
+                        disco.discoverInfo(jid).identities.any { it.type == "irc" }
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        false
+                    }
+                    if (isIrcGateway) jid.toString() else null
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (e: Exception) {
+                // Same rationale as listRooms: NoResponseException/NotConnectedException/
+                // XMPPErrorException and friends are not worth crashing gateway discovery over — an
+                // account with no reachable gateway (or a hiccup discovering one) just lists none.
+                LOGGER.log(Level.WARNING, "IRC gateway discovery failed", e)
                 emptyList()
             }
         }

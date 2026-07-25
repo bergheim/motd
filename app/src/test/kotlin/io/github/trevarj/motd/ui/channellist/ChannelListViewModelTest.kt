@@ -130,6 +130,7 @@ class ChannelListViewModelTest {
             listRoomsCalls += networkId
             return listings
         }
+        override suspend fun listIrcGateways(networkId: Long): List<String> = emptyList()
         override suspend fun partChannel(bufferId: Long, reason: String?) = Unit
         override suspend fun ensureQueryBuffer(networkId: Long, bareJid: String): Long = 0
         override suspend fun ensureServerBuffer(networkId: Long): Long = 0

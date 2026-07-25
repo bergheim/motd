@@ -73,6 +73,8 @@ internal abstract class IrcModule {
                     impl.joinChannel(networkId, roomJid)
                 override suspend fun listRooms(networkId: Long): List<MucRoomListing> =
                     impl.listRooms(networkId)
+                override suspend fun listIrcGateways(networkId: Long): List<String> =
+                    impl.listIrcGateways(networkId)
                 override suspend fun partChannel(bufferId: Long, reason: String?) =
                     impl.partChannel(bufferId, reason)
                 override suspend fun ensureQueryBuffer(networkId: Long, bareJid: String): Long =

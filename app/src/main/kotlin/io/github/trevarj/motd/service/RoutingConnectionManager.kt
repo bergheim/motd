@@ -13,6 +13,7 @@ import javax.inject.Qualifier
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -48,9 +49,30 @@ interface XmppConnectionSurface {
     suspend fun joinChannel(networkId: Long, roomJid: String)
     /** Channel-browser MUC discovery for an XMPP network id (xmpp-support room-browse). */
     suspend fun listRooms(networkId: Long): List<MucRoomListing>
+    /** IRC-gateway discovery for an XMPP network id (component JIDs whose disco identity is IRC). */
+    suspend fun listIrcGateways(networkId: Long): List<String>
     suspend fun partChannel(bufferId: Long, reason: String?)
     suspend fun ensureQueryBuffer(networkId: Long, bareJid: String): Long
     suspend fun ensureServerBuffer(networkId: Long): Long
+}
+
+/** Inert [XmppConnectionSurface] for components (e.g. ViewModels under test) constructed without XMPP. */
+object NoopXmppConnectionSurface : XmppConnectionSurface {
+    override val connectionStates: StateFlow<Map<Long, IrcClientState>> = MutableStateFlow(emptyMap())
+    override suspend fun startAll() = Unit
+    override suspend fun stopAll() = Unit
+    override suspend fun connect(networkId: Long) = Unit
+    override suspend fun disconnect(networkId: Long) = Unit
+    override suspend fun reconnectStale() = Unit
+    override suspend fun sendMessage(bufferId: Long, text: String): SendAcceptance =
+        SendAcceptance.Rejected(SendRejectionReason.BUFFER_NOT_FOUND)
+    override suspend fun sendTyping(bufferId: Long, state: String) = Unit
+    override suspend fun joinChannel(networkId: Long, roomJid: String) = Unit
+    override suspend fun listRooms(networkId: Long): List<MucRoomListing> = emptyList()
+    override suspend fun listIrcGateways(networkId: Long): List<String> = emptyList()
+    override suspend fun partChannel(bufferId: Long, reason: String?) = Unit
+    override suspend fun ensureQueryBuffer(networkId: Long, bareJid: String): Long = 0L
+    override suspend fun ensureServerBuffer(networkId: Long): Long = 0L
 }
 
 /**

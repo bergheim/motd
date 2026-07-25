@@ -27,6 +27,10 @@ interface XmppSession {
     /** Discover MUC rooms across every MUC service domain this connection can see (channel-browser
      *  support). A server with no reachable MUC service is not an error worth surfacing. */
     suspend fun listRooms(): List<MucRoomListing>
+    /** Discover component JIDs that are IRC gateways (disco#info identity `type == "irc"`, e.g. a
+     *  Biboumi component). Same best-effort contract as [listRooms]: a discovery failure yields an
+     *  empty list rather than surfacing an error. */
+    suspend fun listIrcGateways(): List<String>
     suspend fun close()
 }
 

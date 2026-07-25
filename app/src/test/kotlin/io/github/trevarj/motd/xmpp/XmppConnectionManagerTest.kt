@@ -266,6 +266,44 @@ class XmppConnectionManagerTest {
     }
 
     @Test
+    fun listIrcGateways_returnsSessionGateways_whenReady() = runTest {
+        val s1 = FakeXmppSession().apply { ircGateways = listOf("irc.xmpp.glvortex.net") }
+        bootstrap(listOf(s1))
+        manager.connect(nid)
+        advanceUntilIdle()
+        s1.emit(XmppEvent.Ready(selfJid))
+        advanceUntilIdle()
+
+        assertEquals(listOf("irc.xmpp.glvortex.net"), manager.listIrcGateways(nid))
+    }
+
+    @Test
+    fun listIrcGateways_isCachedForSessionLifetime() = runTest {
+        val s1 = FakeXmppSession().apply { ircGateways = listOf("irc.xmpp.glvortex.net") }
+        bootstrap(listOf(s1))
+        manager.connect(nid)
+        advanceUntilIdle()
+        s1.emit(XmppEvent.Ready(selfJid))
+        advanceUntilIdle()
+
+        assertEquals(listOf("irc.xmpp.glvortex.net"), manager.listIrcGateways(nid))
+        // Change the session's answer: a cached non-empty result must be reused, not re-discovered.
+        s1.ircGateways = listOf("changed.example.net")
+        assertEquals(listOf("irc.xmpp.glvortex.net"), manager.listIrcGateways(nid))
+
+        // Disconnect clears the cache; a subsequent query with no actor returns empty.
+        manager.disconnect(nid)
+        advanceUntilIdle()
+        assertEquals(emptyList<String>(), manager.listIrcGateways(nid))
+    }
+
+    @Test
+    fun listIrcGateways_emptyList_whenNoActor() = runTest {
+        bootstrap(emptyList())
+        assertEquals(emptyList<String>(), manager.listIrcGateways(nid))
+    }
+
+    @Test
     fun ircRows_areIgnored() = runTest {
         bootstrap(emptyList())
         val ircNid = db.networkDao().insert(

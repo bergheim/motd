@@ -128,6 +128,13 @@ class RoutingConnectionManagerTest {
             return emptyList()
         }
 
+        var lastListIrcGateways: Long? = null
+        var ircGateways: List<String> = emptyList()
+        override suspend fun listIrcGateways(networkId: Long): List<String> {
+            lastListIrcGateways = networkId
+            return ircGateways
+        }
+
         override suspend fun partChannel(bufferId: Long, reason: String?) {
             lastPartChannel = bufferId to reason
         }

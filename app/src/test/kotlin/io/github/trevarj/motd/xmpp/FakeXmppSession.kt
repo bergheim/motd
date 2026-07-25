@@ -17,6 +17,9 @@ class FakeXmppSession : XmppSession {
     /** Canned [listRooms] result; channel-browser MUC discovery tests configure this directly. */
     var roomListings: List<MucRoomListing> = emptyList()
 
+    /** Canned [listIrcGateways] result; IRC-gateway discovery tests configure this directly. */
+    var ircGateways: List<String> = emptyList()
+
     suspend fun emit(event: XmppEvent) = channel.send(event)
     override suspend fun connectAndLogin() { connectCalls++; failLoginWith?.let { throw it } }
     override suspend fun joinMuc(roomJid: String, nick: String) {
@@ -32,5 +35,6 @@ class FakeXmppSession : XmppSession {
     }
     override suspend fun sendChatState(toBareJid: String, composing: Boolean) = Unit
     override suspend fun listRooms(): List<MucRoomListing> = roomListings
+    override suspend fun listIrcGateways(): List<String> = ircGateways
     override suspend fun close() { closed = true; channel.close() }
 }
