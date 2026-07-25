@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.CircularProgressIndicator
@@ -1252,10 +1253,18 @@ fun ChatContent(
                     }
                     }
 
-                    // Paging begins with a transient empty refresh before Room delivers its first
-                    // page. Only show the empty state once APPEND proves the buffer is terminally
-                    // empty; otherwise the large placeholder flashes during every chat entry.
-                    if (items.loadState.refresh is LoadState.NotLoading &&
+                    // A Biboumi IRC-gateway channel shows a connecting placeholder while the gateway
+                    // cold-connects to IRC (tens of seconds), instead of the blank/"empty" screen.
+                    if (state.connectingViaGateway && items.itemCount == 0) {
+                        io.github.trevarj.motd.ui.components.EmptyState(
+                            icon = Icons.Outlined.Sync,
+                            title = stringResource(R.string.chat_connecting_irc_title),
+                            message = stringResource(R.string.chat_connecting_irc_message),
+                        )
+                    } else if (items.loadState.refresh is LoadState.NotLoading &&
+                        // Paging begins with a transient empty refresh before Room delivers its first
+                        // page. Only show the empty state once APPEND proves the buffer is terminally
+                        // empty; otherwise the large placeholder flashes during every chat entry.
                         initialPagingPage(items.itemCount, items.loadState.append) ==
                         InitialPagingPage.TerminalEmpty
                     ) {

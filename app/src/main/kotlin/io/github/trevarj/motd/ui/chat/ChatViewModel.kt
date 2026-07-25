@@ -35,6 +35,7 @@ import io.github.trevarj.motd.data.visibility.MessageVisibilityReader
 import io.github.trevarj.motd.data.visibility.MessageVisibilitySpec
 import io.github.trevarj.motd.diagnostics.AutoFollowTrace
 import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.xmpp.biboumiRoomDisplayName
 import io.github.trevarj.motd.irc.proto.IrcMessage
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 import io.github.trevarj.motd.irc.client.HistoryAvailability
@@ -101,7 +102,25 @@ data class ChatState(
     val conversationLayout: ConversationLayoutState = ConversationLayoutState(),
     /** Composer/UI affordances gated by the buffer's network protocol (Task 9). */
     val capabilities: ProtocolCapabilities = ProtocolCapabilities.IRC,
+    /**
+     * True while a Biboumi IRC-gateway channel is opened and connected at the XMPP layer but not
+     * yet joined — the gateway is cold-connecting to the IRC network (which takes tens of seconds).
+     * Drives the "Connecting to IRC…" empty-state placeholder so the wait isn't a blank screen.
+     */
+    val connectingViaGateway: Boolean = false,
 )
+
+/**
+ * Whether to show the "connecting to IRC" placeholder: an IRC-gateway room ([biboumiRoomDisplayName]
+ * recognizes the `%server@gateway` shape) whose buffer exists and is connected at the XMPP layer
+ * ([IrcClientState.Ready]) but has not yet received its MUC self-join. Pure for unit testing.
+ */
+internal fun isConnectingViaGateway(buffer: BufferEntity?, connState: IrcClientState?): Boolean =
+    buffer != null &&
+        buffer.type == BufferType.CHANNEL &&
+        !buffer.joined &&
+        connState is IrcClientState.Ready &&
+        biboumiRoomDisplayName(buffer.name) != null
 
 data class ComposerDraftState(
     val text: String = "",
@@ -476,6 +495,7 @@ class ChatViewModel @Inject constructor(
             replyTo = reply,
             connState = conn,
             presence = presence,
+            connectingViaGateway = isConnectingViaGateway(buffer, conn),
         )
     }.combine(conversationLayout) { current, layout ->
         current.copy(conversationLayout = layout)

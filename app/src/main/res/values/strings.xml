@@ -391,6 +391,8 @@
     <string name="chat_sent">Sent</string>
     <string name="chat_empty_title">No messages yet</string>
     <string name="chat_empty_message">Say hello to start the conversation.</string>
+    <string name="chat_connecting_irc_title">Connecting to IRC…</string>
+    <string name="chat_connecting_irc_message">The gateway is connecting to the IRC network. This can take a moment on the first join.</string>
     <string name="chat_history_error">Couldn\'t load older messages</string>
     <string name="chat_history_incomplete">Older history may be incomplete</string>
     <plurals name="chat_history_capped">
