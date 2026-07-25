@@ -83,4 +83,10 @@ class NewConversationSheetTest {
         assertFalse(isValidJid("user@"))
         assertFalse(isValidJid("user@nodothost"))
     }
+
+    @Test
+    fun networkPickerLabel_tagsProtocol() {
+        assertEquals("xmpp · XMPP", networkPickerLabel(xmppNetwork))
+        assertEquals("xmpp · IRC", networkPickerLabel(ircNetwork))
+    }
 }

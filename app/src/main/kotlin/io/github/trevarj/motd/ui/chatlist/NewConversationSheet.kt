@@ -207,6 +207,13 @@ internal fun channelJoinTarget(channelName: String): String = "#${channelName.tr
  * `name@conference.<account domain>` — so joining "motd" on `user@example.net` targets
  * `motd@conference.example.net` without the user typing the service host.
  */
+/**
+ * Picker label with an explicit protocol tag, so "which of these speaks IRC vs XMPP" never has
+ * to be guessed from the network name alone.
+ */
+internal fun networkPickerLabel(net: NetworkEntity): String =
+    "${net.name} · ${if (net.protocol == Protocol.XMPP) "XMPP" else "IRC"}"
+
 internal fun joinTarget(net: NetworkEntity, value: String): String {
     if (net.protocol != Protocol.XMPP) return channelJoinTarget(value)
     // JIDs are case-normalized to lowercase everywhere in the XMPP pipeline, so both branches
@@ -252,7 +259,7 @@ private fun NetworkDropdown(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(text = selected?.name ?: stringResource(R.string.new_sheet_network))
+                Text(text = selected?.let(::networkPickerLabel) ?: stringResource(R.string.new_sheet_network))
                 Spacer(Modifier.weight(1f))
                 Icon(Icons.Filled.ArrowDropDown, contentDescription = null)
             }
@@ -260,7 +267,7 @@ private fun NetworkDropdown(
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             networks.forEach { net ->
                 DropdownMenuItem(
-                    text = { Text(net.name) },
+                    text = { Text(networkPickerLabel(net)) },
                     onClick = {
                         onSelect(net)
                         expanded = false
