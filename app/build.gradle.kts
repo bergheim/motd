@@ -177,6 +177,18 @@ android {
             }
         }
     }
+    signingConfigs {
+        // Pinned debug keystore so every machine/CI run signs debug builds identically and
+        // in-place upgrades of test APKs work. Deliberately NOT a secret: standard Android
+        // debug-key convention (androiddebugkey/android), never used for release signing.
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storeType = "pkcs12"
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
 
     buildTypes {
         debug {
