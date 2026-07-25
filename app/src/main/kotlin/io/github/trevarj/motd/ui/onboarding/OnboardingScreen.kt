@@ -68,6 +68,8 @@ import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.ui.settings.BouncerLoginFields
 import io.github.trevarj.motd.ui.settings.NetworkForm
 import io.github.trevarj.motd.ui.settings.PasswordField
+import io.github.trevarj.motd.ui.settings.XmppAccountForm
+import io.github.trevarj.motd.ui.settings.XmppForm
 import io.github.trevarj.motd.ui.settings.addnetwork.NetworkPresetId
 import io.github.trevarj.motd.ui.settings.addnetwork.NetworkPresetPicker
 import io.github.trevarj.motd.ui.theme.MotdMotion
@@ -91,6 +93,7 @@ fun OnboardingScreen(
         onAuthChange = viewModel::editAuth,
         onSojuLoginChange = viewModel::editSojuLogin,
         onZncLoginChange = viewModel::editZncLogin,
+        onXmppFormChange = viewModel::editXmppForm,
         onRetry = viewModel::retryConnect,
         onToggleBouncer = viewModel::toggleBouncerNetwork,
         onAddBouncer = viewModel::addBouncerNetwork,
@@ -112,6 +115,7 @@ fun OnboardingContent(
     onAuthChange: (AuthForm) -> Unit,
     onSojuLoginChange: (SojuLoginForm) -> Unit,
     onZncLoginChange: (ZncLoginForm) -> Unit,
+    onXmppFormChange: (XmppForm) -> Unit,
     onRetry: () -> Unit,
     onToggleBouncer: (String) -> Unit,
     onAddBouncer: (String, String) -> Unit,
@@ -137,6 +141,7 @@ fun OnboardingContent(
                 OnboardingStep.WELCOME -> WelcomePage()
                 OnboardingStep.CHOICE ->
                     ChoicePage(state, onChoose, onChooseBouncerKind, onSelectPreset)
+                OnboardingStep.XMPP -> XmppPage(state, onXmppFormChange)
                 OnboardingStep.SERVER -> ServerPage(state, onServerChange, onAuthChange, authOnly = false)
                 OnboardingStep.AUTH ->
                     if (state.isBouncer) {
@@ -298,6 +303,13 @@ private fun ChoicePage(
                 onSelect = onSelectPreset,
             )
         }
+        ChoiceCard(
+            title = stringResource(R.string.onboarding_choice_xmpp_title),
+            desc = stringResource(R.string.onboarding_choice_xmpp_desc),
+            selected = state.choice == ConnectionChoice.XMPP,
+            onClick = { onChoose(ConnectionChoice.XMPP) },
+            modifier = Modifier.testTag("onboarding_choice_xmpp"),
+        )
     }
 }
 
@@ -364,6 +376,28 @@ private fun ServerPage(
             // only the nick here (its bouncer SASL user/password live on the AUTH step).
             showIdentity = !state.isBouncer,
             showNick = state.isBouncer,
+        )
+    }
+}
+
+/** XMPP path: a single form step (JID + password, + optional MUC nick/transport overrides). */
+@Composable
+private fun XmppPage(
+    state: OnboardingState,
+    onXmppFormChange: (XmppForm) -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = 16.dp),
+    ) {
+        Text(
+            stringResource(R.string.onboarding_choice_xmpp_title),
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+        )
+        XmppAccountForm(
+            form = state.xmppForm,
+            onFormChange = onXmppFormChange,
         )
     }
 }
@@ -586,7 +620,7 @@ private fun OnboardingChoicePreview() {
             OnboardingContent(
                 state = OnboardingState(step = OnboardingStep.CHOICE, choice = ConnectionChoice.NETWORK),
                 onNext = {}, onBack = {}, onChoose = {}, onChooseBouncerKind = {}, onSelectPreset = {},
-                onServerChange = {}, onAuthChange = {}, onSojuLoginChange = {}, onZncLoginChange = {}, onRetry = {},
+                onServerChange = {}, onAuthChange = {}, onSojuLoginChange = {}, onZncLoginChange = {}, onXmppFormChange = {}, onRetry = {},
                 onToggleBouncer = {}, onAddBouncer = { _, _ -> }, onFinish = {},
                 onConfirmPlaintext = {}, onDismissPlaintext = {},
             )
@@ -612,7 +646,7 @@ private fun OnboardingConnectPreview() {
                     ),
                 ),
                 onNext = {}, onBack = {}, onChoose = {}, onChooseBouncerKind = {}, onSelectPreset = {},
-                onServerChange = {}, onAuthChange = {}, onSojuLoginChange = {}, onZncLoginChange = {}, onRetry = {},
+                onServerChange = {}, onAuthChange = {}, onSojuLoginChange = {}, onZncLoginChange = {}, onXmppFormChange = {}, onRetry = {},
                 onToggleBouncer = {}, onAddBouncer = { _, _ -> }, onFinish = {},
                 onConfirmPlaintext = {}, onDismissPlaintext = {},
             )

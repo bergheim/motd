@@ -70,6 +70,8 @@
     <string name="bouncer_znc_login_guidance">Use the ZNC username, network identifier, and password shown in your ZNC configuration.</string>
     <string name="onboarding_choice_network_title">Connect to an IRC network</string>
     <string name="onboarding_choice_network_desc">Connect directly to a single IRC server.</string>
+    <string name="onboarding_choice_xmpp_title">Connect an XMPP account</string>
+    <string name="onboarding_choice_xmpp_desc">Sign in with your Jabber/XMPP address and password.</string>
     <string name="onboarding_server_title">Server</string>
     <string name="onboarding_field_host">Host</string>
     <string name="onboarding_field_port">Port</string>

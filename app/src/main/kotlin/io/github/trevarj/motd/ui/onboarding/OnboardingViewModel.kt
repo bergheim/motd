@@ -12,9 +12,11 @@ import io.github.trevarj.motd.data.prefs.PresetEnrollmentPrefs
 import io.github.trevarj.motd.data.repo.NetworkRepository
 import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.service.ConnectionManager
-import io.github.trevarj.motd.ui.settings.buildNetworkEntity
+import io.github.trevarj.motd.ui.settings.XmppForm
 import io.github.trevarj.motd.ui.settings.addnetwork.NetworkPresetId
 import io.github.trevarj.motd.ui.settings.addnetwork.networkPreset
+import io.github.trevarj.motd.ui.settings.buildNetworkEntity
+import io.github.trevarj.motd.ui.settings.buildXmppNetworkEntity
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -57,8 +59,12 @@ class OnboardingViewModel @Inject constructor(
             return
         }
         dispatch(OnboardingAction.Next)
-        // Kick off the connect test when entering the CONNECT step.
-        if (before.step == OnboardingStep.AUTH && _state.value.step == OnboardingStep.CONNECT) {
+        // Kick off the connect test when entering the CONNECT step. AUTH is the last step before
+        // CONNECT for the bouncer/network paths; XMPP replaces both with a single form step.
+        if (
+            (before.step == OnboardingStep.AUTH || before.step == OnboardingStep.XMPP) &&
+            _state.value.step == OnboardingStep.CONNECT
+        ) {
             runConnectTest()
         }
     }
@@ -80,6 +86,7 @@ class OnboardingViewModel @Inject constructor(
     fun editAuth(auth: AuthForm) = dispatch(OnboardingAction.EditAuth(auth))
     fun editSojuLogin(login: SojuLoginForm) = dispatch(OnboardingAction.EditSojuLogin(login))
     fun editZncLogin(login: ZncLoginForm) = dispatch(OnboardingAction.EditZncLogin(login))
+    fun editXmppForm(form: XmppForm) = dispatch(OnboardingAction.EditXmppForm(form))
     fun toggleBouncerNetwork(netId: String) = dispatch(OnboardingAction.ToggleBouncerNetwork(netId))
 
     fun confirmPlaintext() {
@@ -109,29 +116,34 @@ class OnboardingViewModel @Inject constructor(
         connectTestJob = viewModelScope.launch {
             if (prior != null) networkRepository.deleteNetwork(prior)
             val s = _state.value
-            val server = if (s.isZnc) {
-                s.server.copy(
-                    username = s.zncLogin.username.trim(),
-                    realname = s.server.nick.trim(),
-                )
+            val entity = if (s.isXmpp) {
+                buildXmppNetworkEntity(s.xmppForm)
             } else {
-                s.server
+                val server = if (s.isZnc) {
+                    s.server.copy(
+                        username = s.zncLogin.username.trim(),
+                        realname = s.server.nick.trim(),
+                    )
+                } else {
+                    s.server
+                }
+                buildNetworkEntity(
+                    server = server,
+                    auth = s.activeAuth,
+                    role = s.role,
+                    name = when {
+                        s.isZnc -> s.zncLogin.network.trim()
+                        else -> networkPreset(s.presetId)?.displayName ?: s.server.host
+                    },
+                )
             }
-            val entity = buildNetworkEntity(
-                server = server,
-                auth = s.activeAuth,
-                role = s.role,
-                name = when {
-                    s.isZnc -> s.zncLogin.network.trim()
-                    else -> networkPreset(s.presetId)?.displayName ?: s.server.host
-                },
-            )
             val existingNetworkIds = networkRepository.observeNetworks().first()
                 .mapTo(mutableSetOf()) { it.id }
             val networkId = networkRepository.addNetwork(entity)
             if (
                 networkId !in existingNetworkIds &&
                 !s.isBouncer &&
+                !s.isXmpp &&
                 s.presetId == NetworkPresetId.LIBERA
             ) {
                 presetEnrollmentPrefs.markLiberaEligible(networkId)

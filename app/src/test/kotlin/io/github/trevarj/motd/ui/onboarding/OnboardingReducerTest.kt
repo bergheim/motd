@@ -5,6 +5,7 @@ import io.github.trevarj.motd.bouncer.SojuLoginForm
 import io.github.trevarj.motd.bouncer.ZncLoginForm
 import io.github.trevarj.motd.data.db.NetworkRole
 import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.ui.settings.XmppForm
 import io.github.trevarj.motd.ui.settings.addnetwork.NetworkPresetId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -42,6 +43,57 @@ class OnboardingReducerTest {
         )
         assertEquals(OnboardingStep.SERVER, s.step)
         assertEquals(NetworkRole.DIRECT, s.role)
+    }
+
+    @Test
+    fun `choosing xmpp then next advances to xmpp step`() {
+        val s = reduce(
+            OnboardingState(step = OnboardingStep.CHOICE),
+            OnboardingAction.ChooseConnection(ConnectionChoice.XMPP),
+            OnboardingAction.Next,
+        )
+        assertEquals(OnboardingStep.XMPP, s.step)
+        assertTrue(s.isXmpp)
+    }
+
+    @Test
+    fun `xmpp step blocks advance until the form is valid`() {
+        val base = reduce(
+            OnboardingState(step = OnboardingStep.CHOICE),
+            OnboardingAction.ChooseConnection(ConnectionChoice.XMPP),
+        ).copy(step = OnboardingStep.XMPP)
+
+        assertFalse(base.canAdvance)
+        val partial = base.copy(xmppForm = XmppForm(jid = "user@example.org"))
+        assertFalse(partial.canAdvance) // password still missing
+
+        val valid = base.copy(xmppForm = XmppForm(jid = "user@example.org", password = "pw"))
+        assertTrue(valid.canAdvance)
+        assertEquals(OnboardingStep.CONNECT, onboardingReducer(valid, OnboardingAction.Next).step)
+    }
+
+    @Test
+    fun `back from xmpp step returns to choice, back from connect returns to xmpp`() {
+        val xmppStep = reduce(
+            OnboardingState(step = OnboardingStep.CHOICE),
+            OnboardingAction.ChooseConnection(ConnectionChoice.XMPP),
+        ).copy(step = OnboardingStep.XMPP)
+
+        assertEquals(OnboardingStep.CHOICE, onboardingReducer(xmppStep, OnboardingAction.Back).step)
+
+        val connectStep = xmppStep.copy(step = OnboardingStep.CONNECT)
+        assertEquals(OnboardingStep.XMPP, onboardingReducer(connectStep, OnboardingAction.Back).step)
+    }
+
+    @Test
+    fun `editing the xmpp form updates state independent of other paths`() {
+        val s = onboardingReducer(
+            OnboardingState(step = OnboardingStep.XMPP, choice = ConnectionChoice.XMPP),
+            OnboardingAction.EditXmppForm(XmppForm(jid = "trev@example.org", password = "secret")),
+        )
+        assertEquals("trev@example.org", s.xmppForm.jid)
+        assertEquals("secret", s.xmppForm.password)
+        assertTrue(s.xmppForm.isValid)
     }
 
     @Test
