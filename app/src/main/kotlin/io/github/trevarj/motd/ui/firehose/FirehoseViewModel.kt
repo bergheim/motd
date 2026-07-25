@@ -7,6 +7,7 @@ import androidx.paging.cachedIn
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.github.trevarj.motd.data.db.FirehoseRow
 import io.github.trevarj.motd.data.db.NetworkDao
+import io.github.trevarj.motd.data.db.Protocol
 import io.github.trevarj.motd.data.db.NetworkIdentityDao
 import io.github.trevarj.motd.data.db.identityRules
 import io.github.trevarj.motd.data.prefs.SettingsRepository
@@ -52,7 +53,15 @@ class FirehoseViewModel @Inject constructor(
                 networks = networks.map { network ->
                     FirehoseNetwork(
                         networkId = network.id,
-                        identityRules = rulesByNetwork[network.id] ?: IrcIdentityRules(),
+                        // A network with no advertised CASEMAPPING falls back per protocol: XMPP nicks
+                        // are lowercase JIDs, so use ASCII folding (the IRC RFC1459 default would
+                        // wrongly fold []\~). IRC keeps the RFC1459 default.
+                        identityRules = rulesByNetwork[network.id]
+                            ?: if (network.protocol == Protocol.XMPP) {
+                                IrcIdentityRules.from("ascii", null)
+                            } else {
+                                IrcIdentityRules()
+                            },
                     )
                 },
             )

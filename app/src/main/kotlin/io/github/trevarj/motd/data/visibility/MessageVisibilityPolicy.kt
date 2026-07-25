@@ -225,7 +225,10 @@ internal fun firehosePagingQuery(
             "FROM messages m " +
             "JOIN buffers b ON b.id = m.bufferId " +
             "JOIN networks n ON n.id = b.networkId " +
-            "WHERE m.kind IN ($CONVERSATION_KIND_SQL) AND $foolClause " +
+            // Channels and DMs only (no SERVER console), and not a dismissed QUERY. Kind filter keeps
+            // conversation lines; the per-network fool clause hides muted users.
+            "WHERE b.type IN ('CHANNEL','QUERY') AND b.dismissed = 0 " +
+            "AND m.kind IN ($CONVERSATION_KIND_SQL) AND $foolClause " +
             "ORDER BY m.serverTime DESC, m.id DESC",
     )
 }

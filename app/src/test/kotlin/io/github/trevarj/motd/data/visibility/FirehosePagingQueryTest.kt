@@ -56,4 +56,12 @@ class FirehosePagingQueryTest {
         // The not-fool predicate compares against the normalized actor blob.
         assertTrue(sql.contains("normalizedActor"))
     }
+
+    @Test
+    fun restrictsToChannelsAndDmsExcludingDismissed() {
+        val sql = firehosePagingQuery(MessageVisibilitySpec(), networks = emptyList()).sql
+        // Channels + DMs only (no SERVER console buffer), and not a dismissed query.
+        assertTrue(sql.contains("b.type IN ('CHANNEL','QUERY')"))
+        assertTrue(sql.contains("b.dismissed = 0"))
+    }
 }

@@ -527,8 +527,12 @@ interface MessageDao {
     @RawQuery(observedEntities = [MessageEntity::class])
     fun pagingSource(query: SupportSQLiteQuery): PagingSource<Int, MessageEntity>
 
-    /** Cross-buffer firehose stream; the dynamic per-network fool clause forces a raw query. */
-    @RawQuery(observedEntities = [MessageEntity::class])
+    /**
+     * Cross-buffer firehose stream; the dynamic per-network fool clause forces a raw query. It joins
+     * buffers/networks, so those tables are observed too — a buffer rename or display change must
+     * invalidate the stream, not wait for the next message write.
+     */
+    @RawQuery(observedEntities = [MessageEntity::class, BufferEntity::class, NetworkEntity::class])
     fun firehosePagingSource(query: SupportSQLiteQuery): PagingSource<Int, FirehoseRow>
 
     @RawQuery
