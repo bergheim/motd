@@ -1,5 +1,6 @@
 package io.github.trevarj.motd.xmpp
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.Channel
 
 class FakeXmppSession : XmppSession {
@@ -20,6 +21,12 @@ class FakeXmppSession : XmppSession {
     /** Canned [listIrcGateways] result; IRC-gateway discovery tests configure this directly. */
     var ircGateways: List<String> = emptyList()
 
+    /** Number of times [listIrcGateways] was invoked — asserts single-flight collapses overlaps. */
+    var listIrcGatewaysCalls = 0
+
+    /** When set, [listIrcGateways] suspends on this gate, letting a test overlap two callers. */
+    var gateIrcGateways: CompletableDeferred<Unit>? = null
+
     suspend fun emit(event: XmppEvent) = channel.send(event)
     override suspend fun connectAndLogin() { connectCalls++; failLoginWith?.let { throw it } }
     override suspend fun joinMuc(roomJid: String, nick: String) {
@@ -35,6 +42,10 @@ class FakeXmppSession : XmppSession {
     }
     override suspend fun sendChatState(toBareJid: String, composing: Boolean) = Unit
     override suspend fun listRooms(): List<MucRoomListing> = roomListings
-    override suspend fun listIrcGateways(): List<String> = ircGateways
+    override suspend fun listIrcGateways(): List<String> {
+        listIrcGatewaysCalls++
+        gateIrcGateways?.await()
+        return ircGateways
+    }
     override suspend fun close() { closed = true; channel.close() }
 }

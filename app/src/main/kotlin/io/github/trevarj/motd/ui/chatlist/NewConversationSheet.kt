@@ -116,13 +116,16 @@ internal fun NewConversationSheetContent(
                 ?: selectableNetworks.firstOrNull(),
         )
     }
-    var input by remember { mutableStateOf("") }
+    // Every per-target input is keyed on the selected network id, so switching networks resets the
+    // fields — a carry-over value can never be dispatched against the wrong (newly selected) network.
+    val selectedNetworkId = selectedNetwork?.id
+    var input by remember(selectedNetworkId) { mutableStateOf("") }
     // IRC-gateway join sub-mode (Biboumi): only offered on the join tab of an XMPP network that has
     // a discovered gateway. Server/channel are edited separately from [input] so switching modes
     // never smears a half-typed value across the two shapes.
-    var ircMode by remember { mutableStateOf(false) }
-    var ircServer by remember { mutableStateOf("") }
-    var ircChannel by remember { mutableStateOf("") }
+    var ircMode by remember(selectedNetworkId) { mutableStateOf(false) }
+    var ircServer by remember(selectedNetworkId) { mutableStateOf("") }
+    var ircChannel by remember(selectedNetworkId) { mutableStateOf("") }
 
     val isXmppNetwork = selectedNetwork?.protocol == Protocol.XMPP
     val gateways = selectedNetwork?.let { gatewaysByNetwork[it.id] }.orEmpty()
@@ -132,8 +135,9 @@ internal fun NewConversationSheetContent(
     var selectedGateway by remember(gateways) { mutableStateOf(gateways.firstOrNull()) }
 
     // Discover gateways/recents for the target network as soon as it (or the tab) changes, so the
-    // segmented control can appear without the user doing anything. Idempotent + cached upstream.
-    LaunchedEffect(selectedNetwork?.id, tab) {
+    // segmented control can appear without the user doing anything. Idempotent + cached/single-flight
+    // upstream, so overlapping fires (tab switches, recomposition) collapse to one discovery.
+    LaunchedEffect(selectedNetworkId, tab) {
         selectedNetwork?.takeIf { it.protocol == Protocol.XMPP }?.let { onPrepareGatewayJoin(it.id) }
     }
 
@@ -141,7 +145,8 @@ internal fun NewConversationSheetContent(
     // Room/user JIDs have no channel-style prefix; only the message-user JID is validated so a
     // malformed address cannot be dispatched as a nick (Task 9).
     val inputValid = if (ircJoinActive) {
-        ircServer.trim().isNotEmpty() && ircChannel.trim().isNotEmpty() && selectedGateway != null
+        val gateway = selectedGateway
+        gateway != null && isValidGatewayJoinInput(ircServer, ircChannel, gateway)
     } else {
         trimmedInput.isNotEmpty() && (tab == 0 || !isXmppNetwork || isValidJid(trimmedInput))
     }
@@ -245,10 +250,11 @@ internal fun NewConversationSheetContent(
                 val net = selectedNetwork ?: return@Button
                 if (ircJoinActive) {
                     val gateway = selectedGateway ?: return@Button
+                    // Only compose + persist when every component is well-formed: a rejected server
+                    // (e.g. "irc.libera.chat@evil") must never reach recents or the join wire.
+                    if (!isValidGatewayJoinInput(ircServer, ircChannel, gateway)) return@Button
                     val server = ircServer.trim()
-                    val channel = ircChannel.trim()
-                    if (server.isEmpty() || channel.isEmpty()) return@Button
-                    onJoinChannel(net.id, composeGatewayJoinTarget(server, channel, gateway))
+                    onJoinChannel(net.id, composeGatewayJoinTarget(server, ircChannel, gateway))
                     onPersistIrcServer(net.id, server)
                     return@Button
                 }
@@ -317,13 +323,29 @@ internal fun ircServerOptions(recentServers: List<String>): List<String> {
 /**
  * Compose a Biboumi gateway join target `<#channel>%<server>@<gateway>` (e.g.
  * `#systemcrafters%irc.libera.chat@irc.xmpp.glvortex.net`). The channel gets a leading '#' if the
- * user omitted it; server/channel are trimmed. Tested like [joinTarget].
+ * user omitted it; server/channel/gateway are trimmed. Callers MUST gate on
+ * [isValidGatewayJoinInput] first — this does not re-validate, so passing a component that itself
+ * contains '%'/'@'/whitespace would forge a malformed JID.
  */
 internal fun composeGatewayJoinTarget(server: String, channel: String, gateway: String): String {
     val trimmedChannel = channel.trim()
     val name = if (trimmedChannel.startsWith("#")) trimmedChannel else "#$trimmedChannel"
-    return "$name%${server.trim()}@$gateway"
+    return "$name%${server.trim()}@${gateway.trim()}"
 }
+
+/**
+ * A single join-target component is well-formed when it is non-empty and free of the address
+ * metacharacters '%' and '@' and of any internal whitespace — so a value like `irc.libera.chat@evil`
+ * (which would smuggle a second '@' into the composed JID) or a channel containing '%' is rejected.
+ */
+internal fun isValidGatewayComponent(value: String): Boolean {
+    val trimmed = value.trim()
+    return trimmed.isNotEmpty() && trimmed.none { it == '%' || it == '@' || it.isWhitespace() }
+}
+
+/** All three gateway join components must be well-formed for a join to be dispatchable/persistable. */
+internal fun isValidGatewayJoinInput(server: String, channel: String, gateway: String): Boolean =
+    isValidGatewayComponent(server) && isValidGatewayComponent(channel) && isValidGatewayComponent(gateway)
 
 /**
  * Join target for [net]: IRC keeps the `#`-prefix convention via [channelJoinTarget]; XMPP MUC

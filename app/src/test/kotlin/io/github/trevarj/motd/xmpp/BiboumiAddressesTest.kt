@@ -49,5 +49,6 @@ class BiboumiAddressesTest {
         assertNull(biboumiNickDisplayName("!irc.libera.chat@gw.example.net")) // empty nick
         assertNull(biboumiNickDisplayName("nick!@gw.example.net")) // empty server
         assertNull(biboumiNickDisplayName("nick!irc.libera.chat")) // no '@'
+        assertNull(biboumiNickDisplayName("a!b!c@gw.example.net")) // more than one '!'
     }
 }

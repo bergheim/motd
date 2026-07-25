@@ -107,6 +107,29 @@ class NewConversationSheetTest {
     }
 
     @Test
+    fun isValidGatewayJoinInput_rejectsMetacharactersAndWhitespace() {
+        // Happy path.
+        assertTrue(isValidGatewayJoinInput("irc.libera.chat", "systemcrafters", "irc.xmpp.glvortex.net"))
+        assertTrue(isValidGatewayJoinInput("irc.libera.chat", "#systemcrafters", "gw.example.net"))
+        // A server smuggling a second '@' would forge a second host in the composed JID.
+        assertFalse(isValidGatewayJoinInput("irc.libera.chat@evil", "chan", "gw.example.net"))
+        // A channel containing '%' would break the server separator.
+        assertFalse(isValidGatewayJoinInput("irc.libera.chat", "cha%nnel", "gw.example.net"))
+        // Internal whitespace and empties are rejected on any component.
+        assertFalse(isValidGatewayJoinInput("irc libera chat", "chan", "gw.example.net"))
+        assertFalse(isValidGatewayJoinInput("irc.libera.chat", "", "gw.example.net"))
+        assertFalse(isValidGatewayJoinInput("irc.libera.chat", "chan", "gw@example.net"))
+    }
+
+    @Test
+    fun composeGatewayJoinTarget_trimsGatewayToo() {
+        assertEquals(
+            "#chan%irc.libera.chat@gw.example.net",
+            composeGatewayJoinTarget("irc.libera.chat", "chan", "  gw.example.net "),
+        )
+    }
+
+    @Test
     fun ircServerOptions_recentsFirst_thenDefaults_deduped() {
         assertEquals(
             listOf("irc.oftc.net", "irc.libera.chat"),

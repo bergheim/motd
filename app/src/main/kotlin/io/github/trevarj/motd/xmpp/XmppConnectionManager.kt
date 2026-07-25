@@ -14,7 +14,10 @@ import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -44,10 +47,16 @@ class XmppConnectionManager @Inject constructor(
 ) {
     private val actors = ConcurrentHashMap<Long, XmppAccountActor>()
 
-    // Per-network IRC-gateway discovery result, cached for the session lifetime so the join sheet
-    // doesn't re-disco on every open. Cleared whenever an actor is stopped/restarted (a fresh
-    // session may see a different component set), so it never outlives the connection it describes.
+    // Per-network IRC-gateway discovery result, cached for the current Ready session so the join
+    // sheet doesn't re-disco on every open. Invalidated ([invalidateGateways]) on any drop out of
+    // Ready — including the actor's internal session recycling on transport loss, surfaced through
+    // [publishState] — so the cache never describes a session that is no longer live.
     private val gatewayCache = ConcurrentHashMap<Long, List<String>>()
+
+    // Single-flight in-flight gateway discovery per network: concurrent callers (overlapping sheet
+    // opens / tab switches / recomposition) join the same [Deferred] instead of each firing a fresh
+    // disco. Entries are removed on completion and cancelled on invalidation.
+    private val gatewayLoads = ConcurrentHashMap<Long, Deferred<List<String>>>()
 
     // Sticky manual override of autoConnect: true = force-connect, false = force-disconnect,
     // absent = follow the row's autoConnect flag. Survives reconcile emissions.
@@ -80,6 +89,8 @@ class XmppConnectionManager @Inject constructor(
             for ((_, actor) in actors) actor.stop()
             actors.clear()
             gatewayCache.clear()
+            gatewayLoads.values.forEach { it.cancel() }
+            gatewayLoads.clear()
             _connectionStates.value = emptyMap()
         }
     }
@@ -94,7 +105,7 @@ class XmppConnectionManager @Inject constructor(
                 spawnActor(entity)
             } else if (existing.state.value.isTerminal()) {
                 // Manual connect overrides even a fatal (auth) park — the user may have fixed creds.
-                gatewayCache.remove(networkId)
+                invalidateGateways(networkId)
                 existing.restart()
             }
         }
@@ -106,7 +117,7 @@ class XmppConnectionManager @Inject constructor(
         userIntents[networkId] = false
         mutex.withLock {
             actors.remove(networkId)?.stop()
-            gatewayCache.remove(networkId)
+            invalidateGateways(networkId)
             _connectionStates.update { it - networkId }
         }
     }
@@ -116,7 +127,7 @@ class XmppConnectionManager @Inject constructor(
         mutex.withLock {
             for ((id, actor) in actors) {
                 if (actor.state.value.isReconnectable()) {
-                    gatewayCache.remove(id)
+                    invalidateGateways(id)
                     actor.restart()
                 }
             }
@@ -150,16 +161,40 @@ class XmppConnectionManager @Inject constructor(
     suspend fun listRooms(networkId: Long): List<MucRoomListing> = actors[networkId]?.listRooms() ?: emptyList()
 
     /**
-     * IRC-gateway discovery for the humane join sheet, cached per network for the session lifetime
-     * ([gatewayCache], cleared on actor stop/restart). Only a non-empty result is cached: an empty
-     * list usually means "no live session yet" or a transient discovery hiccup, and caching that
-     * would wrongly suppress a real gateway once the connection settles.
+     * IRC-gateway discovery for the humane join sheet. A cached result for the current Ready session
+     * short-circuits; otherwise the discovery is single-flighted through [gatewayLoads] so
+     * overlapping callers share one disco round-trip. Only a non-empty result discovered while the
+     * network is still Ready is cached: an empty list usually means "no live session yet" or a
+     * transient hiccup (don't suppress a real gateway), and a result that arrives after the session
+     * dropped must not repopulate a just-invalidated cache.
+     *
+     * Started [CoroutineStart.UNDISPATCHED] so the discovery begins in the caller's context up to its
+     * first real suspension (keeping the single-flight deterministic under the test scheduler).
      */
     suspend fun listIrcGateways(networkId: Long): List<String> {
         gatewayCache[networkId]?.let { return it }
-        val gateways = actors[networkId]?.listIrcGateways() ?: emptyList()
-        if (gateways.isNotEmpty()) gatewayCache[networkId] = gateways
+        val deferred = gatewayLoads.computeIfAbsent(networkId) { id ->
+            scope.async(start = CoroutineStart.UNDISPATCHED) {
+                actors[id]?.listIrcGateways() ?: emptyList()
+            }
+        }
+        val gateways = try {
+            deferred.await()
+        } finally {
+            // Value-matched: only clear the entry we created, never a fresher one a concurrent
+            // invalidation may have replaced it with.
+            gatewayLoads.remove(networkId, deferred)
+        }
+        if (gateways.isNotEmpty() && connectionStates.value[networkId] is IrcClientState.Ready) {
+            gatewayCache[networkId] = gateways
+        }
         return gateways
+    }
+
+    /** Drop cached + in-flight gateway discovery for [networkId] (called on any drop out of Ready). */
+    private fun invalidateGateways(networkId: Long) {
+        gatewayCache.remove(networkId)
+        gatewayLoads.remove(networkId)?.cancel()
     }
 
     suspend fun partChannel(bufferId: Long, reason: String?) {
@@ -203,7 +238,7 @@ class XmppConnectionManager @Inject constructor(
             for (id in actors.keys.toList()) {
                 if (id !in wanted) {
                     actors.remove(id)?.stop()
-                    gatewayCache.remove(id)
+                    invalidateGateways(id)
                     _connectionStates.update { it - id }
                 }
             }
@@ -242,6 +277,11 @@ class XmppConnectionManager @Inject constructor(
     }
 
     private fun publishState(networkId: Long, state: IrcClientState) {
+        // Gateway discovery is only valid within a live Ready session. Any drop to a non-Ready state
+        // — Connecting/Disconnected/Failed, including the actor recycling its own session on
+        // transport loss (which never routes through connect/disconnect/reconcile) — invalidates the
+        // cached/in-flight result so the next query re-discovers against the fresh session.
+        if (state !is IrcClientState.Ready) invalidateGateways(networkId)
         _connectionStates.update { it + (networkId to state) }
     }
 

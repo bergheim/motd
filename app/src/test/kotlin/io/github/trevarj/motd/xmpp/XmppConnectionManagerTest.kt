@@ -14,9 +14,11 @@ import io.github.trevarj.motd.data.sync.TypingTrackerImpl
 import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.service.SendAcceptance
 import io.github.trevarj.motd.service.SendRejectionReason
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.asExecutor
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -295,6 +297,58 @@ class XmppConnectionManagerTest {
         manager.disconnect(nid)
         advanceUntilIdle()
         assertEquals(emptyList<String>(), manager.listIrcGateways(nid))
+    }
+
+    @Test
+    fun listIrcGateways_cacheInvalidated_whenSessionDropsOutOfReady() = runTest {
+        val s1 = FakeXmppSession().apply { ircGateways = listOf("gw-old.example.net") }
+        val s2 = FakeXmppSession().apply { ircGateways = listOf("gw-new.example.net") }
+        bootstrap(listOf(s1, s2))
+        manager.connect(nid)
+        advanceUntilIdle()
+        s1.emit(XmppEvent.Ready(selfJid))
+        advanceUntilIdle()
+        assertEquals(listOf("gw-old.example.net"), manager.listIrcGateways(nid)) // cached on s1
+
+        // A non-fatal drop makes the actor publish a non-Ready state (Failed) and recycle its
+        // session internally — the manager must invalidate the cache off that state transition,
+        // not just on connect/disconnect/reconcile.
+        s1.emit(XmppEvent.Disconnected(reason = null, fatal = false))
+        runCurrent()
+        advanceTimeBy(1_100L) // elapse backoff so the fresh session (s2) is created
+        advanceUntilIdle()
+        s2.emit(XmppEvent.Ready(selfJid))
+        advanceUntilIdle()
+
+        // The stale s1 result was dropped; discovery re-runs against the fresh session.
+        assertEquals(listOf("gw-new.example.net"), manager.listIrcGateways(nid))
+    }
+
+    @Test
+    fun listIrcGateways_singleFlight_collapsesConcurrentCallers() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val s1 = FakeXmppSession().apply {
+            ircGateways = listOf("irc.xmpp.glvortex.net")
+            gateIrcGateways = gate
+        }
+        bootstrap(listOf(s1))
+        manager.connect(nid)
+        advanceUntilIdle()
+        s1.emit(XmppEvent.Ready(selfJid))
+        advanceUntilIdle()
+
+        // Two overlapping callers while discovery is still in flight (gate not yet released).
+        val first = async { manager.listIrcGateways(nid) }
+        val second = async { manager.listIrcGateways(nid) }
+        runCurrent()
+        // Both joined the same in-flight discovery: the session saw exactly one disco call.
+        assertEquals(1, s1.listIrcGatewaysCalls)
+
+        gate.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(listOf("irc.xmpp.glvortex.net"), first.await())
+        assertEquals(listOf("irc.xmpp.glvortex.net"), second.await())
+        assertEquals(1, s1.listIrcGatewaysCalls)
     }
 
     @Test

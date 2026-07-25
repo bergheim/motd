@@ -42,8 +42,10 @@ internal fun biboumiNickDisplayName(bareJid: String): String? {
     if (at <= 0) return null
     val local = bareJid.substring(0, at)
     val bang = local.indexOf('!')
-    // bang <= 0 means no separator or an empty nick ("!server"): not a gateway PM.
-    if (bang <= 0) return null
+    // Exact-shape discipline (mirrors the room parser): require exactly one '!' with a non-empty
+    // nick and server. bang <= 0 means no separator or an empty nick ("!server"); a second '!'
+    // means the localpart is not a clean `<nick>!<server>`. Anything else stays unprettified.
+    if (bang <= 0 || bang != local.lastIndexOf('!')) return null
     val server = local.substring(bang + 1)
     if (server.isEmpty()) return null
     return local.substring(0, bang)
