@@ -8,6 +8,7 @@ import org.jivesoftware.smack.ConnectionConfiguration
 import org.jivesoftware.smack.ConnectionListener
 import org.jivesoftware.smack.MessageListener
 import org.jivesoftware.smack.ReconnectionManager
+import org.jivesoftware.smack.SmackException
 import org.jivesoftware.smack.StanzaListener
 import org.jivesoftware.smack.sm.StreamManagementException
 import org.jivesoftware.smack.XMPPException
@@ -256,7 +257,16 @@ class SmackXmppSession(private val config: XmppAccountConfig) : XmppSession {
             )
 
             try {
-                muc.join(Resourcepart.from(nick))
+                // A gateway (Biboumi/slidge) may have to cold-connect to the far network — IRC
+                // TLS + ident + MOTD before it can even JOIN the channel and reflect our presence
+                // — which routinely exceeds the connection's default ~5s reply timeout. Waiting on
+                // that default silently failed every cold IRC join. Allow a long join window and
+                // ask for a little backlog (harmless for IRC, useful for native MUCs).
+                val enter = muc.getEnterConfigurationBuilder(Resourcepart.from(nick))
+                    .timeoutAfter(GATEWAY_JOIN_TIMEOUT_MS)
+                    .requestMaxStanzasHistory(MUC_JOIN_HISTORY_MAX)
+                    .build()
+                muc.join(enter)
                 channel.trySend(
                     XmppEvent.MucSelfJoined(roomJid, muc.occupants.map { it.resourceOrEmpty.toString() }),
                 )
@@ -265,6 +275,12 @@ class SmackXmppSession(private val config: XmppAccountConfig) : XmppSession {
                 channel.trySend(XmppEvent.MucJoinFailed(roomJid, reason))
             } catch (e: MultiUserChatException) {
                 channel.trySend(XmppEvent.MucJoinFailed(roomJid, e.message ?: "MUC join failed"))
+            } catch (e: SmackException) {
+                // NoResponseException/NotConnectedException are neither of the above and were
+                // previously swallowed by the caller, leaving the room un-joined with no feedback.
+                channel.trySend(
+                    XmppEvent.MucJoinFailed(roomJid, e.message ?: "The room did not respond in time"),
+                )
             }
         }
     }
@@ -425,6 +441,13 @@ class SmackXmppSession(private val config: XmppAccountConfig) : XmppSession {
     private companion object {
         private val LOGGER = Logger.getLogger(SmackXmppSession::class.java.name)
         private const val MAX_LOGGED_STANZA_CHARS = 500
+
+        /** A gateway cold-connecting to a far network (IRC handshake + MOTD) can take tens of
+         *  seconds before it can reflect our MUC self-presence; wait well past that. */
+        private const val GATEWAY_JOIN_TIMEOUT_MS = 60_000L
+
+        /** Modest backlog on join: ignored by IRC (no history), recent context for native MUCs. */
+        private const val MUC_JOIN_HISTORY_MAX = 50
     }
 }
 

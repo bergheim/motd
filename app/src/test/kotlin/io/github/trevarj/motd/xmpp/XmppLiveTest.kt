@@ -292,4 +292,35 @@ class XmppLiveTest {
             )
         }
     }
+
+    /**
+     * Regression for the Biboumi cold-connect join timeout: joining an IRC channel through a
+     * gateway makes the gateway connect to the far IRC network first (TLS + ident + MOTD), which
+     * far exceeds Smack's default ~5s reply timeout — the join used to silently fail. Set
+     * `MOTD_XMPP_LIVE_IRC_ROOM` to a full gateway room JID
+     * (e.g. `#systemcrafters%irc.libera.chat@irc.xmpp.glvortex.net`) to exercise it; skips when
+     * unset so generic CI/servers are unaffected.
+     */
+    @Test
+    fun ircGatewayJoin_completesWithinColdConnectWindow() = runBlocking {
+        val room = env("MOTD_XMPP_LIVE_IRC_ROOM")
+        assumeTrue("Set MOTD_XMPP_LIVE_IRC_ROOM to a gateway room JID to run this.", room != null)
+        withTimeout(90.seconds) {
+            val session = SmackXmppSession(account1!!)
+            try {
+                session.connectAndLogin()
+                assertNotNull(receiveUntil<XmppEvent.Ready>(session.events))
+                session.joinMuc(room!!, account1!!.mucNick)
+                // A cold gateway connect can take tens of seconds; the fix lets join wait for it.
+                val joined = receiveUntil<XmppEvent.MucSelfJoined>(
+                    session.events,
+                    deadline = 75.seconds,
+                ) { it.roomJid == room }
+                assertNotNull("expected MucSelfJoined for the gateway room within the window", joined)
+            } finally {
+                runCatching { session.leaveMuc(room!!) }
+                session.close()
+            }
+        }
+    }
 }
