@@ -208,7 +208,12 @@ internal class XmppAccountActor(
         swallowTransport { session?.leaveMuc(roomJid) }
     }
 
-    /** Channel-browser MUC discovery; no live session (not yet connected/dropped) means no rooms. */
+    /**
+     * Channel-browser MUC discovery; no live session (not yet connected/dropped) means no rooms.
+     * Reads the volatile [session] like every other outbound call (see the concurrency contract in
+     * the class KDoc): a session closed mid-discovery degrades to an empty/failed listing inside
+     * [XmppSession.listRooms]'s own catch-all — never a crash — which is acceptable for a browse.
+     */
     suspend fun listRooms(): List<MucRoomListing> = session?.listRooms() ?: emptyList()
 
     /** Run a best-effort wire write: a dead/closed transport must not crash the caller, but

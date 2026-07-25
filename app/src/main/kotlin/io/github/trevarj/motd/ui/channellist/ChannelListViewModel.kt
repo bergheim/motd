@@ -205,13 +205,23 @@ class ChannelListViewModel @Inject constructor(
         }
         return if (client == null) {
             Result.failure(IllegalStateException("Channel listing is not available yet. Try again."))
-        } else runCatching {
+        } else runCatchingNotCancelled {
             client.listChannels(mask = args.mask, minUsers = args.minUsers, cap = channelListLimit(query))
         }
     }
 
-    private suspend fun fetchXmppRooms(query: String): Result<List<ChannelListing>> = runCatching {
-        filterChannelListings(xmppConnectionSurface.listRooms(networkId).map(::toChannelListing), query)
+    private suspend fun fetchXmppRooms(query: String): Result<List<ChannelListing>> =
+        runCatchingNotCancelled {
+            filterChannelListings(xmppConnectionSurface.listRooms(networkId).map(::toChannelListing), query)
+        }
+
+    /** [runCatching] that never swallows coroutine cancellation into a failed [Result]. */
+    private inline fun <T> runCatchingNotCancelled(block: () -> T): Result<T> = try {
+        Result.success(block())
+    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+        throw cancelled
+    } catch (e: Exception) {
+        Result.failure(e)
     }
 
     /** Send a JOIN and retain its pending state until EventProcessor persists our self-JOIN. */
