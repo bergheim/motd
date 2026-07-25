@@ -111,11 +111,6 @@ data class ChatState(
 )
 
 /**
- * Whether to show the "connecting to IRC" placeholder: an IRC-gateway room ([biboumiRoomDisplayName]
- * recognizes the `%server@gateway` shape) whose buffer exists and is connected at the XMPP layer
- * ([IrcClientState.Ready]) but has not yet received its MUC self-join. Pure for unit testing.
- */
-/**
  * Whether a channel's member list should be treated as complete/authoritative. IRC waits for its
  * NAMES reply (`RosterLoadState.LOADED`); an XMPP MUC has no such handshake — its members arrive as
  * the room's occupant snapshot, so they are authoritative as soon as they exist. Without this,
@@ -124,6 +119,11 @@ data class ChatState(
 internal fun membersAuthoritative(isXmpp: Boolean, rosterState: RosterLoadState?): Boolean =
     isXmpp || rosterState == RosterLoadState.LOADED
 
+/**
+ * Whether to show the "connecting to IRC" placeholder: an IRC-gateway room ([biboumiRoomDisplayName]
+ * recognizes the `%server@gateway` shape) whose buffer exists and is connected at the XMPP layer
+ * ([IrcClientState.Ready]) but has not yet received its MUC self-join. Pure for unit testing.
+ */
 internal fun isConnectingViaGateway(buffer: BufferEntity?, connState: IrcClientState?): Boolean =
     buffer != null &&
         buffer.type == BufferType.CHANNEL &&
@@ -343,12 +343,13 @@ class ChatViewModel @Inject constructor(
         .distinctUntilChanged()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ProtocolCapabilities.IRC)
 
-    /** Whether this chat's network speaks XMPP; gates XMPP-authoritative member handling. */
-    private val isXmppNetwork: StateFlow<Boolean> = buffer
-        .combine(networkDao.observeAll()) { current, networks ->
-            current?.let { b -> networks.firstOrNull { it.id == b.networkId }?.protocol } == Protocol.XMPP
-        }
-        .distinctUntilChanged()
+    /**
+     * Whether this chat's network speaks XMPP; gates XMPP-authoritative member handling. Derived
+     * from [capabilities] rather than re-observing the networks table, so there is one protocol
+     * resolution per chat, not two.
+     */
+    private val isXmppNetwork: StateFlow<Boolean> = capabilities
+        .map { it == ProtocolCapabilities.XMPP }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     private val persistedIdentity = buffer

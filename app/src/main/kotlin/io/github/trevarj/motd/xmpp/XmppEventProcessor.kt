@@ -43,6 +43,17 @@ class XmppEventProcessor @Inject constructor(
     private suspend fun <T> withNetworkLock(networkId: Long, block: suspend () -> T): T =
         locks.getOrPut(networkId) { Mutex() }.withLock { block() }
 
+    /**
+     * Cache of each network's configured nick. Self/mention detection runs on every incoming MUC
+     * message, so reading this from Room per message is a real cost on a busy (bridged) channel. A
+     * nick edit is rare and only affects self/mention rendering until the process restarts — an
+     * accepted v1 tradeoff for avoiding a DB round-trip per message.
+     */
+    private val selfNicks = ConcurrentHashMap<Long, String>()
+
+    private suspend fun selfNick(networkId: Long): String? =
+        selfNicks[networkId] ?: db.networkDao().byId(networkId)?.nick?.also { selfNicks[networkId] = it }
+
     suspend fun process(networkId: Long, event: XmppEvent) {
         // Ready/Disconnected carry no DB write (connection state lives elsewhere) — return before
         // touching the per-network mutex at all rather than acquiring it just to no-op.
@@ -74,7 +85,7 @@ class XmppEventProcessor @Inject constructor(
         originId: String,
     ): TimelineEventId? = withNetworkLock(networkId) {
         if (db.bufferDao().rawById(bufferId) == null) return@withNetworkLock null
-        val nick = db.networkDao().byId(networkId)?.nick.orEmpty()
+        val nick = selfNick(networkId).orEmpty()
         // Echo a "/me …" send as a styled action locally; the wire still carries the literal
         // "/me …" body (the caller sends `text` unchanged) so the gateway/peer converts it.
         val (kind, stored) = actionAware(text)
@@ -188,7 +199,7 @@ class XmppEventProcessor @Inject constructor(
     private suspend fun handleMucMessage(networkId: Long, event: XmppEvent.MucMessage) {
         val roomJid = normalizeJid(event.roomJid)
         val bufferId = ensureMucBufferLocked(networkId, roomJid)
-        val ourNick = db.networkDao().byId(networkId)?.nick
+        val ourNick = selfNick(networkId)
         val isOwnNick = ourNick != null && event.occupantNick == ourNick
         val stanzaId = event.stanzaId
         if (isOwnNick && stanzaId != null) {

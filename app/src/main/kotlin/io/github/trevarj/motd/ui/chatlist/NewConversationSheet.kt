@@ -348,19 +348,19 @@ internal fun isValidGatewayJoinInput(server: String, channel: String, gateway: S
     isValidGatewayComponent(server) && isValidGatewayComponent(channel) && isValidGatewayComponent(gateway)
 
 /**
- * Join target for [net]: IRC keeps the `#`-prefix convention via [channelJoinTarget]; XMPP MUC
- * rooms are addressed by a bare room JID. A full room JID (contains `@`) is used as-is; a bare
- * room name expands to the account's conventional conference service —
- * `name@conference.<account domain>` — so joining "motd" on `user@example.net` targets
- * `motd@conference.example.net` without the user typing the service host.
- */
-/**
  * Picker label with an explicit protocol tag, so "which of these speaks IRC vs XMPP" never has
  * to be guessed from the network name alone.
  */
 internal fun networkPickerLabel(net: NetworkEntity): String =
     "${net.name} · ${if (net.protocol == Protocol.XMPP) "XMPP" else "IRC"}"
 
+/**
+ * Join target for [net]: IRC keeps the `#`-prefix convention via [channelJoinTarget]; XMPP MUC
+ * rooms are addressed by a bare room JID. A full room JID (contains `@`) is used as-is; a bare
+ * room name expands to the account's conventional conference service —
+ * `name@conference.<account domain>` — so joining "motd" on `user@example.net` targets
+ * `motd@conference.example.net` without the user typing the service host.
+ */
 internal fun joinTarget(net: NetworkEntity, value: String): String {
     if (net.protocol != Protocol.XMPP) return channelJoinTarget(value)
     // JIDs are case-normalized to lowercase everywhere in the XMPP pipeline, so both branches
