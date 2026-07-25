@@ -17,7 +17,9 @@ import io.github.trevarj.motd.ui.onboarding.AuthForm
 import io.github.trevarj.motd.ui.onboarding.AuthMode
 import io.github.trevarj.motd.ui.onboarding.ConnectionChoice
 import io.github.trevarj.motd.ui.onboarding.ServerForm
+import io.github.trevarj.motd.ui.settings.XmppForm
 import io.github.trevarj.motd.ui.settings.buildNetworkEntity
+import io.github.trevarj.motd.ui.settings.buildXmppNetworkEntity
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -36,6 +38,7 @@ data class AddNetworkUiState(
     val auth: AuthForm = AuthForm(),
     val sojuLogin: SojuLoginForm = SojuLoginForm(),
     val zncLogin: ZncLoginForm = ZncLoginForm(),
+    val xmppForm: XmppForm = XmppForm(),
     val phase: AddNetworkPhase = AddNetworkPhase.FORM,
     val networkId: Long? = null,          // created row during the connect test
     val provisionalCreated: Boolean = false,
@@ -46,6 +49,7 @@ data class AddNetworkUiState(
     val plaintextConfirmed: Boolean = false,
 ) {
     val isBouncer: Boolean get() = kind == ConnectionChoice.BOUNCER
+    val isXmpp: Boolean get() = kind == ConnectionChoice.XMPP
     val isSoju: Boolean get() = isBouncer && bouncerKind == BouncerKind.SOJU
     val isZnc: Boolean get() = isBouncer && bouncerKind == BouncerKind.ZNC
     val role: NetworkRole get() = if (isSoju) NetworkRole.BOUNCER_ROOT else NetworkRole.DIRECT
@@ -56,10 +60,11 @@ data class AddNetworkUiState(
             else -> auth
         }
     val canSubmit: Boolean
-        get() = phase == AddNetworkPhase.FORM && server.isValid && when {
-            isSoju -> sojuLogin.isValid
-            isZnc -> zncLogin.isValid
-            else -> auth.isValid
+        get() = phase == AddNetworkPhase.FORM && when {
+            isXmpp -> xmppForm.isValid
+            isSoju -> server.isValid && sojuLogin.isValid
+            isZnc -> server.isValid && zncLogin.isValid
+            else -> server.isValid && auth.isValid
         }
 }
 
@@ -139,11 +144,15 @@ class AddNetworkViewModel @Inject constructor(
 
     fun editSojuLogin(login: SojuLoginForm) { _state.value = _state.value.copy(sojuLogin = login) }
     fun editZncLogin(login: ZncLoginForm) { _state.value = _state.value.copy(zncLogin = login) }
+    fun editXmppForm(form: XmppForm) { _state.value = _state.value.copy(xmppForm = form) }
 
     /** Create the row, connect, and observe its live state. */
     fun submit(onOpenBouncerNetworks: (Long) -> Unit, onDone: () -> Unit) {
         if (!_state.value.canSubmit) return
-        if (!_state.value.server.tls && !_state.value.plaintextConfirmed) {
+        // The plaintext confirmation gate only applies to the IRC direct/bouncer TLS switch; XMPP's
+        // STARTTLS default negotiates encryption in-band rather than connecting bare, so it has no
+        // equivalent warning here.
+        if (!_state.value.isXmpp && !_state.value.server.tls && !_state.value.plaintextConfirmed) {
             _state.value = _state.value.copy(showPlaintextWarning = true)
             return
         }
@@ -158,15 +167,19 @@ class AddNetworkViewModel @Inject constructor(
             } else {
                 s.server
             }
-            val entity = buildNetworkEntity(
-                server = server,
-                auth = s.activeAuth,
-                role = s.role,
-                name = when {
-                    s.isZnc -> s.zncLogin.network.trim()
-                    else -> networkPreset(s.presetId)?.displayName ?: s.server.host
-                },
-            )
+            val entity = if (s.isXmpp) {
+                buildXmppNetworkEntity(s.xmppForm)
+            } else {
+                buildNetworkEntity(
+                    server = server,
+                    auth = s.activeAuth,
+                    role = s.role,
+                    name = when {
+                        s.isZnc -> s.zncLogin.network.trim()
+                        else -> networkPreset(s.presetId)?.displayName ?: s.server.host
+                    },
+                )
+            }
             val existingNetworkIds = networkRepository.observeNetworks().first().mapTo(mutableSetOf()) { it.id }
             val networkId = networkRepository.addNetwork(entity)
             if (networkId !in existingNetworkIds && s.presetId == NetworkPresetId.LIBERA) {

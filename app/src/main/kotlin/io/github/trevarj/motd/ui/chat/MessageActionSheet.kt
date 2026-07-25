@@ -76,6 +76,10 @@ fun MessageActionSheet(
     onQuote: () -> Unit,
     // SERVER buffers have no msgids/targets: reply + reactions are inert and hidden (plans/16 §5.6).
     isServerBuffer: Boolean = false,
+    // Protocol capability gates (Task 9): XMPP buffers hide both affordances independently of
+    // isServerBuffer, which stays IRC-only.
+    reactionsEnabled: Boolean = true,
+    repliesEnabled: Boolean = true,
 ) {
     var showGrid by remember { mutableStateOf(false) }
     ModalBottomSheet(
@@ -85,7 +89,7 @@ fun MessageActionSheet(
         modifier = Modifier.testTag("message_action_sheet"),
     ) {
         Column(modifier = Modifier.padding(bottom = 24.dp)) {
-            if (!isServerBuffer) {
+            if (!isServerBuffer && reactionsEnabled) {
             // Quick reactions + "more".
             Row(
                 modifier = Modifier
@@ -152,8 +156,11 @@ fun MessageActionSheet(
                 }
             }
 
-            ActionItem(Icons.AutoMirrored.Filled.Reply, stringResource(R.string.chat_action_reply), onReply)
-            } // end !isServerBuffer (reactions + reply hidden for SERVER buffers)
+            } // end !isServerBuffer && reactionsEnabled
+
+            if (!isServerBuffer && repliesEnabled) {
+                ActionItem(Icons.AutoMirrored.Filled.Reply, stringResource(R.string.chat_action_reply), onReply)
+            }
             ActionItem(Icons.Filled.ContentCopy, stringResource(R.string.chat_action_copy), onCopy)
             ActionItem(Icons.Filled.FormatQuote, stringResource(R.string.chat_action_quote), onQuote)
         }

@@ -3,6 +3,7 @@ package io.github.trevarj.motd.ui.channellist
 import io.github.trevarj.motd.irc.client.ChannelListing
 import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
+import io.github.trevarj.motd.xmpp.MucRoomListing
 
 /** Server-side user-count floor when the network advertises ELIST 'U'. */
 const val DEFAULT_MIN_USERS = 50
@@ -68,6 +69,24 @@ fun listArgsFor(query: String): ListArgs =
 /** Popular browsing is deliberately compact; explicit searches may return a larger result set. */
 fun channelListLimit(query: String): Int =
     if (query.isBlank()) POPULAR_CHANNEL_LIMIT else CHANNEL_SEARCH_LIMIT
+
+/**
+ * MUC discovery has no server-side mask/floor equivalent to IRC's LIST/ELIST, so a room's JID
+ * becomes the browser [ChannelListing.name] and its optional disco#items name becomes the topic
+ * line; [ChannelListing.userCount] has no XMPP counterpart and is always 0 (sortListings is then a
+ * no-op stable pass-through, preserving discovery order).
+ */
+fun toChannelListing(listing: MucRoomListing): ChannelListing =
+    ChannelListing(name = listing.roomJid, userCount = 0, topic = listing.name.orEmpty())
+
+/** MUC discovery returns every room up front; a non-blank query filters client-side by substring
+ *  against both the room JID and its disco#items name, mirroring IRC's mask-based LIST filtering. */
+fun filterChannelListings(listings: List<ChannelListing>, query: String): List<ChannelListing> =
+    if (query.isBlank()) {
+        listings
+    } else {
+        listings.filter { it.name.contains(query, ignoreCase = true) || it.topic.contains(query, ignoreCase = true) }
+    }
 
 enum class ChannelJoinStatus { JOIN, JOINING, JOINED }
 

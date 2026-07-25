@@ -200,6 +200,10 @@ interface BufferDao {
     @Query("SELECT id FROM buffers WHERE networkId = :networkId AND type = 'CHANNEL' AND pendingCloseAt IS NULL")
     suspend fun channelIds(networkId: Long): List<Long>
 
+    /** Joined MUC rooms for XMPP reconnect rejoin: full rows so the actor can read the room JID. */
+    @Query("SELECT * FROM buffers WHERE networkId = :networkId AND type = 'CHANNEL' AND joined = 1")
+    suspend fun joinedChannels(networkId: Long): List<BufferEntity>
+
     @Query("SELECT displayName FROM buffers WHERE networkId = :networkId AND type = 'CHANNEL' AND joined = 1 AND pendingCloseAt IS NULL ORDER BY id")
     suspend fun joinedChannelNames(networkId: Long): List<String>
 
@@ -615,6 +619,12 @@ interface MessageDao {
 
     @Query("SELECT * FROM messages WHERE bufferId = :bufferId AND pendingLabel = :label")
     suspend fun byPendingLabel(bufferId: Long, label: String): MessageEntity?
+
+    /** Every still-pending row in a buffer, regardless of label — used by XmppEventProcessor's
+     * network-wide failAllPending (XMPP pending rows already carry a non-null msgid, so the IRC
+     * msgid-IS-NULL pending queries above don't apply to them). */
+    @Query("SELECT * FROM messages WHERE bufferId = :bufferId AND pendingLabel IS NOT NULL")
+    suspend fun pendingInBuffer(bufferId: Long): List<MessageEntity>
 
     @Query("SELECT * FROM messages WHERE id IN (:eventIds) ORDER BY id")
     suspend fun byIds(eventIds: List<TimelineEventId>): List<MessageEntity>

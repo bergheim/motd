@@ -5,6 +5,7 @@ import io.github.trevarj.motd.bouncer.SojuLoginForm
 import io.github.trevarj.motd.bouncer.ZncLoginForm
 import io.github.trevarj.motd.data.db.NetworkRole
 import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.ui.settings.XmppForm
 import io.github.trevarj.motd.ui.settings.addnetwork.NetworkPresetId
 import io.github.trevarj.motd.ui.settings.addnetwork.applyNetworkPreset
 import io.github.trevarj.motd.ui.settings.addnetwork.networkPreset
@@ -20,6 +21,8 @@ import io.github.trevarj.motd.ui.settings.addnetwork.networkPreset
 enum class OnboardingStep {
     WELCOME,
     CHOICE,
+    // Reached only when ConnectionChoice.XMPP is selected; replaces SERVER+AUTH for that path.
+    XMPP,
     SERVER,
     AUTH,
     CONNECT,
@@ -27,7 +30,7 @@ enum class OnboardingStep {
 }
 
 /** Top-level path chosen on the CHOICE page. */
-enum class ConnectionChoice { BOUNCER, NETWORK }
+enum class ConnectionChoice { BOUNCER, NETWORK, XMPP }
 
 /** Auth mechanism selected on the AUTH page. Mirrors SaslMechanism names for persistence. */
 enum class AuthMode { NONE, PLAIN, EXTERNAL }
@@ -117,6 +120,7 @@ data class OnboardingState(
     val plaintextConfirmed: Boolean = false,
     val sojuLogin: SojuLoginForm = SojuLoginForm(),
     val zncLogin: ZncLoginForm = ZncLoginForm(),
+    val xmppForm: XmppForm = XmppForm(),
     // Connect-test progress.
     val networkId: Long? = null,
     val connState: IrcClientState? = null,
@@ -128,6 +132,7 @@ data class OnboardingState(
     val isBouncer: Boolean get() = choice == ConnectionChoice.BOUNCER
     val isSoju: Boolean get() = isBouncer && bouncerKind == BouncerKind.SOJU
     val isZnc: Boolean get() = isBouncer && bouncerKind == BouncerKind.ZNC
+    val isXmpp: Boolean get() = choice == ConnectionChoice.XMPP
 
     /** Network role implied by the choice (soju root vs. direct network). */
     val role: NetworkRole
@@ -148,6 +153,7 @@ data class OnboardingState(
         get() = when (step) {
             OnboardingStep.WELCOME -> true
             OnboardingStep.CHOICE -> choice != null
+            OnboardingStep.XMPP -> xmppForm.isValid
             // Every path collects host/port/nick; the active login form gates AUTH.
             OnboardingStep.SERVER -> server.isValid
             OnboardingStep.AUTH -> when {
@@ -177,6 +183,7 @@ sealed interface OnboardingAction {
     data class EditAuth(val auth: AuthForm) : OnboardingAction
     data class EditSojuLogin(val login: SojuLoginForm) : OnboardingAction
     data class EditZncLogin(val login: ZncLoginForm) : OnboardingAction
+    data class EditXmppForm(val form: XmppForm) : OnboardingAction
 
     // Connect-test lifecycle (folded back from ViewModel side effects).
     data class NetworkCreated(val networkId: Long) : OnboardingAction
@@ -187,26 +194,39 @@ sealed interface OnboardingAction {
     data class Error(val message: String?) : OnboardingAction
 }
 
-/** Steps in order; used for Next/Back traversal. */
-private val STEP_ORDER = OnboardingStep.entries
-
-private fun nextStep(step: OnboardingStep): OnboardingStep {
-    val idx = STEP_ORDER.indexOf(step)
-    return STEP_ORDER.getOrElse(idx + 1) { step }
+/**
+ * Next/Back traversal branches on [OnboardingState.choice]: the XMPP path replaces SERVER+AUTH
+ * with a single XMPP step, so these can't be simple index-in-enum lookups.
+ */
+private fun nextStep(state: OnboardingState): OnboardingStep = when (state.step) {
+    OnboardingStep.WELCOME -> OnboardingStep.CHOICE
+    OnboardingStep.CHOICE ->
+        if (state.choice == ConnectionChoice.XMPP) OnboardingStep.XMPP else OnboardingStep.SERVER
+    OnboardingStep.XMPP -> OnboardingStep.CONNECT
+    OnboardingStep.SERVER -> OnboardingStep.AUTH
+    OnboardingStep.AUTH -> OnboardingStep.CONNECT
+    OnboardingStep.CONNECT -> OnboardingStep.FINISH
+    OnboardingStep.FINISH -> OnboardingStep.FINISH
 }
 
-private fun prevStep(step: OnboardingStep): OnboardingStep {
-    val idx = STEP_ORDER.indexOf(step)
-    return STEP_ORDER.getOrElse(idx - 1) { step }
+private fun prevStep(state: OnboardingState): OnboardingStep = when (state.step) {
+    OnboardingStep.WELCOME -> OnboardingStep.WELCOME
+    OnboardingStep.CHOICE -> OnboardingStep.WELCOME
+    OnboardingStep.XMPP -> OnboardingStep.CHOICE
+    OnboardingStep.SERVER -> OnboardingStep.CHOICE
+    OnboardingStep.AUTH -> OnboardingStep.SERVER
+    OnboardingStep.CONNECT ->
+        if (state.choice == ConnectionChoice.XMPP) OnboardingStep.XMPP else OnboardingStep.AUTH
+    OnboardingStep.FINISH -> OnboardingStep.CONNECT
 }
 
 /** Pure reducer: (state, action) -> state. */
 fun onboardingReducer(state: OnboardingState, action: OnboardingAction): OnboardingState =
     when (action) {
         is OnboardingAction.Next ->
-            if (state.canAdvance) state.copy(step = nextStep(state.step)) else state
+            if (state.canAdvance) state.copy(step = nextStep(state)) else state
 
-        is OnboardingAction.Back -> state.copy(step = prevStep(state.step))
+        is OnboardingAction.Back -> state.copy(step = prevStep(state))
 
         is OnboardingAction.GoTo -> state.copy(step = action.step)
 
@@ -276,6 +296,8 @@ fun onboardingReducer(state: OnboardingState, action: OnboardingAction): Onboard
         is OnboardingAction.EditSojuLogin -> state.copy(sojuLogin = action.login)
 
         is OnboardingAction.EditZncLogin -> state.copy(zncLogin = action.login)
+
+        is OnboardingAction.EditXmppForm -> state.copy(xmppForm = action.form)
 
         is OnboardingAction.NetworkCreated -> state.copy(networkId = action.networkId)
 

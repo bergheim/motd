@@ -19,6 +19,9 @@ enum class NetworkRole { DIRECT, BOUNCER_ROOT, BOUNCER_CHILD }
  * loopback SOCKS5 endpoint to the transport.
  */
 enum class ObfsMode { NONE, SOCKS5, TOR, EMBEDDED_REALITY }
+
+/** Chat protocol of a network/account row. IRC is the pre-v16 implicit default. */
+enum class Protocol { IRC, XMPP }
 enum class BufferType { CHANNEL, QUERY, SERVER }
 typealias RoomId = Long
 typealias TimelineEventId = Long
@@ -32,7 +35,7 @@ data class TimelineAnchor(
 }
 
 enum class RoomAliasNamespace { CHANNEL, ACCOUNT, VERIFIED_NICK, PROVISIONAL_NICK, LEGACY_NAME }
-enum class EventAliasNamespace { MSGID, LABEL, EXACT_FINGERPRINT, BATCH_POSITION, TYPED_EVENT }
+enum class EventAliasNamespace { MSGID, LABEL, EXACT_FINGERPRINT, BATCH_POSITION, TYPED_EVENT, XMPP_MSGID }
 enum class ObservationOrigin { LIVE, PUSH, HISTORY, LOCAL_SEND }
 enum class TimeProvenance { SERVER_TAG, LOCAL_CLOCK }
 enum class MessageKind {
@@ -47,6 +50,7 @@ enum class InviteState { PENDING, JOINING, JOINED, DISMISSED, FAILED, HISTORICAL
 data class NetworkEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
+    val protocol: Protocol = Protocol.IRC,
     val role: NetworkRole,
     val parentId: Long? = null,          // BOUNCER_CHILD -> its BOUNCER_ROOT row
     val bouncerNetId: String? = null,
@@ -71,6 +75,8 @@ data class NetworkEntity(
     val proxyPort: Int? = null,
     /** Pasted VLESS+REALITY link. It contains credentials, so [toString] must never expose it. */
     val obfsLink: String? = null,
+    /** Bare JID for XMPP rows (user@domain); null for IRC rows. */
+    val jid: String? = null,
 ) {
     // Redact secrets (saslPassword, serverPassword, obfsLink) from logs; proxyHost/port are
     // non-sensitive so keep them out

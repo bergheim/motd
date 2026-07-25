@@ -52,6 +52,8 @@ import io.github.trevarj.motd.ui.settings.NetworkForm
 import io.github.trevarj.motd.ui.settings.RadioRow
 import io.github.trevarj.motd.ui.settings.SettingsGroup
 import io.github.trevarj.motd.ui.settings.SubLabel
+import io.github.trevarj.motd.ui.settings.XmppAccountForm
+import io.github.trevarj.motd.ui.settings.XmppForm
 import io.github.trevarj.motd.ui.theme.MotdTheme
 
 /** Stateful entry: wires the ViewModel and drives navigation (plans/16 §5.4). */
@@ -72,6 +74,7 @@ fun AddNetworkScreen(
         onAuthChange = viewModel::editAuth,
         onSojuLoginChange = viewModel::editSojuLogin,
         onZncLoginChange = viewModel::editZncLogin,
+        onXmppFormChange = viewModel::editXmppForm,
         onSubmit = { viewModel.submit(onOpenBouncerNetworks, onBack) },
         onRetry = { viewModel.retry(onOpenBouncerNetworks, onBack) },
         onSaveAnyway = { viewModel.saveAnyway(onBack) },
@@ -94,6 +97,7 @@ fun AddNetworkContent(
     onAuthChange: (AuthForm) -> Unit,
     onSojuLoginChange: (SojuLoginForm) -> Unit,
     onZncLoginChange: (ZncLoginForm) -> Unit,
+    onXmppFormChange: (XmppForm) -> Unit,
     onSubmit: () -> Unit,
     onRetry: () -> Unit,
     onSaveAnyway: () -> Unit,
@@ -138,12 +142,12 @@ fun AddNetworkContent(
                         )
                     }
                 }
-                if (!state.isBouncer && state.phase == AddNetworkPhase.FORM) {
+                if (!state.isBouncer && !state.isXmpp && state.phase == AddNetworkPhase.FORM) {
                     NetworkPresetPicker(selected = state.presetId, onSelect = onSelectPreset)
                 }
                 SettingsGroup(title = stringResource(R.string.add_network_details_section)) {
-                    if (state.isBouncer) {
-                        Column(Modifier.padding(16.dp)) {
+                    when {
+                        state.isBouncer -> Column(Modifier.padding(16.dp)) {
                             BouncerLoginFields(
                                 kind = state.bouncerKind,
                                 server = state.server,
@@ -154,8 +158,12 @@ fun AddNetworkContent(
                                 onZncLoginChange = onZncLoginChange,
                             )
                         }
-                    } else {
-                        NetworkForm(
+                        state.isXmpp -> XmppAccountForm(
+                            form = state.xmppForm,
+                            onFormChange = onXmppFormChange,
+                            modifier = Modifier.padding(vertical = 16.dp),
+                        )
+                        else -> NetworkForm(
                             server = state.server,
                             auth = state.auth,
                             onServerChange = onServerChange,
@@ -253,6 +261,7 @@ private fun KindSelector(
     val options = listOf(
         ConnectionChoice.NETWORK to R.string.add_network_kind_network,
         ConnectionChoice.BOUNCER to R.string.add_network_kind_bouncer,
+        ConnectionChoice.XMPP to R.string.add_network_kind_xmpp,
     )
     SingleChoiceSegmentedButtonRow(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
@@ -354,7 +363,7 @@ private fun AddNetworkFormPreview() {
                 server = ServerForm(host = "irc.libera.chat", port = "6697", nick = "me"),
             ),
             onBack = {}, onSetKind = {}, onSetBouncerKind = {}, onSelectPreset = {},
-            onServerChange = {}, onAuthChange = {}, onSojuLoginChange = {}, onZncLoginChange = {},
+            onServerChange = {}, onAuthChange = {}, onSojuLoginChange = {}, onZncLoginChange = {}, onXmppFormChange = {},
             onSubmit = {}, onRetry = {}, onSaveAnyway = {}, onEditForm = {}, onAbandon = {},
             onConfirmPlaintext = {}, onDismissPlaintext = {},
         )
@@ -372,7 +381,7 @@ private fun AddNetworkFailedPreview() {
                 error = "SASL authentication failed",
             ),
             onBack = {}, onSetKind = {}, onSetBouncerKind = {}, onSelectPreset = {},
-            onServerChange = {}, onAuthChange = {}, onSojuLoginChange = {}, onZncLoginChange = {},
+            onServerChange = {}, onAuthChange = {}, onSojuLoginChange = {}, onZncLoginChange = {}, onXmppFormChange = {},
             onSubmit = {}, onRetry = {}, onSaveAnyway = {}, onEditForm = {}, onAbandon = {},
             onConfirmPlaintext = {}, onDismissPlaintext = {},
         )

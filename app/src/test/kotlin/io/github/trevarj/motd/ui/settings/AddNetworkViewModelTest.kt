@@ -6,6 +6,7 @@ import io.github.trevarj.motd.bouncer.ZncLoginForm
 import io.github.trevarj.motd.data.prefs.BouncerKindPrefs
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
+import io.github.trevarj.motd.data.db.Protocol
 import io.github.trevarj.motd.data.repo.NetworkRepository
 import io.github.trevarj.motd.data.prefs.PresetEnrollmentPrefs
 import io.github.trevarj.motd.irc.client.IrcClient
@@ -378,5 +379,71 @@ class AddNetworkViewModelTest {
 
         assertEquals(setOf(id), prefs.revoked)
         assertTrue(prefs.eligible.isEmpty())
+    }
+
+    // -- XMPP (xmpp-support Task 8) --------------------------------------------------------------
+
+    @Test
+    fun xmppForm_jidValidation() {
+        assertFalse(XmppForm(jid = "nodomain").jidValid)
+        assertTrue(XmppForm(jid = "a@b.c").jidValid)
+    }
+
+    @Test
+    fun buildXmppNetworkEntity_defaults_toStartTls5222() {
+        val e = buildXmppNetworkEntity(XmppForm(jid = "A@B.net", password = "p"))
+        assertEquals(Protocol.XMPP, e.protocol)
+        assertEquals("a@b.net", e.jid)
+        assertFalse(e.tls)
+        assertEquals(5222, e.port)
+        assertEquals("b.net", e.host)
+        assertEquals("a", e.nick)
+    }
+
+    @Test
+    fun buildXmppNetworkEntity_directTls_defaults5223() {
+        val e = buildXmppNetworkEntity(XmppForm(jid = "a@b.net", password = "p", directTls = true, port = ""))
+        assertTrue(e.tls)
+        assertEquals(5223, e.port)
+    }
+
+    @Test
+    fun submitXmpp_insertsRow_andConnects() = runTest {
+        val repo = FakeNetworkRepository()
+        val cm = FakeConnectionManager()
+        val vm = vm(repo, cm)
+        var done = false
+        vm.setKind(ConnectionChoice.XMPP)
+        vm.editXmppForm(XmppForm(jid = "user@example.org", password = "secret"))
+        assertTrue(vm.state.value.canSubmit)
+
+        vm.submit(
+            onOpenBouncerNetworks = { error("XMPP must not open the soju bouncer manager") },
+            onDone = { done = true },
+        )
+        runCurrent()
+        val id = vm.state.value.networkId!!
+        val row = repo.networks.getValue(id)
+        assertEquals(Protocol.XMPP, row.protocol)
+        assertEquals("user@example.org", row.jid)
+        assertEquals(NetworkRole.DIRECT, row.role)
+        assertTrue(id in cm.connected)
+
+        cm.emit(id, IrcClientState.Ready("user", emptySet(), emptyMap()))
+        runCurrent()
+        assertTrue(done)
+        assertTrue(repo.networks.containsKey(id))   // row kept on success
+    }
+
+    @Test
+    fun xmpp_missing_password_or_jid_is_not_submittable() = runTest {
+        val vm = vm(FakeNetworkRepository(), FakeConnectionManager())
+        vm.setKind(ConnectionChoice.XMPP)
+        // Missing password.
+        vm.editXmppForm(XmppForm(jid = "user@example.org"))
+        assertFalse(vm.state.value.canSubmit)
+        // Password present but JID missing a domain.
+        vm.editXmppForm(XmppForm(jid = "user", password = "secret"))
+        assertFalse(vm.state.value.canSubmit)
     }
 }

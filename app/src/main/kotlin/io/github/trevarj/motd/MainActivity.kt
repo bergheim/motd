@@ -30,6 +30,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.rememberNavController
 import dagger.hilt.android.AndroidEntryPoint
 import io.github.trevarj.motd.data.db.MotdDatabase
+import io.github.trevarj.motd.data.db.Protocol
 import io.github.trevarj.motd.data.prefs.Settings
 import io.github.trevarj.motd.data.prefs.SettingsRepository
 import io.github.trevarj.motd.data.prefs.AppearanceConfig
@@ -217,8 +218,12 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             val persistent =
                 settingsRepository.settings.first().deliveryMode == DeliveryMode.PERSISTENT_SOCKET
-            val hasNetworks = db.networkDao().connectable().isNotEmpty()
-            if (ConnectionManagerImpl.shouldRunService(persistent, hasNetworks)) {
+            val networks = db.networkDao().connectable()
+            val hasNetworks = networks.isNotEmpty()
+            // XMPP accounts always use the persistent socket (no XMPP push in v1), matching
+            // BootReceiver.shouldStartOnBoot.
+            val hasXmpp = networks.any { it.protocol == Protocol.XMPP }
+            if (ConnectionManagerImpl.shouldRunService(persistent, hasNetworks) || hasXmpp) {
                 ContextCompat.startForegroundService(
                     this@MainActivity,
                     Intent(this@MainActivity, IrcForegroundService::class.java),

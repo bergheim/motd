@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.CircularProgressIndicator
@@ -125,6 +126,10 @@ private const val AUTOCOMPLETE_SHOW_DEBOUNCE_MS = 250L
 private const val REACTION_PREFETCH_ROWS = 12
 private const val MAX_VISIBLE_REACTION_MSGIDS = 80
 private const val MAX_UNREAD_BADGE_COUNT = 100
+
+/** Reactions capability off (Task 9): no chips render regardless of stored reaction rows. */
+private val EMPTY_REACTION_CHIPS: (String) -> List<io.github.trevarj.motd.ui.components.ReactionChip> =
+    { emptyList() }
 
 internal class ChatForegroundLifecycleGate(
     private val onResume: () -> Unit,
@@ -612,6 +617,7 @@ fun ChatContent(
                 event.limit,
             )
             is ChatUiEvent.ReplyJumpUnavailable -> jumpNotLoaded
+            ChatUiEvent.CommandUnsupported -> stringResource(R.string.chat_command_unsupported)
         }
     }
     val retryLabel = stringResource(R.string.chat_retry)
@@ -1187,7 +1193,9 @@ fun ChatContent(
                         networkId = state.buffer?.networkId,
                         // Frozen read-marker so the "New messages" divider stays put (plans/15 #2).
                         readMarkerTime = readMarkerSnapshot,
-                        reactionChips = reactionChips,
+                        // XMPP has no shared-reaction wire mechanism yet (Task 9): hide any chips
+                        // rather than rely solely on the VM blocking a tap.
+                        reactionChips = if (state.capabilities.reactions) reactionChips else EMPTY_REACTION_CHIPS,
                         replyPreview = replyPreview,
                         onReplyPreviewClick = onReplyPreviewClick,
                         onLongPress = { sheetTarget = it },
@@ -1240,22 +1248,34 @@ fun ChatContent(
                             }
                         },
                         onSenderClick = onSenderClick,
+                        repliesEnabled = state.capabilities.replies,
                     )
                     }
                     }
 
                     // Paging begins with a transient empty refresh before Room delivers its first
-                    // page. Only show the empty state once APPEND proves the buffer is terminally
-                    // empty; otherwise the large placeholder flashes during every chat entry.
+                    // page. Only show a full-screen placeholder once APPEND proves the buffer is
+                    // terminally empty; otherwise it flashes during every chat entry (including a
+                    // gateway room that already has history but is briefly re-loading).
                     if (items.loadState.refresh is LoadState.NotLoading &&
                         initialPagingPage(items.itemCount, items.loadState.append) ==
                         InitialPagingPage.TerminalEmpty
                     ) {
-                        io.github.trevarj.motd.ui.components.EmptyState(
-                            icon = Icons.Outlined.Forum,
-                            title = stringResource(R.string.chat_empty_title),
-                            message = stringResource(R.string.chat_empty_message),
-                        )
+                        if (state.connectingViaGateway) {
+                            // IRC-gateway channel: empty because the gateway is still cold-connecting
+                            // to IRC (tens of seconds), not because the conversation is empty.
+                            io.github.trevarj.motd.ui.components.EmptyState(
+                                icon = Icons.Outlined.Sync,
+                                title = stringResource(R.string.chat_connecting_irc_title),
+                                message = stringResource(R.string.chat_connecting_irc_message),
+                            )
+                        } else {
+                            io.github.trevarj.motd.ui.components.EmptyState(
+                                icon = Icons.Outlined.Forum,
+                                title = stringResource(R.string.chat_empty_title),
+                                message = stringResource(R.string.chat_empty_message),
+                            )
+                        }
                     }
 
                     // Keep the hot firstVisibleItemIndex read inside the FAB subtree. Reading it in
@@ -1271,8 +1291,18 @@ fun ChatContent(
                     )
                 }
 
-                val completions = remember(composerText, memberNicks, recentSpeakers) {
-                    autocompleteFor(composerText, memberNicks, recentSpeakers, nickNormalizer)
+                val completions = remember(composerText, memberNicks, recentSpeakers, state.capabilities) {
+                    autocompleteFor(
+                        composerText,
+                        memberNicks,
+                        recentSpeakers,
+                        nickNormalizer,
+                        commandHints = if (state.capabilities.slashCommands) {
+                            COMMAND_HINTS
+                        } else {
+                            XMPP_COMMAND_HINTS
+                        },
+                    )
                 }
                 val needsMemberCompletion = remember(composerText) {
                     composerNeedsMemberNicks(composerText)
@@ -1436,6 +1466,8 @@ fun ChatContent(
                 } == true
                 ready != null && canSendReactionTags(ready.caps, ready.isupport, remove = mine)
             },
+            reactionsEnabled = state.capabilities.reactions,
+            repliesEnabled = state.capabilities.replies,
             onCopy = {
                 hideThen {
                     scope.launch {

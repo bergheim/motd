@@ -30,7 +30,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         UserEntity::class,
         MemberEntity::class,
     ],
-    version = 16,
+    version = 17,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -541,6 +541,14 @@ val MIGRATION_14_15 = object : Migration(14, 15) {
 val MIGRATION_15_16 = object : Migration(15, 16) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL("ALTER TABLE buffers ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+/** v16 -> v17: additive protocol discriminator + bare JID on networks; existing rows stay IRC. */
+val MIGRATION_16_17 = object : Migration(16, 17) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE networks ADD COLUMN protocol TEXT NOT NULL DEFAULT 'IRC'")
+        db.execSQL("ALTER TABLE networks ADD COLUMN jid TEXT")
     }
 }
 

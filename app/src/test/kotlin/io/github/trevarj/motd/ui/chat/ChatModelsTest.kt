@@ -582,4 +582,42 @@ class ChatModelsTest {
         assertTrue(gate.update(ready, nextGeneration))
         assertFalse(gate.update(ready, nextGeneration))
     }
+
+    private fun buffer(name: String, type: BufferType, joined: Boolean) =
+        io.github.trevarj.motd.data.db.RoomEntity(
+            networkId = 1,
+            name = name,
+            displayName = name,
+            type = type,
+            joined = joined,
+        )
+
+    private val ready = IrcClientState.Ready(nick = "me", caps = emptySet(), isupport = emptyMap())
+
+    @Test
+    fun membersAuthoritative_xmppAlways_ircOnlyWhenLoaded() {
+        // XMPP MUC members are authoritative as soon as present (no NAMES handshake).
+        assertTrue(membersAuthoritative(isXmpp = true, rosterState = null))
+        assertTrue(membersAuthoritative(isXmpp = true, rosterState = io.github.trevarj.motd.service.RosterLoadState.LOADING))
+        // IRC waits for its NAMES reply.
+        assertFalse(membersAuthoritative(isXmpp = false, rosterState = null))
+        assertFalse(membersAuthoritative(isXmpp = false, rosterState = io.github.trevarj.motd.service.RosterLoadState.LOADING))
+        assertTrue(membersAuthoritative(isXmpp = false, rosterState = io.github.trevarj.motd.service.RosterLoadState.LOADED))
+    }
+
+    @Test
+    fun connectingViaGateway_onlyForUnjoinedGatewayChannelWhileReady() {
+        val gatewayRoom = "#systemcrafters%irc.libera.chat@irc.xmpp.glvortex.net"
+        // Unjoined gateway channel while connected -> connecting.
+        assertTrue(isConnectingViaGateway(buffer(gatewayRoom, BufferType.CHANNEL, joined = false), ready))
+        // Already joined -> not connecting (real content will show).
+        assertFalse(isConnectingViaGateway(buffer(gatewayRoom, BufferType.CHANNEL, joined = true), ready))
+        // Not connected yet at the XMPP layer -> not the gateway placeholder.
+        assertFalse(isConnectingViaGateway(buffer(gatewayRoom, BufferType.CHANNEL, joined = false), IrcClientState.Connecting))
+        // A plain (non-gateway) MUC never shows the IRC placeholder.
+        assertFalse(isConnectingViaGateway(buffer("room@conference.example.net", BufferType.CHANNEL, joined = false), ready))
+        // A 1:1 query is never a gateway channel.
+        assertFalse(isConnectingViaGateway(buffer("bob@example.net", BufferType.QUERY, joined = false), ready))
+        assertFalse(isConnectingViaGateway(null, ready))
+    }
 }

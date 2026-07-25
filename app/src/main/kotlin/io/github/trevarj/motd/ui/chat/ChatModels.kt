@@ -306,6 +306,8 @@ sealed interface ChatUiEvent {
     data class HistoryCapped(val inserted: Int, val limit: Int) : ChatUiEvent
     data class ReplyJumpUnavailable(val request: ReplyJumpRequest) : ChatUiEvent
     data object ConversationLayoutWriteFailed : ChatUiEvent
+    /** A slash command was rejected client-side because the buffer's protocol does not support it. */
+    data object CommandUnsupported : ChatUiEvent
 }
 
 /** Database-backed conversation layout and the global setting it may inherit. */

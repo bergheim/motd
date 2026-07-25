@@ -10,7 +10,9 @@ import io.github.trevarj.motd.data.db.BufferEntity
 import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.db.MemberEntity
 import io.github.trevarj.motd.data.db.MessageEntity
+import io.github.trevarj.motd.data.db.NetworkDao
 import io.github.trevarj.motd.data.db.NetworkIdentityDao
+import io.github.trevarj.motd.data.db.Protocol
 import io.github.trevarj.motd.data.db.ComposerDraftEntity
 import io.github.trevarj.motd.data.db.TimelineAnchor
 import io.github.trevarj.motd.data.db.effectiveLocalReadAnchor
@@ -33,6 +35,7 @@ import io.github.trevarj.motd.data.visibility.MessageVisibilityReader
 import io.github.trevarj.motd.data.visibility.MessageVisibilitySpec
 import io.github.trevarj.motd.diagnostics.AutoFollowTrace
 import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.xmpp.biboumiRoomDisplayName
 import io.github.trevarj.motd.irc.proto.IrcMessage
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 import io.github.trevarj.motd.irc.client.HistoryAvailability
@@ -97,7 +100,36 @@ data class ChatState(
     val connState: IrcClientState? = null,
     val presence: Map<PresenceKey, PresenceState> = emptyMap(),
     val conversationLayout: ConversationLayoutState = ConversationLayoutState(),
+    /** Composer/UI affordances gated by the buffer's network protocol (Task 9). */
+    val capabilities: ProtocolCapabilities = ProtocolCapabilities.IRC,
+    /**
+     * True while a Biboumi IRC-gateway channel is opened and connected at the XMPP layer but not
+     * yet joined — the gateway is cold-connecting to the IRC network (which takes tens of seconds).
+     * Drives the "Connecting to IRC…" empty-state placeholder so the wait isn't a blank screen.
+     */
+    val connectingViaGateway: Boolean = false,
 )
+
+/**
+ * Whether a channel's member list should be treated as complete/authoritative. IRC waits for its
+ * NAMES reply (`RosterLoadState.LOADED`); an XMPP MUC has no such handshake — its members arrive as
+ * the room's occupant snapshot, so they are authoritative as soon as they exist. Without this,
+ * nick autocomplete (and the member count) never populate for a bridged or native XMPP channel.
+ */
+internal fun membersAuthoritative(isXmpp: Boolean, rosterState: RosterLoadState?): Boolean =
+    isXmpp || rosterState == RosterLoadState.LOADED
+
+/**
+ * Whether to show the "connecting to IRC" placeholder: an IRC-gateway room ([biboumiRoomDisplayName]
+ * recognizes the `%server@gateway` shape) whose buffer exists and is connected at the XMPP layer
+ * ([IrcClientState.Ready]) but has not yet received its MUC self-join. Pure for unit testing.
+ */
+internal fun isConnectingViaGateway(buffer: BufferEntity?, connState: IrcClientState?): Boolean =
+    buffer != null &&
+        buffer.type == BufferType.CHANNEL &&
+        !buffer.joined &&
+        connState is IrcClientState.Ready &&
+        biboumiRoomDisplayName(buffer.name) != null
 
 data class ComposerDraftState(
     val text: String = "",
@@ -163,6 +195,7 @@ class ChatViewModel @Inject constructor(
     private val messageRepository: MessageRepository,
     private val bufferRepository: BufferRepository,
     private val networkIdentityDao: NetworkIdentityDao,
+    private val networkDao: NetworkDao,
     private val connectionManager: ConnectionManager,
     private val typingTracker: TypingTracker,
     private val foregroundBufferTracker: ForegroundBufferTracker,
@@ -279,6 +312,45 @@ class ChatViewModel @Inject constructor(
             buffer?.let { states[it.networkId] ?: IrcClientState.Disconnected }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    /**
+     * Composer/UI affordances for the buffer's network protocol (Task 9). Defaults to IRC
+     * (permissive) until this combine's two independent sources (`buffer`,
+     * `networkDao.observeAll()`) have both emitted at least once, and likewise whenever a buffer's
+     * `networkId` has no matching row — deliberately, matching
+     * `RoutingConnectionManager.protocolOf`'s `?: Protocol.IRC` fallback (service package), the
+     * same "unknown network defaults to IRC" rule already used where protocol routing decisions
+     * are made. `submit()`/`react()` read this `.value` synchronously: they must not themselves
+     * suspend on a fresh Room read to decide whether to proceed (a prior attempt at that — CI
+     * commit aad8bc8 — broke `channel commands use wire target...`, an existing test that expects
+     * `submit()` to finish sending within a single `runCurrent()`, with no added async hop).
+     *
+     * This ChatViewModel-level gate is a client-side, best-effort early rejection, not the sole
+     * safety net: `ConnectionManager.clientFor` already returns null for an XMPP-routed network id,
+     * so IRC-only wire commands (`/topic`, `/kick`, `/nick`, `/away`, `/ban`, raw lines) silently
+     * no-op regardless of this gate's timing, and `canSendReactionTags` already requires an IRC
+     * `message-tags` cap that an XMPP connection never reports. The one place this gate carries
+     * real weight is `/whois`, which otherwise opens the nick-detail sheet unconditionally before
+     * checking for a client. A brief stale-IRC-default window right after a buffer first loads is
+     * an accepted tradeoff (matches the deeper layer's own established default), not a regression.
+     */
+    val capabilities: StateFlow<ProtocolCapabilities> = buffer
+        .combine(networkDao.observeAll()) { current, networks ->
+            val protocol = current?.let { b -> networks.firstOrNull { it.id == b.networkId }?.protocol }
+                ?: Protocol.IRC
+            ProtocolCapabilities.forProtocol(protocol)
+        }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ProtocolCapabilities.IRC)
+
+    /**
+     * Whether this chat's network speaks XMPP; gates XMPP-authoritative member handling. Derived
+     * from [capabilities] rather than re-observing the networks table, so there is one protocol
+     * resolution per chat, not two.
+     */
+    private val isXmppNetwork: StateFlow<Boolean> = capabilities
+        .map { it == ProtocolCapabilities.XMPP }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     private val persistedIdentity = buffer
         .flatMapLatest { current ->
@@ -441,9 +513,12 @@ class ChatViewModel @Inject constructor(
             replyTo = reply,
             connState = conn,
             presence = presence,
+            connectingViaGateway = isConnectingViaGateway(buffer, conn),
         )
     }.combine(conversationLayout) { current, layout ->
         current.copy(conversationLayout = layout)
+    }.combine(capabilities) { current, caps ->
+        current.copy(capabilities = caps)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ChatState())
 
     /** Persist to the canonical id captured at the time of selection; Room then drives the UI. */
@@ -473,10 +548,12 @@ class ChatViewModel @Inject constructor(
                     connectionManager.rosterStates,
                     operationalBufferId,
                     identityRules,
-                ) { members, rosterStates, roomId, rules -> Triple(members, rosterStates[roomId], rules) }
+                    isXmppNetwork,
+                ) { members, rosterStates, roomId, rules, isXmpp ->
+                    Triple(members, membersAuthoritative(isXmpp, rosterStates[roomId]), rules)
+                }
                 .distinctUntilChanged()
-                .collect { (members, rosterState, rules) ->
-                    val authoritative = rosterState == RosterLoadState.LOADED
+                .collect { (members, authoritative, rules) ->
                     val (nicks, known) = withContext(Dispatchers.Default) {
                         val nicks = if (authoritative) members.map { it.nick } else emptyList()
                         nicks to nicks.map(rules::normalize).toSet()
@@ -637,6 +714,10 @@ class ChatViewModel @Inject constructor(
      * arrived) surface a snackbar rather than failing silently.
      */
     fun react(message: MessageEntity, emoji: String) = viewModelScope.launch {
+        if (!capabilities.value.reactions) {
+            uiEventQueue.enqueue(ChatUiEvent.ReactionBlocked)
+            return@launch
+        }
         val ready = connState.value as? IrcClientState.Ready
         val removing = message.msgid?.let { msgid ->
             reactionChips.value[msgid]?.firstOrNull { it.emoji == emoji }?.mine
@@ -741,7 +822,12 @@ class ChatViewModel @Inject constructor(
             submitRawLine(networkId, raw)
             return@launch
         }
-        when (val cmd = parseCommand(raw)) {
+        val cmd = parseCommand(raw)
+        if (!capabilities.value.slashCommands && !ProtocolCapabilities.xmppAllowed(cmd)) {
+            uiEventQueue.enqueue(ChatUiEvent.CommandUnsupported)
+            return@launch
+        }
+        when (cmd) {
             is ChatCommand.None -> Unit
             is ChatCommand.Message -> {
                 val roomId = operationalBufferId.value

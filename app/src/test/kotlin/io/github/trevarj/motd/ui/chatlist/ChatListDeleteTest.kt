@@ -10,6 +10,7 @@ import io.github.trevarj.motd.data.prefs.AvatarStyle
 import io.github.trevarj.motd.data.prefs.FoolsMode
 import io.github.trevarj.motd.data.prefs.LayoutDensity
 import io.github.trevarj.motd.data.prefs.NickColorPalette
+import io.github.trevarj.motd.data.prefs.NoopIrcGatewayServerPrefs
 import io.github.trevarj.motd.data.prefs.Settings
 import io.github.trevarj.motd.data.prefs.SettingsRepository
 import io.github.trevarj.motd.data.prefs.ThemeMode
@@ -22,6 +23,7 @@ import io.github.trevarj.motd.service.CertPrompt
 import io.github.trevarj.motd.service.ConnectionManager
 import io.github.trevarj.motd.service.ChannelCloseCoordinator
 import io.github.trevarj.motd.service.DeliveryMode
+import io.github.trevarj.motd.service.NoopXmppConnectionSurface
 import io.github.trevarj.motd.service.ReadMarkerSnapshotter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -128,6 +130,8 @@ class ChatListDeleteTest {
             bufferRepository = buffers,
             networkRepository = FakeNetworkRepository(),
             connectionManager = cm,
+            xmppConnectionSurface = NoopXmppConnectionSurface,
+            ircGatewayServerPrefs = NoopIrcGatewayServerPrefs,
             channelCloseCoordinator = close,
             readMarkerRepository = object : ReadMarkerSnapshotter {
                 override suspend fun latestIncoming(

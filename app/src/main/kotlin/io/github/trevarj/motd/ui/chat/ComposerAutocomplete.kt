@@ -16,6 +16,9 @@ fun autocompleteFor(
     members: List<String>,
     recentSpeakers: List<String>,
     normalize: (String) -> String,
+    // Callers filter this to the XMPP-safe subset when the buffer's capabilities disable slash
+    // commands (Task 9); defaults to the full IRC hint list.
+    commandHints: List<String> = COMMAND_HINTS,
 ): List<Completion> {
     val text = value.text
     val cursor = value.selection.end
@@ -23,7 +26,7 @@ fun autocompleteFor(
     // Command hints: a leading "/word" with no space yet.
     if (text.startsWith("/") && !text.startsWith("//") && !text.contains(' ')) {
         val prefix = text.lowercase()
-        return COMMAND_HINTS.filter { it.startsWith(prefix) }.map { Completion(it, isCommand = true) }
+        return commandHints.filter { it.startsWith(prefix) }.map { Completion(it, isCommand = true) }
     }
 
     val token = nickTokenAt(text, cursor) ?: return emptyList()

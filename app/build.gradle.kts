@@ -177,6 +177,18 @@ android {
             }
         }
     }
+    signingConfigs {
+        // Pinned debug keystore so every machine/CI run signs debug builds identically and
+        // in-place upgrades of test APKs work. Deliberately NOT a secret: standard Android
+        // debug-key convention (androiddebugkey/android), never used for release signing.
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storeType = "pkcs12"
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
 
     buildTypes {
         debug {
@@ -266,6 +278,10 @@ tasks.matching { it.name == "check" || it.name.startsWith("assemble") }.configur
 
 kotlin { jvmToolchain(21) }
 
+// Smack pulls both xpp3 and its strict-subset xpp3_min, which carry identical org.xmlpull
+// classes and trip the duplicate-classes check; keep only the superset jar.
+configurations.all { exclude(group = "xpp3", module = "xpp3_min") }
+
 dependencies {
     implementation(project(":irc"))
     debugImplementation(files(libboxAar))
@@ -299,6 +315,9 @@ dependencies {
     // Explicit for the IRC-over-WebSocket transport (plans/19 §3.3); already present transitively
     // via Coil, pinned to the same resolved version in libs.versions.toml so nothing new resolves.
     implementation(libs.okhttp)
+    implementation(libs.smack.android)
+    implementation(libs.smack.extensions)
+    implementation(libs.smack.tcp)
     implementation(libs.coroutines.android)
     implementation(libs.serialization.json)
     implementation(libs.unifiedpush.connector)

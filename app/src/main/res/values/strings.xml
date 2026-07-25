@@ -42,9 +42,17 @@
     <string name="new_sheet_channel_prefix">#</string>
     <string name="new_sheet_channel_hint">Channel name</string>
     <string name="new_sheet_nick_hint">Nickname</string>
+    <string name="new_sheet_room_jid_hint">room name, or room@conference.example.net</string>
+    <string name="new_sheet_jid_hint">user@example.net</string>
     <string name="new_sheet_join">Join</string>
     <string name="new_sheet_message">Message</string>
     <string name="new_sheet_browse">Browse channels…</string>
+    <!-- IRC-gateway join mode (Biboumi XMPP↔IRC) -->
+    <string name="new_sheet_mode_xmpp_room">XMPP room</string>
+    <string name="new_sheet_mode_irc_channel">IRC channel</string>
+    <string name="new_sheet_irc_server_hint">IRC server</string>
+    <string name="new_sheet_irc_channel_hint">Channel</string>
+    <string name="new_sheet_irc_gateway_hint">Gateway</string>
 
     <!-- Onboarding (WP8) -->
     <string name="onboarding_welcome_title">Welcome to motd</string>
@@ -68,6 +76,8 @@
     <string name="bouncer_znc_login_guidance">Use the ZNC username, network identifier, and password shown in your ZNC configuration.</string>
     <string name="onboarding_choice_network_title">Connect to an IRC network</string>
     <string name="onboarding_choice_network_desc">Connect directly to a single IRC server.</string>
+    <string name="onboarding_choice_xmpp_title">Connect an XMPP account</string>
+    <string name="onboarding_choice_xmpp_desc">Sign in with your Jabber/XMPP address and password.</string>
     <string name="onboarding_server_title">Server</string>
     <string name="onboarding_field_host">Host</string>
     <string name="onboarding_field_port">Port</string>
@@ -381,6 +391,8 @@
     <string name="chat_sent">Sent</string>
     <string name="chat_empty_title">No messages yet</string>
     <string name="chat_empty_message">Say hello to start the conversation.</string>
+    <string name="chat_connecting_irc_title">Connecting to IRC…</string>
+    <string name="chat_connecting_irc_message">The gateway is connecting to the IRC network. This can take a moment on the first join.</string>
     <string name="chat_history_error">Couldn\'t load older messages</string>
     <string name="chat_history_incomplete">Older history may be incomplete</string>
     <plurals name="chat_history_capped">
@@ -567,12 +579,18 @@
     <string name="add_network_plaintext_continue">Connect anyway</string>
     <string name="add_network_kind_network">IRC network</string>
     <string name="add_network_kind_bouncer">Bouncer</string>
+    <string name="add_network_kind_xmpp">XMPP account</string>
     <string name="add_network_connect_save">Connect &amp; save</string>
     <string name="add_network_testing">Testing connection…</string>
     <string name="add_network_edit">Edit</string>
     <string name="add_network_save_anyway">Save anyway</string>
     <string name="add_network_retry">Retry</string>
     <string name="add_network_failed">Couldn\'t connect — %1$s</string>
+    <string name="network_settings_xmpp_jid">Address (user@domain)</string>
+    <string name="network_settings_xmpp_password">Password</string>
+    <string name="network_settings_xmpp_muc_nick">Group chat nickname</string>
+    <string name="network_settings_xmpp_direct_tls">Direct TLS (port 5223)</string>
+    <string name="network_settings_xmpp_advanced">Advanced</string>
 
     <!-- soju bound-network manager (WP-V2, §5.5) -->
     <string name="bouncer_control_title">Soju control center</string>
@@ -726,6 +744,7 @@
     <string name="chat_react_failed">Couldn\'t react — message not confirmed</string>
     <string name="chat_reaction_blocked">This server does not allow shared reactions</string>
     <string name="chat_reaction_send_failed">Couldn\'t update reaction — try again</string>
+    <string name="chat_command_unsupported">This command isn\'t available in XMPP chats.</string>
 
     <!-- Topic edit from ChannelInfo (WP-V3, §5.8) -->
     <string name="channelinfo_topic_edit_title">Edit topic</string>

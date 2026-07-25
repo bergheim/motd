@@ -1,6 +1,7 @@
 package io.github.trevarj.motd.ui.settings
 
 import android.security.KeyChain
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -9,6 +10,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
@@ -43,6 +46,7 @@ import io.github.trevarj.motd.bouncer.ZncLoginForm
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
 import io.github.trevarj.motd.data.db.ObfsMode
+import io.github.trevarj.motd.data.db.Protocol
 import io.github.trevarj.motd.irc.client.SaslMechanism
 import io.github.trevarj.motd.ui.onboarding.AuthForm
 import io.github.trevarj.motd.ui.onboarding.AuthMode
@@ -199,6 +203,114 @@ fun BouncerLoginFields(
                     onValueChange = { onZncLoginChange(zncLogin.copy(password = it)) },
                     label = stringResource(R.string.bouncer_password),
                     modifier = Modifier.testTag("bouncer_password_field"),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * XMPP account form: JID + password (required to submit), an optional MUC-nickname override, and a
+ * collapsed "Advanced" section for the host/port/direct-TLS transport overrides. Stateless: the
+ * caller owns [XmppForm] state and receives edits via [onFormChange].
+ */
+@Composable
+fun XmppAccountForm(
+    form: XmppForm,
+    onFormChange: (XmppForm) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var advancedExpanded by remember { mutableStateOf(false) }
+    Column(
+        modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        OutlinedTextField(
+            value = form.jid,
+            onValueChange = { onFormChange(form.copy(jid = it)) },
+            label = { Text(stringResource(R.string.network_settings_xmpp_jid)) },
+            isError = form.jid.isNotBlank() && !form.jidValid,
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Email,
+                capitalization = KeyboardCapitalization.None,
+                autoCorrectEnabled = false,
+                imeAction = ImeAction.Next,
+            ),
+            modifier = Modifier.fillMaxWidth().testTag("xmpp_jid_field"),
+        )
+        PasswordField(
+            value = form.password,
+            onValueChange = { onFormChange(form.copy(password = it)) },
+            label = stringResource(R.string.network_settings_xmpp_password),
+            imeAction = ImeAction.Next,
+            modifier = Modifier.testTag("xmpp_password_field"),
+        )
+        OutlinedTextField(
+            value = form.mucNick,
+            onValueChange = { onFormChange(form.copy(mucNick = it)) },
+            label = { Text(stringResource(R.string.network_settings_xmpp_muc_nick)) },
+            placeholder = { Text(form.effectiveMucNick) },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(
+                capitalization = KeyboardCapitalization.None,
+                autoCorrectEnabled = false,
+                imeAction = ImeAction.Done,
+            ),
+            modifier = Modifier.fillMaxWidth().testTag("xmpp_muc_nick_field"),
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth().clickable { advancedExpanded = !advancedExpanded }
+                .testTag("xmpp_advanced_header"),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                stringResource(R.string.network_settings_xmpp_advanced),
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.weight(1f),
+            )
+            Icon(
+                imageVector = if (advancedExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                contentDescription = stringResource(
+                    if (advancedExpanded) R.string.network_settings_collapse else R.string.network_settings_expand,
+                ),
+            )
+        }
+        if (advancedExpanded) {
+            OutlinedTextField(
+                value = form.host,
+                onValueChange = { onFormChange(form.copy(host = it)) },
+                label = { Text(stringResource(R.string.onboarding_field_host)) },
+                placeholder = { Text(form.effectiveHost) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Uri,
+                    autoCorrectEnabled = false,
+                    imeAction = ImeAction.Next,
+                ),
+                modifier = Modifier.fillMaxWidth().testTag("xmpp_host_field"),
+            )
+            OutlinedTextField(
+                value = form.port,
+                onValueChange = { onFormChange(form.copy(port = it.filter(Char::isDigit))) },
+                label = { Text(stringResource(R.string.onboarding_field_port)) },
+                placeholder = { Text(form.effectivePort.toString()) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Number,
+                    imeAction = ImeAction.Next,
+                ),
+                modifier = Modifier.fillMaxWidth().testTag("xmpp_port_field"),
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(stringResource(R.string.network_settings_xmpp_direct_tls), modifier = Modifier.weight(1f))
+                Switch(
+                    checked = form.directTls,
+                    onCheckedChange = { onFormChange(form.copy(directTls = it)) },
+                    modifier = Modifier.testTag("xmpp_direct_tls_switch"),
                 )
             }
         }
@@ -609,6 +721,65 @@ fun buildNetworkEntity(
 
 /** Placeholder identity for the soju root socket when no nick/SASL user is available. */
 private const val DEFAULT_IDENTITY = "motd"
+
+/**
+ * XMPP account form: bare JID + password, an optional MUC-nickname override, and an advanced
+ * host/port/direct-TLS transport override (STARTTLS on 5222 is the default; direct TLS on 5223 is
+ * an opt-in). Effective* accessors normalize the JID once (trim + lowercase) so validation, the
+ * default MUC nick, and the default host all agree with the persisted [NetworkEntity] (spec §3).
+ */
+data class XmppForm(
+    val jid: String = "",
+    val password: String = "",
+    val mucNick: String = "",
+    val host: String = "",
+    val port: String = "5222",
+    val directTls: Boolean = false,
+) {
+    private val normalizedJid: String get() = jid.trim().lowercase()
+
+    /** localpart@domain: exactly one '@', both sides non-blank. */
+    val jidValid: Boolean
+        get() {
+            val parts = normalizedJid.split('@')
+            return parts.size == 2 && parts[0].isNotBlank() && parts[1].isNotBlank()
+        }
+
+    val isValid: Boolean get() = jidValid && password.isNotBlank()
+
+    /** MUC nickname default: the JID's localpart. */
+    val effectiveMucNick: String get() = mucNick.ifBlank { normalizedJid.substringBefore('@') }
+
+    /** Connect host default: the JID's domain (override only to pin a host DNS/SRV won't resolve). */
+    val effectiveHost: String get() = host.trim().ifBlank { normalizedJid.substringAfter('@') }
+
+    /** STARTTLS on 5222 by default; 5223 when [directTls] opts into implicit TLS. */
+    val effectivePort: Int get() = port.toIntOrNull() ?: if (directTls) 5223 else 5222
+}
+
+/**
+ * Build an XMPP [NetworkEntity] from [XmppForm] (spec §3). Role is always DIRECT — XMPP has no
+ * bouncer-style root/child distinction. `tls = directTls` because STARTTLS (the default, `tls =
+ * false`) upgrades an already-plaintext-looking socket in-band; direct TLS is the advanced opt-in.
+ */
+fun buildXmppNetworkEntity(form: XmppForm, id: Long = 0): NetworkEntity {
+    val jid = form.jid.trim().lowercase()
+    return NetworkEntity(
+        id = id,
+        name = jid,
+        protocol = Protocol.XMPP,
+        role = NetworkRole.DIRECT,
+        host = form.effectiveHost,
+        port = form.effectivePort,
+        tls = form.directTls,
+        nick = form.effectiveMucNick,
+        username = jid.substringBefore('@'),
+        realname = "",
+        saslMechanism = SaslMechanism.NONE.name,
+        saslPassword = form.password,
+        jid = jid,
+    )
+}
 
 /** Inverse: seed the forms from an existing entity for editing. */
 fun NetworkEntity.toServerForm(): ServerForm = ServerForm(
