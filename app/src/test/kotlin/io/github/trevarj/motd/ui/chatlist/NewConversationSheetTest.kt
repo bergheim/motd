@@ -61,9 +61,12 @@ class NewConversationSheetTest {
     }
 
     @Test
-    fun joinTarget_xmpp_fullJid_neverRewritten() {
+    fun joinTarget_xmpp_fullJid_passesThroughCaseNormalized() {
         val net = xmppNetwork.copy(jid = "me@example.net")
         assertEquals("room@muc.other.org", joinTarget(net, "room@muc.other.org"))
+        assertEquals("room@muc.other.org", joinTarget(net, "Room@MUC.Other.org"))
+        // '#' is only IRC muscle-memory sugar for bare names; a full JID keeps its exact form.
+        assertEquals("#weird@muc.other.org", joinTarget(net, "#weird@muc.other.org"))
     }
 
     @Test

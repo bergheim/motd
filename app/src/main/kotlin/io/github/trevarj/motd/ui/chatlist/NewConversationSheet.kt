@@ -209,10 +209,15 @@ internal fun channelJoinTarget(channelName: String): String = "#${channelName.tr
  */
 internal fun joinTarget(net: NetworkEntity, value: String): String {
     if (net.protocol != Protocol.XMPP) return channelJoinTarget(value)
-    val trimmed = value.trim().removePrefix("#").lowercase()
+    // JIDs are case-normalized to lowercase everywhere in the XMPP pipeline, so both branches
+    // lowercase; a full JID is otherwise passed through, and the IRC-style '#' prefix is only
+    // stripped from bare names.
+    val trimmed = value.trim().lowercase()
     if (trimmed.isEmpty() || '@' in trimmed) return trimmed
+    val name = trimmed.removePrefix("#")
+    if (name.isEmpty()) return name
     val accountDomain = net.jid?.substringAfter('@', "").orEmpty().ifEmpty { net.host }
-    return "$trimmed@conference.$accountDomain"
+    return "$name@conference.$accountDomain"
 }
 
 /**
