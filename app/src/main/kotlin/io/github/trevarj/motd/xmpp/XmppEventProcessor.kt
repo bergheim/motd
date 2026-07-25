@@ -243,8 +243,11 @@ class XmppEventProcessor @Inject constructor(
         stanzaId: String,
         existing: MessageEntity,
     ): Unit = db.withTransaction {
-        if (existing.pendingLabel != null) {
-            db.messageDao().update(existing.copy(pendingLabel = null))
+        // Clear pending, and un-fail: a reflection can arrive after the 30s send watchdog already
+        // marked the row failed (a cold gateway round-trip easily exceeds it), so the late
+        // reflection must reset `failed` too, not leave a delivered message shown as failed.
+        if (existing.pendingLabel != null || existing.failed) {
+            db.messageDao().update(existing.copy(pendingLabel = null, failed = false))
         }
         // Record the XMPP_MSGID alias now (a pending row is created without one) so a redundant
         // later reflection of the same stanza id is deduped like any other message.
@@ -313,8 +316,11 @@ class XmppEventProcessor @Inject constructor(
     private suspend fun confirmSendLocked(networkId: Long, originId: String) {
         val messageDao = db.messageDao()
         for (target in db.bufferDao().openTargets(networkId)) {
-            val pending = messageDao.byPendingLabel(target.id, originId) ?: continue
-            messageDao.update(pending.copy(pendingLabel = null))
+            // Look up by msgid, not pendingLabel: the 30s watchdog nulls pendingLabel when it marks
+            // a send failed, so a stream-management ack that arrives later (slow link / cold
+            // gateway) must still find the row by its stable msgid and un-fail it.
+            val pending = messageDao.byMsgid(target.id, originId) ?: continue
+            messageDao.update(pending.copy(pendingLabel = null, failed = false))
             return
         }
     }

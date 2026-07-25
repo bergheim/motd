@@ -40,9 +40,11 @@ import org.robolectric.RobolectricTestRunner
 class FakeXmppSessionFactory(sessions: List<FakeXmppSession>) : XmppSessionFactory {
     private val queued = ArrayDeque(sessions)
     val created = mutableListOf<FakeXmppSession>()
+    val configs = mutableListOf<XmppAccountConfig>()
     override fun create(config: XmppAccountConfig): XmppSession {
         val session = queued.removeFirstOrNull() ?: FakeXmppSession()
         created += session
+        configs += config
         return session
     }
 }
@@ -506,5 +508,22 @@ class XmppConnectionManagerTest {
         assertEquals(4_000L, actor.backoffDelayMs(2))
         assertEquals(60_000L, actor.backoffDelayMs(6))
         assertEquals(60_000L, actor.backoffDelayMs(20))
+    }
+
+    @Test
+    fun editingAccountConfig_respawnsActorWithNewConfig() = runTest {
+        bootstrap(listOf(FakeXmppSession(), FakeXmppSession()))
+        manager.startAll()
+        advanceUntilIdle()
+        assertEquals(1, factory.created.size)
+
+        // Fix a wrong password on the live account row; reconcile must respawn the actor with the
+        // corrected config rather than keep using the stale one until an app restart.
+        val row = db.networkDao().byId(nid)!!
+        db.networkDao().update(row.copy(saslPassword = "corrected"))
+        advanceUntilIdle()
+
+        assertEquals(2, factory.created.size)
+        assertEquals("corrected", factory.configs.last().password)
     }
 }

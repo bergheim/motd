@@ -282,4 +282,30 @@ class XmppEventProcessorTest {
         assertEquals("waves to me", row.text)
         assertTrue(row.hasMention) // our nick "me" is mentioned in the action text
     }
+
+    @Test
+    fun lateAck_afterWatchdogFailure_unmarksFailed() = runTest {
+        val buf = p.ensureQueryBuffer(nid, "bob@example.net")
+        val id = p.createPending(nid, buf, "yo", "o1")!!
+        p.failPending(nid, "o1") // the 30s send watchdog fired before the ack arrived
+        assertTrue(db.messageDao().byId(id)!!.failed)
+        p.process(nid, XmppEvent.SendConfirmed("o1")) // ack finally arrives
+        val row = db.messageDao().byId(id)!!
+        assertFalse(row.failed)
+        assertNull(row.pendingLabel)
+    }
+
+    @Test
+    fun lateMucReflection_afterWatchdogFailure_unmarksFailed() = runTest {
+        p.process(nid, XmppEvent.MucSelfJoined("room@conf.x.net", listOf("me")))
+        val buf = db.bufferDao().byName(nid, "room@conf.x.net")!!.id
+        val id = p.createPending(nid, buf, "yo", "o1")!!
+        p.failPending(nid, "o1")
+        assertTrue(db.messageDao().byId(id)!!.failed)
+        // Our own message reflected back by the room, after the watchdog already failed it.
+        p.process(nid, XmppEvent.MucMessage("room@conf.x.net", "me", "yo", "o1", null))
+        val row = db.messageDao().byId(id)!!
+        assertFalse(row.failed)
+        assertNull(row.pendingLabel)
+    }
 }

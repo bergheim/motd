@@ -47,6 +47,9 @@ class XmppConnectionManager @Inject constructor(
 ) {
     private val actors = ConcurrentHashMap<Long, XmppAccountActor>()
 
+    /** The config each live actor was spawned with, so reconcile can detect an edited account row. */
+    private val actorConfigs = ConcurrentHashMap<Long, XmppAccountConfig>()
+
     // Per-network IRC-gateway discovery result, cached for the current Ready session so the join
     // sheet doesn't re-disco on every open. Invalidated ([invalidateGateways]) on any drop out of
     // Ready — including the actor's internal session recycling on transport loss, surfaced through
@@ -88,6 +91,7 @@ class XmppConnectionManager @Inject constructor(
             reconcileJob = null
             for ((_, actor) in actors) actor.stop()
             actors.clear()
+            actorConfigs.clear()
             gatewayCache.clear()
             gatewayLoads.values.forEach { it.cancel() }
             gatewayLoads.clear()
@@ -117,6 +121,7 @@ class XmppConnectionManager @Inject constructor(
         userIntents[networkId] = false
         mutex.withLock {
             actors.remove(networkId)?.stop()
+            actorConfigs.remove(networkId)
             invalidateGateways(networkId)
             _connectionStates.update { it - networkId }
         }
@@ -228,7 +233,7 @@ class XmppConnectionManager @Inject constructor(
         }
     }
 
-    // ---- internal reconciliation (always called while holding [mutex]) ----
+    // ---- internal reconciliation (reconcile acquires [mutex] itself; call without holding it) ----
 
     private suspend fun reconcile(all: List<NetworkEntity>) {
         mutex.withLock {
@@ -238,12 +243,26 @@ class XmppConnectionManager @Inject constructor(
             for (id in actors.keys.toList()) {
                 if (id !in wanted) {
                     actors.remove(id)?.stop()
+                    actorConfigs.remove(id)
                     invalidateGateways(id)
                     _connectionStates.update { it - id }
                 }
             }
             for ((id, entity) in wanted) {
-                if (actors.containsKey(id)) continue
+                if (actors.containsKey(id)) {
+                    // Apply an edit (password/host/port/nick/TLS) to a live account: the actor
+                    // captured its config at spawn, so a changed config means tearing it down and
+                    // respawning — otherwise a fixed wrong password never takes effect until the
+                    // process restarts.
+                    val newConfig = configFor(entity)
+                    if (newConfig != null && newConfig != actorConfigs[id]) {
+                        actors.remove(id)?.stop()
+                        actorConfigs.remove(id)
+                        invalidateGateways(id)
+                        spawnActor(entity)
+                    }
+                    continue
+                }
                 spawnActor(entity)
             }
         }
@@ -252,20 +271,26 @@ class XmppConnectionManager @Inject constructor(
     private fun wantConnected(n: NetworkEntity): Boolean = userIntents[n.id] ?: n.autoConnect
 
     /** Create, register, and start an actor for [n]. Caller must hold [mutex]. */
+    /** A corrupt XMPP row with a null JID cannot build a config; null lets callers skip it. */
+    private fun configFor(n: NetworkEntity): XmppAccountConfig? {
+        val jid = n.jid ?: return null
+        return XmppAccountConfig(
+            bareJid = jid,
+            password = n.saslPassword.orEmpty(),
+            host = n.host,
+            port = n.port,
+            directTls = n.tls,
+            mucNick = n.nick,
+        )
+    }
+
     private fun spawnActor(n: NetworkEntity) {
-        // A corrupt XMPP row with a null JID cannot build a config; skip it rather than throw, so
-        // one bad row can't crash the whole reconcile pass and take every other account down with it.
-        val jid = n.jid ?: return
+        // Skip a null-JID row rather than throw, so one bad row can't crash the whole reconcile pass
+        // and take every other account down with it.
+        val config = configFor(n) ?: return
         val actor = XmppAccountActor(
             networkId = n.id,
-            config = XmppAccountConfig(
-                bareJid = jid,
-                password = n.saslPassword.orEmpty(),
-                host = n.host,
-                port = n.port,
-                directTls = n.tls,
-                mucNick = n.nick,
-            ),
+            config = config,
             db = db,
             processor = processor,
             sessionFactory = sessionFactory,
@@ -273,6 +298,7 @@ class XmppConnectionManager @Inject constructor(
             onState = ::publishState,
         )
         actors[n.id] = actor
+        actorConfigs[n.id] = config
         actor.start()
     }
 

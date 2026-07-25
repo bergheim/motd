@@ -105,13 +105,14 @@ class SmackXmppSession(private val config: XmppAccountConfig) : XmppSession {
         // HTTP-upload disco form uses a field type unknown to Smack 4.4). Drop the stanza and
         // keep the stream alive instead — but log it at WARN so silent drops are observable.
         setParsingExceptionCallback { unparseable ->
-            val content = unparseable.content?.toString().orEmpty()
-            val truncated = if (content.length > MAX_LOGGED_STANZA_CHARS) {
-                content.take(MAX_LOGGED_STANZA_CHARS) + "…(${content.length} chars total)"
-            } else {
-                content
-            }
-            LOGGER.log(Level.WARNING, "Dropping unparsable XMPP stanza: $truncated", unparseable.parsingException)
+            // Log the failure and size only — never the stanza content, which can hold private
+            // message bodies that must not leak into logcat.
+            val length = unparseable.content?.length ?: 0
+            LOGGER.log(
+                Level.WARNING,
+                "Dropping unparsable XMPP stanza ($length chars)",
+                unparseable.parsingException,
+            )
         }
     }
 
@@ -447,7 +448,6 @@ class SmackXmppSession(private val config: XmppAccountConfig) : XmppSession {
 
     private companion object {
         private val LOGGER = Logger.getLogger(SmackXmppSession::class.java.name)
-        private const val MAX_LOGGED_STANZA_CHARS = 500
 
         /** A gateway cold-connecting to a far network (IRC handshake + MOTD) can take tens of
          *  seconds before it can reflect our MUC self-presence; wait well past that. */
