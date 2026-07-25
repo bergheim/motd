@@ -95,6 +95,9 @@ internal class XmppAccountActor(
                 consumeEvents(current)
             } catch (cancelled: CancellationException) {
                 throw cancelled
+            } catch (e: XmppAuthException) {
+                // Rejected credentials never fix themselves; park instead of retrying.
+                Outcome.Fatal(e.message ?: "Wrong address or password")
             } catch (e: Exception) {
                 Outcome.Retry(e.message)
             }

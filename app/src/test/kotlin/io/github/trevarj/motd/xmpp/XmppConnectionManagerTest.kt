@@ -191,6 +191,22 @@ class XmppConnectionManagerTest {
     }
 
     @Test
+    fun thrownAuthFailure_parksWithClearReason() = runTest {
+        val s1 = FakeXmppSession().apply { failLoginWith = XmppAuthException() }
+        val s2 = FakeXmppSession()
+        bootstrap(listOf(s1, s2))
+        manager.connect(nid)
+        advanceUntilIdle()
+
+        // A rejected password thrown from login() must park (no retry), with a message the
+        // onboarding/add-network error UI can show verbatim.
+        assertEquals(1, factory.created.size)
+        val state = manager.connectionStates.value[nid]
+        assertTrue(state is IrcClientState.Failed && state.fatal)
+        assertEquals("Wrong address or password", (state as IrcClientState.Failed).reason)
+    }
+
+    @Test
     fun sendMessage_unknownBuffer_rejected_noPendingRow() = runTest {
         val s1 = FakeXmppSession()
         bootstrap(listOf(s1))

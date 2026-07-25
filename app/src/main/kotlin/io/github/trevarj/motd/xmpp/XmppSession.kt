@@ -27,3 +27,12 @@ interface XmppSession {
 fun interface XmppSessionFactory {
     fun create(config: XmppAccountConfig): XmppSession
 }
+
+/**
+ * Thrown by [XmppSession.connectAndLogin] when the server rejected the credentials (SASL
+ * failure). Kept at the seam so [XmppAccountActor] can park the account with a clear message
+ * instead of retrying a password that will never work; the message is shown verbatim in the
+ * onboarding/add-network error UI.
+ */
+class XmppAuthException(cause: Throwable? = null) :
+    Exception("Wrong address or password", cause)

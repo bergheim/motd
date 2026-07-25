@@ -117,7 +117,11 @@ class SmackXmppSession(private val config: XmppAccountConfig) : XmppSession {
             ReconnectionManager.getInstanceFor(connection).disableAutomaticReconnection()
             registerAccountListeners()   // BEFORE connect/login — spec invariant
             connection.connect()
-            connection.login()
+            try {
+                connection.login()
+            } catch (e: SASLErrorException) {
+                throw XmppAuthException(e)
+            }
             val roster = Roster.getInstanceFor(connection)
             if (!roster.isLoaded) roster.reloadAndWait()
             channel.trySend(XmppEvent.RosterUpdated(roster.entries.map {
@@ -165,7 +169,14 @@ class SmackXmppSession(private val config: XmppAccountConfig) : XmppSession {
             }
 
             override fun connectionClosedOnError(e: Exception) {
-                channel.trySend(XmppEvent.Disconnected(reason = e.message, fatal = e is SASLErrorException))
+                val auth = e is SASLErrorException
+                channel.trySend(
+                    XmppEvent.Disconnected(
+                        // The auth reason is shown verbatim in the connect-error UI.
+                        reason = if (auth) "Wrong address or password" else e.message,
+                        fatal = auth,
+                    ),
+                )
             }
         })
     }
