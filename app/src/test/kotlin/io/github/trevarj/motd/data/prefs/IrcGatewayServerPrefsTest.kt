@@ -15,7 +15,7 @@ class IrcGatewayServerPrefsTest {
     fun `prependRecentServer puts newest first, dedupes case-insensitively, and caps`() {
         assertEquals(listOf("b", "a"), prependRecentServer(listOf("a"), "b"))
         // Re-using an existing server (case-insensitively) moves it to the front without duplicating.
-        assertEquals(listOf("A", "c", "b"), prependRecentServer(listOf("b", "a", "c"), "A"))
+        assertEquals(listOf("A", "b", "c"), prependRecentServer(listOf("b", "a", "c"), "A"))
         // Blank input leaves the list untouched.
         assertEquals(listOf("a"), prependRecentServer(listOf("a"), "  "))
         // Cap keeps only the most-recent [cap] entries.
