@@ -231,4 +231,33 @@ class XmppEventProcessorTest {
         p.process(nid, XmppEvent.ChatMessage("bob@example.net", "hi", "s1", null))
         assertEquals("bob@example.net", db.bufferDao().byName(nid, "bob@example.net")!!.displayName)
     }
+
+    @Test
+    fun mePrefix_incomingChat_storedAsActionWithPrefixStripped() = runTest {
+        p.process(nid, XmppEvent.ChatMessage("alice@example.net", "/me waves", "s1", null))
+        val row = rows(db.bufferDao().byName(nid, "alice@example.net")!!.id).single()
+        assertEquals(MessageKind.ACTION, row.kind)
+        assertEquals("waves", row.text)
+    }
+
+    @Test
+    fun mePrefix_incomingMuc_storedAsAction() = runTest {
+        p.process(nid, XmppEvent.MucMessage("room@conf.x.net", "alice", "/me waves", "s1", null))
+        val row = rows(db.bufferDao().byName(nid, "room@conf.x.net")!!.id).single()
+        assertEquals(MessageKind.ACTION, row.kind)
+        assertEquals("waves", row.text)
+    }
+
+    @Test
+    fun mePrefix_pendingEcho_storedAsAction_butPlainTextUnchanged() = runTest {
+        val buf = p.ensureQueryBuffer(nid, "bob@example.net")
+        val actionId = p.createPending(nid, buf, "/me waves", "o1")!!
+        val plainId = p.createPending(nid, buf, "hi there", "o2")!!
+        val byId = rows(buf).associateBy { it.id }
+        assertEquals(MessageKind.ACTION, byId.getValue(actionId).kind)
+        assertEquals("waves", byId.getValue(actionId).text)
+        // A "/me" without the trailing space, or plain text, stays an ordinary message.
+        assertEquals(MessageKind.PRIVMSG, byId.getValue(plainId).kind)
+        assertEquals("hi there", byId.getValue(plainId).text)
+    }
 }

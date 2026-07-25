@@ -75,6 +75,9 @@ class XmppEventProcessor @Inject constructor(
     ): TimelineEventId? = withNetworkLock(networkId) {
         if (db.bufferDao().rawById(bufferId) == null) return@withNetworkLock null
         val nick = db.networkDao().byId(networkId)?.nick.orEmpty()
+        // Echo a "/me …" send as a styled action locally; the wire still carries the literal
+        // "/me …" body (the caller sends `text` unchanged) so the gateway/peer converts it.
+        val (kind, stored) = actionAware(text)
         db.canonicalTimelineDao().insertEvent(
             TimelineEventEntity(
                 bufferId = bufferId,
@@ -82,8 +85,8 @@ class XmppEventProcessor @Inject constructor(
                 serverTime = System.currentTimeMillis(),
                 sender = nick,
                 normalizedActor = nick,
-                kind = MessageKind.PRIVMSG,
-                text = text,
+                kind = kind,
+                text = stored,
                 isSelf = true,
                 pendingLabel = originId,
                 dedupKey = "xmpp:pending:$bufferId:$originId",
@@ -161,14 +164,15 @@ class XmppEventProcessor @Inject constructor(
     private suspend fun handleChatMessage(networkId: Long, event: XmppEvent.ChatMessage) {
         val bareJid = normalizeJid(event.fromBareJid)
         val bufferId = ensureQueryBufferLocked(networkId, bareJid)
+        val (kind, text) = actionAware(event.text)
         insertDedupedMessage(
             networkId = networkId,
             bufferId = bufferId,
             senderIdentity = bareJid,
             stanzaId = event.stanzaId ?: UUID.randomUUID().toString(),
             sender = bareJid,
-            text = event.text,
-            kind = MessageKind.PRIVMSG,
+            text = text,
+            kind = kind,
             isSelf = false,
             delayedAtMs = event.delayedAtMs,
             hasMention = false,
@@ -200,7 +204,8 @@ class XmppEventProcessor @Inject constructor(
                 return
             }
         }
-        val hasMention = !isOwnNick && ourNick != null && containsMention(event.text, ourNick)
+        val (kind, text) = actionAware(event.text)
+        val hasMention = !isOwnNick && ourNick != null && containsMention(text, ourNick)
         insertDedupedMessage(
             networkId = networkId,
             bufferId = bufferId,
@@ -211,8 +216,8 @@ class XmppEventProcessor @Inject constructor(
             senderIdentity = event.occupantNick,
             stanzaId = stanzaId ?: UUID.randomUUID().toString(),
             sender = event.occupantNick,
-            text = event.text,
-            kind = MessageKind.PRIVMSG,
+            text = text,
+            kind = kind,
             isSelf = isOwnNick,
             delayedAtMs = event.delayedAtMs,
             hasMention = hasMention,
@@ -421,8 +426,20 @@ class XmppEventProcessor @Inject constructor(
     private fun aliasBytes(bufferId: Long, senderIdentity: String, stanzaId: String): ByteArray =
         "$bufferId\u0000$senderIdentity\u0000$stanzaId".toByteArray(StandardCharsets.UTF_8)
 
+    /**
+     * XEP-0245: a message body beginning with "/me " is a third-person action ("* nick waves"),
+     * not literal text. Biboumi uses the same convention to bridge IRC CTCP ACTIONs in both
+     * directions, so this makes `/me` render as a styled action instead of raw "/me …" text on
+     * incoming IRC/XMPP actions and on the local echo of one the user sends. Returns the ACTION
+     * kind plus the text with the prefix stripped; otherwise PRIVMSG with the text unchanged.
+     */
+    private fun actionAware(body: String): Pair<MessageKind, String> =
+        if (body.startsWith(ME_PREFIX)) MessageKind.ACTION to body.substring(ME_PREFIX.length)
+        else MessageKind.PRIVMSG to body
+
     private companion object {
         const val SERVER_BUFFER_NAME = "*"
+        const val ME_PREFIX = "/me "
     }
 }
 
