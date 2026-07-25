@@ -115,6 +115,15 @@ data class ChatState(
  * recognizes the `%server@gateway` shape) whose buffer exists and is connected at the XMPP layer
  * ([IrcClientState.Ready]) but has not yet received its MUC self-join. Pure for unit testing.
  */
+/**
+ * Whether a channel's member list should be treated as complete/authoritative. IRC waits for its
+ * NAMES reply (`RosterLoadState.LOADED`); an XMPP MUC has no such handshake — its members arrive as
+ * the room's occupant snapshot, so they are authoritative as soon as they exist. Without this,
+ * nick autocomplete (and the member count) never populate for a bridged or native XMPP channel.
+ */
+internal fun membersAuthoritative(isXmpp: Boolean, rosterState: RosterLoadState?): Boolean =
+    isXmpp || rosterState == RosterLoadState.LOADED
+
 internal fun isConnectingViaGateway(buffer: BufferEntity?, connState: IrcClientState?): Boolean =
     buffer != null &&
         buffer.type == BufferType.CHANNEL &&
@@ -334,6 +343,14 @@ class ChatViewModel @Inject constructor(
         .distinctUntilChanged()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ProtocolCapabilities.IRC)
 
+    /** Whether this chat's network speaks XMPP; gates XMPP-authoritative member handling. */
+    private val isXmppNetwork: StateFlow<Boolean> = buffer
+        .combine(networkDao.observeAll()) { current, networks ->
+            current?.let { b -> networks.firstOrNull { it.id == b.networkId }?.protocol } == Protocol.XMPP
+        }
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
     private val persistedIdentity = buffer
         .flatMapLatest { current ->
             current?.let { room ->
@@ -530,10 +547,12 @@ class ChatViewModel @Inject constructor(
                     connectionManager.rosterStates,
                     operationalBufferId,
                     identityRules,
-                ) { members, rosterStates, roomId, rules -> Triple(members, rosterStates[roomId], rules) }
+                    isXmppNetwork,
+                ) { members, rosterStates, roomId, rules, isXmpp ->
+                    Triple(members, membersAuthoritative(isXmpp, rosterStates[roomId]), rules)
+                }
                 .distinctUntilChanged()
-                .collect { (members, rosterState, rules) ->
-                    val authoritative = rosterState == RosterLoadState.LOADED
+                .collect { (members, authoritative, rules) ->
                     val (nicks, known) = withContext(Dispatchers.Default) {
                         val nicks = if (authoritative) members.map { it.nick } else emptyList()
                         nicks to nicks.map(rules::normalize).toSet()

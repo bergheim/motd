@@ -595,6 +595,17 @@ class ChatModelsTest {
     private val ready = IrcClientState.Ready(nick = "me", caps = emptySet(), isupport = emptyMap())
 
     @Test
+    fun membersAuthoritative_xmppAlways_ircOnlyWhenLoaded() {
+        // XMPP MUC members are authoritative as soon as present (no NAMES handshake).
+        assertTrue(membersAuthoritative(isXmpp = true, rosterState = null))
+        assertTrue(membersAuthoritative(isXmpp = true, rosterState = io.github.trevarj.motd.service.RosterLoadState.LOADING))
+        // IRC waits for its NAMES reply.
+        assertFalse(membersAuthoritative(isXmpp = false, rosterState = null))
+        assertFalse(membersAuthoritative(isXmpp = false, rosterState = io.github.trevarj.motd.service.RosterLoadState.LOADING))
+        assertTrue(membersAuthoritative(isXmpp = false, rosterState = io.github.trevarj.motd.service.RosterLoadState.LOADED))
+    }
+
+    @Test
     fun connectingViaGateway_onlyForUnjoinedGatewayChannelWhileReady() {
         val gatewayRoom = "#systemcrafters%irc.libera.chat@irc.xmpp.glvortex.net"
         // Unjoined gateway channel while connected -> connecting.
