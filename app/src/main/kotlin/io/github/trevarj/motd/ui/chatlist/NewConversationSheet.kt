@@ -216,7 +216,9 @@ internal fun joinTarget(net: NetworkEntity, value: String): String {
     if (trimmed.isEmpty() || '@' in trimmed) return trimmed
     val name = trimmed.removePrefix("#")
     if (name.isEmpty()) return name
-    val accountDomain = net.jid?.substringAfter('@', "").orEmpty().ifEmpty { net.host }
+    // substringBefore('/') defends against a resource-suffixed stored JID (me@example.net/phone).
+    val accountDomain = net.jid?.substringAfter('@', "")?.substringBefore('/').orEmpty()
+        .ifEmpty { net.host }
     return "$name@conference.$accountDomain"
 }
 
