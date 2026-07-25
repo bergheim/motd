@@ -1253,26 +1253,29 @@ fun ChatContent(
                     }
                     }
 
-                    // A Biboumi IRC-gateway channel shows a connecting placeholder while the gateway
-                    // cold-connects to IRC (tens of seconds), instead of the blank/"empty" screen.
-                    if (state.connectingViaGateway && items.itemCount == 0) {
-                        io.github.trevarj.motd.ui.components.EmptyState(
-                            icon = Icons.Outlined.Sync,
-                            title = stringResource(R.string.chat_connecting_irc_title),
-                            message = stringResource(R.string.chat_connecting_irc_message),
-                        )
-                    } else if (items.loadState.refresh is LoadState.NotLoading &&
-                        // Paging begins with a transient empty refresh before Room delivers its first
-                        // page. Only show the empty state once APPEND proves the buffer is terminally
-                        // empty; otherwise the large placeholder flashes during every chat entry.
+                    // Paging begins with a transient empty refresh before Room delivers its first
+                    // page. Only show a full-screen placeholder once APPEND proves the buffer is
+                    // terminally empty; otherwise it flashes during every chat entry (including a
+                    // gateway room that already has history but is briefly re-loading).
+                    if (items.loadState.refresh is LoadState.NotLoading &&
                         initialPagingPage(items.itemCount, items.loadState.append) ==
                         InitialPagingPage.TerminalEmpty
                     ) {
-                        io.github.trevarj.motd.ui.components.EmptyState(
-                            icon = Icons.Outlined.Forum,
-                            title = stringResource(R.string.chat_empty_title),
-                            message = stringResource(R.string.chat_empty_message),
-                        )
+                        if (state.connectingViaGateway) {
+                            // IRC-gateway channel: empty because the gateway is still cold-connecting
+                            // to IRC (tens of seconds), not because the conversation is empty.
+                            io.github.trevarj.motd.ui.components.EmptyState(
+                                icon = Icons.Outlined.Sync,
+                                title = stringResource(R.string.chat_connecting_irc_title),
+                                message = stringResource(R.string.chat_connecting_irc_message),
+                            )
+                        } else {
+                            io.github.trevarj.motd.ui.components.EmptyState(
+                                icon = Icons.Outlined.Forum,
+                                title = stringResource(R.string.chat_empty_title),
+                                message = stringResource(R.string.chat_empty_message),
+                            )
+                        }
                     }
 
                     // Keep the hot firstVisibleItemIndex read inside the FAB subtree. Reading it in
