@@ -248,10 +248,15 @@ class SmackXmppSession(private val config: XmppAccountConfig) : XmppSession {
                 }
             }
 
+            // Message/subject/history must be captured during join(); register them first. The
+            // occupant listeners are added AFTER join succeeds so the initial room roster (which
+            // Smack replays as one "joined" callback per existing member during join — 20+ on a
+            // busy IRC channel) does NOT spam the timeline with JOIN events. The initial members
+            // come from MucSelfJoined's occupant snapshot instead; only occupants who arrive after
+            // we are in the room produce JOIN/PART events. All four refs are stored for removal
+            // (removing an unregistered listener is a harmless no-op).
             muc.addMessageListener(messageListener)
             muc.addSubjectUpdatedListener(subjectUpdatedListener)
-            muc.addParticipantStatusListener(participantStatusListener)
-            muc.addUserStatusListener(userStatusListener)
             roomListeners[roomJid] = RoomListeners(
                 messageListener, subjectUpdatedListener, participantStatusListener, userStatusListener,
             )
@@ -267,6 +272,8 @@ class SmackXmppSession(private val config: XmppAccountConfig) : XmppSession {
                     .requestMaxStanzasHistory(MUC_JOIN_HISTORY_MAX)
                     .build()
                 muc.join(enter)
+                muc.addParticipantStatusListener(participantStatusListener)
+                muc.addUserStatusListener(userStatusListener)
                 channel.trySend(
                     XmppEvent.MucSelfJoined(roomJid, muc.occupants.map { it.resourceOrEmpty.toString() }),
                 )
