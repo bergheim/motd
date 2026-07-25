@@ -30,7 +30,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         UserEntity::class,
         MemberEntity::class,
     ],
-    version = 17,
+    version = 18,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -549,6 +549,17 @@ val MIGRATION_16_17 = object : Migration(16, 17) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL("ALTER TABLE networks ADD COLUMN protocol TEXT NOT NULL DEFAULT 'IRC'")
         db.execSQL("ALTER TABLE networks ADD COLUMN jid TEXT")
+    }
+}
+
+/**
+ * v17 -> v18: additive index on messages(serverTime, id) so the cross-buffer firehose reverse-chrono
+ * scan is index-served. The existing (bufferId, serverTime, id) index is bufferId-prefixed and cannot
+ * serve a global ORDER BY. No data is touched; the index is derived from existing rows.
+ */
+val MIGRATION_17_18 = object : Migration(17, 18) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("CREATE INDEX IF NOT EXISTS index_messages_serverTime_id ON messages(serverTime, id)")
     }
 }
 

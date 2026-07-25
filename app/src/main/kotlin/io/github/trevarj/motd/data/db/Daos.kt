@@ -527,6 +527,10 @@ interface MessageDao {
     @RawQuery(observedEntities = [MessageEntity::class])
     fun pagingSource(query: SupportSQLiteQuery): PagingSource<Int, MessageEntity>
 
+    /** Cross-buffer firehose stream; the dynamic per-network fool clause forces a raw query. */
+    @RawQuery(observedEntities = [MessageEntity::class])
+    fun firehosePagingSource(query: SupportSQLiteQuery): PagingSource<Int, FirehoseRow>
+
     @RawQuery
     suspend fun rawMessage(query: SupportSQLiteQuery): MessageEntity?
 
@@ -917,6 +921,14 @@ data class SearchHit(
     val networkName: String,
     val caseMapping: String? = null,
     val chanTypes: String? = null,
+)
+
+/** Firehose projection: one conversation row plus its conversation/network tags. */
+data class FirehoseRow(
+    @Embedded val message: MessageEntity,
+    val bufferDisplayName: String,
+    val networkName: String,
+    val networkProtocol: Protocol,
 )
 
 data class MessageBoundaryRow(val msgid: String?, val serverTime: Long?)
