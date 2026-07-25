@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.Forum
@@ -134,6 +135,7 @@ fun ChatListScreen(
     onOpenBuffer: (Long) -> Unit = {},
     onOpenSettings: () -> Unit = {},
     onOpenSearch: () -> Unit = {},
+    onOpenFirehose: () -> Unit = {},
     onOpenOnboarding: () -> Unit = {},
     // Round 5 (plans/16): drawer/network-management pass-throughs.
     onOpenNetworkSettings: (Long) -> Unit = {},
@@ -157,6 +159,7 @@ fun ChatListScreen(
         onOpenBuffer = onOpenBuffer,
         onOpenSettings = onOpenSettings,
         onOpenSearch = onOpenSearch,
+        onOpenFirehose = onOpenFirehose,
         onSetPinned = viewModel::setPinned,
         onSetMuted = viewModel::setMuted,
         onSetArchived = viewModel::setArchived,
@@ -188,6 +191,7 @@ fun ChatListContent(
     onOpenBuffer: (Long) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenSearch: () -> Unit,
+    onOpenFirehose: () -> Unit = {},
     onSetPinned: (Collection<Long>, Boolean) -> Unit,
     onSetMuted: (Collection<Long>, Boolean) -> Unit,
     onSetArchived: (Collection<Long>, Boolean) -> Unit = { _, _ -> },
@@ -334,6 +338,12 @@ fun ChatListContent(
                                 Icon(Icons.Outlined.Delete, stringResource(R.string.chatlist_remove))
                             }
                         } else {
+                        IconButton(onClick = onOpenFirehose, modifier = Modifier.testTag("chatlist_open_firehose")) {
+                            Icon(
+                                Icons.Outlined.Bolt,
+                                contentDescription = stringResource(R.string.chatlist_firehose),
+                            )
+                        }
                         IconButton(onClick = onOpenSearch) {
                             Icon(
                                 Icons.Outlined.Search,

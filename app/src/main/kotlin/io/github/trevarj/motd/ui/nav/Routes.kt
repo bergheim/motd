@@ -19,6 +19,7 @@ import kotlinx.serialization.Serializable
 @Serializable data object NetworksSettingsRoute
 @Serializable data class NetworkSettingsRoute(val networkId: Long)
 @Serializable data class SearchRoute(val bufferId: Long? = null)
+@Serializable data object FirehoseRoute
 @Serializable data class ChannelInfoRoute(val bufferId: Long)
 @Serializable data class ImageViewerRoute(val url: String)
 

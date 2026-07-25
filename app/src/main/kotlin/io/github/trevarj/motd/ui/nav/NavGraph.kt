@@ -20,6 +20,7 @@ import io.github.trevarj.motd.ui.channelinfo.ChannelInfoScreen
 import io.github.trevarj.motd.ui.channellist.ChannelListScreen
 import io.github.trevarj.motd.ui.chat.ChatScreen
 import io.github.trevarj.motd.ui.chatlist.ChatListScreen
+import io.github.trevarj.motd.ui.firehose.FirehoseScreen
 import io.github.trevarj.motd.ui.imageviewer.ImageViewerScreen
 import io.github.trevarj.motd.ui.onboarding.OnboardingScreen
 import io.github.trevarj.motd.ui.search.SearchScreen
@@ -108,6 +109,7 @@ fun MotdNavGraph(
                 onOpenBuffer = { navController.navigate(ChatRoute(it)) },
                 onOpenSettings = { navController.navigate(SettingsRoute) },
                 onOpenSearch = { navController.navigate(SearchRoute()) },
+                onOpenFirehose = { navController.navigate(FirehoseRoute) },
                 onOpenOnboarding = { navController.navigate(OnboardingRoute) },
                 // Round 5: drawer network-management + browse entry points.
                 onOpenNetworkSettings = { navController.navigate(NetworkSettingsRoute(it)) },
@@ -200,6 +202,16 @@ fun MotdNavGraph(
                 onBack = { navController.popBackStack() },
                 onOpenHit = { bufferId, msgid, time, eventId ->
                     navController.navigate(ChatRoute(bufferId, msgid, time, eventId))
+                },
+            )
+        }
+        composable<FirehoseRoute> {
+            FirehoseScreen(
+                onBack = { navController.popBackStack() },
+                onOpenMessage = { bufferId, eventId, time ->
+                    navController.navigate(
+                        ChatRoute(bufferId, jumpToTime = time, jumpToEventId = eventId),
+                    )
                 },
             )
         }
