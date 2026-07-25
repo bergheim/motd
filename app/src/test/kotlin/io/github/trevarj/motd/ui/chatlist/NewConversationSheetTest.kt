@@ -89,4 +89,35 @@ class NewConversationSheetTest {
         assertEquals("xmpp · XMPP", networkPickerLabel(xmppNetwork))
         assertEquals("xmpp · IRC", networkPickerLabel(ircNetwork))
     }
+
+    @Test
+    fun composeGatewayJoinTarget_buildsBiboumiJid_withHashPrefix() {
+        assertEquals(
+            "#systemcrafters%irc.libera.chat@irc.xmpp.glvortex.net",
+            composeGatewayJoinTarget("irc.libera.chat", "systemcrafters", "irc.xmpp.glvortex.net"),
+        )
+    }
+
+    @Test
+    fun composeGatewayJoinTarget_keepsExistingHash_andTrims() {
+        assertEquals(
+            "#chan%irc.oftc.net@gw.example.net",
+            composeGatewayJoinTarget("  irc.oftc.net ", "  #chan ", "gw.example.net"),
+        )
+    }
+
+    @Test
+    fun ircServerOptions_recentsFirst_thenDefaults_deduped() {
+        assertEquals(
+            listOf("irc.oftc.net", "irc.libera.chat"),
+            ircServerOptions(listOf("irc.oftc.net", "irc.libera.chat")),
+        )
+        // Defaults are always present when there are no recents.
+        assertEquals(DEFAULT_IRC_SERVERS, ircServerOptions(emptyList()))
+        // A recent that duplicates a default (case-insensitively) is not listed twice.
+        assertEquals(
+            listOf("IRC.Libera.Chat", "irc.oftc.net"),
+            ircServerOptions(listOf("IRC.Libera.Chat")),
+        )
+    }
 }

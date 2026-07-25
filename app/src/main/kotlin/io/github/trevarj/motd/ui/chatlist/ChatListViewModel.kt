@@ -7,6 +7,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.db.ChatListRow
 import io.github.trevarj.motd.data.db.NetworkEntity
+import io.github.trevarj.motd.data.prefs.IrcGatewayServerPrefs
 import io.github.trevarj.motd.data.prefs.SettingsRepository
 import io.github.trevarj.motd.data.repo.BufferRepository
 import io.github.trevarj.motd.data.repo.NetworkRepository
@@ -16,11 +17,15 @@ import io.github.trevarj.motd.service.ChannelCloseCoordinator
 import io.github.trevarj.motd.service.PresenceKey
 import io.github.trevarj.motd.service.PresenceState
 import io.github.trevarj.motd.service.ReadMarkerSnapshotter
+import io.github.trevarj.motd.service.XmppConnectionSurface
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -60,6 +65,8 @@ class ChatListViewModel @Inject constructor(
     private val bufferRepository: BufferRepository,
     private val networkRepository: NetworkRepository,
     private val connectionManager: ConnectionManager,
+    private val xmppConnectionSurface: XmppConnectionSurface,
+    private val ircGatewayServerPrefs: IrcGatewayServerPrefs,
     private val channelCloseCoordinator: ChannelCloseCoordinator,
     private val readMarkerRepository: ReadMarkerSnapshotter,
     private val settingsRepository: SettingsRepository,
@@ -145,6 +152,43 @@ class ChatListViewModel @Inject constructor(
 
     fun joinChannel(networkId: Long, channel: String) = viewModelScope.launch {
         connectionManager.joinChannel(networkId, channel)
+    }
+
+    // -- IRC-gateway (Biboumi) join support for the new-conversation sheet --
+
+    private val _ircGateways = MutableStateFlow<Map<Long, List<String>>>(emptyMap())
+    /** Discovered IRC-gateway component JIDs per XMPP network, populated lazily by the join sheet. */
+    val ircGateways: StateFlow<Map<Long, List<String>>> = _ircGateways.asStateFlow()
+
+    private val _recentIrcServers = MutableStateFlow<Map<Long, List<String>>>(emptyMap())
+    /** Recently-used IRC servers per network, seeding the join sheet's server dropdown. */
+    val recentIrcServers: StateFlow<Map<Long, List<String>>> = _recentIrcServers.asStateFlow()
+
+    /** Networks whose recents flow already has a live collector, so we only start one each. */
+    private val recentsObserved = ConcurrentHashMap.newKeySet<Long>()
+
+    /**
+     * Kick off gateway discovery + recents observation for [networkId] when the sheet targets it.
+     * Gateway discovery is cached in the connection manager, so re-calling it is cheap; recents get
+     * exactly one long-lived collector per network.
+     */
+    fun prepareGatewayJoin(networkId: Long) {
+        viewModelScope.launch {
+            val gateways = xmppConnectionSurface.listIrcGateways(networkId)
+            _ircGateways.update { it + (networkId to gateways) }
+        }
+        if (recentsObserved.add(networkId)) {
+            viewModelScope.launch {
+                ircGatewayServerPrefs.recentServers(networkId).collect { servers ->
+                    _recentIrcServers.update { it + (networkId to servers) }
+                }
+            }
+        }
+    }
+
+    /** Remember [server] as recently used for [networkId] after a successful gateway join dispatch. */
+    fun rememberIrcServer(networkId: Long, server: String) = viewModelScope.launch {
+        ircGatewayServerPrefs.remember(networkId, server)
     }
 
     /**

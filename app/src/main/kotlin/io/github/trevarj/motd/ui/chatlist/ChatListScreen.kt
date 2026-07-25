@@ -142,6 +142,8 @@ fun ChatListScreen(
     viewModel: ChatListViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val ircGateways by viewModel.ircGateways.collectAsStateWithLifecycle()
+    val recentIrcServers by viewModel.recentIrcServers.collectAsStateWithLifecycle()
 
     // No networks configured -> jump straight into onboarding (once loaded).
     LaunchedEffect(state.loading, state.networks.isEmpty()) {
@@ -161,6 +163,10 @@ fun ChatListScreen(
         onDeleteBuffers = viewModel::deleteBuffers,
         onJoinChannel = viewModel::joinChannel,
         onMessageUser = { networkId, nick -> viewModel.messageUser(networkId, nick, onOpenBuffer) },
+        gatewaysByNetwork = ircGateways,
+        recentServersByNetwork = recentIrcServers,
+        onPrepareGatewayJoin = viewModel::prepareGatewayJoin,
+        onPersistIrcServer = viewModel::rememberIrcServer,
         // Round 5: drawer selection + connectivity + nav.
         onSelectNetwork = viewModel::selectNetwork,
         onConnect = viewModel::connect,
@@ -188,6 +194,11 @@ fun ChatListContent(
     onJoinChannel: (Long, String) -> Unit,
     onMessageUser: (Long, String) -> Unit,
     onDeleteBuffers: (Collection<ChatListRow>) -> Unit = {},
+    // IRC-gateway join (Biboumi) wiring for the new-conversation sheet; defaulted so previews stay terse.
+    gatewaysByNetwork: Map<Long, List<String>> = emptyMap(),
+    recentServersByNetwork: Map<Long, List<String>> = emptyMap(),
+    onPrepareGatewayJoin: (Long) -> Unit = {},
+    onPersistIrcServer: (Long, String) -> Unit = { _, _ -> },
     // Round 5 (plans/16 §3): drawer + scoping. Defaulted so previews stay terse.
     onSelectNetwork: (Long?) -> Unit = {},
     onConnect: (Long) -> Unit = {},
@@ -432,6 +443,10 @@ fun ChatListContent(
                 onOpenChannelList(networkId)
                 scope.launch { sheetState.hide() }.invokeOnCompletion { showSheet = false }
             },
+            gatewaysByNetwork = gatewaysByNetwork,
+            recentServersByNetwork = recentServersByNetwork,
+            onPrepareGatewayJoin = onPrepareGatewayJoin,
+            onPersistIrcServer = onPersistIrcServer,
         )
     }
 

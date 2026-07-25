@@ -47,6 +47,12 @@
     <string name="new_sheet_join">Join</string>
     <string name="new_sheet_message">Message</string>
     <string name="new_sheet_browse">Browse channels…</string>
+    <!-- IRC-gateway join mode (Biboumi XMPP↔IRC) -->
+    <string name="new_sheet_mode_xmpp_room">XMPP room</string>
+    <string name="new_sheet_mode_irc_channel">IRC channel</string>
+    <string name="new_sheet_irc_server_hint">IRC server</string>
+    <string name="new_sheet_irc_channel_hint">Channel</string>
+    <string name="new_sheet_irc_gateway_hint">Gateway</string>
 
     <!-- Onboarding (WP8) -->
     <string name="onboarding_welcome_title">Welcome to motd</string>

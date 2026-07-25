@@ -14,6 +14,8 @@ import io.github.trevarj.motd.data.prefs.ContentPreviewPrefs
 import io.github.trevarj.motd.data.prefs.ContentPreviewPrefsImpl
 import io.github.trevarj.motd.data.prefs.BouncerKindPrefs
 import io.github.trevarj.motd.data.prefs.BouncerKindPrefsImpl
+import io.github.trevarj.motd.data.prefs.IrcGatewayServerPrefs
+import io.github.trevarj.motd.data.prefs.IrcGatewayServerPrefsImpl
 import io.github.trevarj.motd.data.prefs.ReplyPrefs
 import io.github.trevarj.motd.data.prefs.ReplyPrefsImpl
 import io.github.trevarj.motd.data.prefs.DataStoreSettingsRepository
@@ -113,6 +115,9 @@ internal abstract class AppModule {
 
     @Binds @Singleton
     abstract fun bouncerKindPrefs(impl: BouncerKindPrefsImpl): BouncerKindPrefs
+
+    @Binds @Singleton
+    abstract fun ircGatewayServerPrefs(impl: IrcGatewayServerPrefsImpl): IrcGatewayServerPrefs
 
     @Binds @Singleton
     abstract fun presetEnrollmentPrefs(impl: PresetEnrollmentPrefsImpl): PresetEnrollmentPrefs
