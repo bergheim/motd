@@ -42,7 +42,7 @@
     <string name="new_sheet_channel_prefix">#</string>
     <string name="new_sheet_channel_hint">Channel name</string>
     <string name="new_sheet_nick_hint">Nickname</string>
-    <string name="new_sheet_room_jid_hint">room@conference.example.net</string>
+    <string name="new_sheet_room_jid_hint">room name, or room@conference.example.net</string>
     <string name="new_sheet_jid_hint">user@example.net</string>
     <string name="new_sheet_join">Join</string>
     <string name="new_sheet_message">Message</string>

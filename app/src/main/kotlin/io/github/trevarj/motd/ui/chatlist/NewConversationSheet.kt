@@ -202,10 +202,18 @@ internal fun channelJoinTarget(channelName: String): String = "#${channelName.tr
 
 /**
  * Join target for [net]: IRC keeps the `#`-prefix convention via [channelJoinTarget]; XMPP MUC
- * rooms are addressed by a bare room JID, so the trimmed value is used as-is (Task 9).
+ * rooms are addressed by a bare room JID. A full room JID (contains `@`) is used as-is; a bare
+ * room name expands to the account's conventional conference service —
+ * `name@conference.<account domain>` — so joining "motd" on `user@example.net` targets
+ * `motd@conference.example.net` without the user typing the service host.
  */
-internal fun joinTarget(net: NetworkEntity, value: String): String =
-    if (net.protocol == Protocol.XMPP) value.trim() else channelJoinTarget(value)
+internal fun joinTarget(net: NetworkEntity, value: String): String {
+    if (net.protocol != Protocol.XMPP) return channelJoinTarget(value)
+    val trimmed = value.trim().removePrefix("#").lowercase()
+    if (trimmed.isEmpty() || '@' in trimmed) return trimmed
+    val accountDomain = net.jid?.substringAfter('@', "").orEmpty().ifEmpty { net.host }
+    return "$trimmed@conference.$accountDomain"
+}
 
 /**
  * Minimal client-side JID shape check (local@domain[/resource]): rejects obviously malformed

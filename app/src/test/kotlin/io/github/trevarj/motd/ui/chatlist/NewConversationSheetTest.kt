@@ -49,6 +49,24 @@ class NewConversationSheetTest {
     }
 
     @Test
+    fun joinTarget_xmpp_bareName_expandsToAccountConferenceService() {
+        val net = xmppNetwork.copy(jid = "me@example.net")
+        assertEquals("motd-e2e@conference.example.net", joinTarget(net, "motd-e2e"))
+        assertEquals("motd-e2e@conference.example.net", joinTarget(net, "  #MOTD-E2E "))
+    }
+
+    @Test
+    fun joinTarget_xmpp_bareName_fallsBackToHostWhenJidMissing() {
+        assertEquals("room@conference.xmpp.example", joinTarget(xmppNetwork, "room"))
+    }
+
+    @Test
+    fun joinTarget_xmpp_fullJid_neverRewritten() {
+        val net = xmppNetwork.copy(jid = "me@example.net")
+        assertEquals("room@muc.other.org", joinTarget(net, "room@muc.other.org"))
+    }
+
+    @Test
     fun isValidJid_acceptsUserAndRoomAddresses() {
         assertTrue(isValidJid("user@example.net"))
         assertTrue(isValidJid("room@conference.example.net"))
