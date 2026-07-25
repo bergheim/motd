@@ -1,19 +1,11 @@
-# TEMP(xmpp-support): fast debug-APK lane for on-device iteration. Assembles ONLY the FOSS debug
-# APK (no tests, lint, schema verify, or emulator E2E) so a build is available in a few minutes;
-# the full ci.yml still runs in parallel as the real gate. Removed before merge.
 name: Fast debug APK (TEMP)
+# TEMP(xmpp-support): assembles ONLY the FOSS debug APK (no tests/lint/E2E) for fast on-device
+# iteration; full ci.yml still runs in parallel as the real gate. Removed before merge.
 on:
   push:
     branches: [xmpp-support]
   workflow_dispatch:
-
-permissions:
-  contents: read
-
-concurrency:
-  group: fast-apk-${{ github.ref }}
-  cancel-in-progress: true
-
+permissions: { contents: read }
 jobs:
   apk:
     runs-on: ubuntu-latest
