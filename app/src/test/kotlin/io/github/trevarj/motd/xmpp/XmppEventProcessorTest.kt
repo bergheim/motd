@@ -260,4 +260,26 @@ class XmppEventProcessorTest {
         assertEquals(MessageKind.PRIVMSG, byId.getValue(plainId).kind)
         assertEquals("hi there", byId.getValue(plainId).text)
     }
+
+    @Test
+    fun mePrefix_edgeCases_bareAndEmptyStayPlain() = runTest {
+        val buf = p.ensureQueryBuffer(nid, "bob@example.net")
+        val bare = p.createPending(nid, buf, "/me", "o1")!!            // no trailing space
+        val empty = p.createPending(nid, buf, "/me ", "o2")!!          // prefix only, no action text
+        val byId = rows(buf).associateBy { it.id }
+        assertEquals(MessageKind.PRIVMSG, byId.getValue(bare).kind)
+        assertEquals("/me", byId.getValue(bare).text)
+        assertEquals(MessageKind.PRIVMSG, byId.getValue(empty).kind)
+        assertEquals("/me ", byId.getValue(empty).text)
+    }
+
+    @Test
+    fun mePrefix_mucAction_mentionDetectedOnStrippedText() = runTest {
+        p.process(nid, XmppEvent.MucSelfJoined("room@conf.x.net", listOf("me")))
+        p.process(nid, XmppEvent.MucMessage("room@conf.x.net", "alice", "/me waves to me", "s1", null))
+        val row = rows(db.bufferDao().byName(nid, "room@conf.x.net")!!.id).single { it.sender == "alice" }
+        assertEquals(MessageKind.ACTION, row.kind)
+        assertEquals("waves to me", row.text)
+        assertTrue(row.hasMention) // our nick "me" is mentioned in the action text
+    }
 }

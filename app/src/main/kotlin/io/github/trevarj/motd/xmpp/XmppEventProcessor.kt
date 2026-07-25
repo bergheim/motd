@@ -434,8 +434,12 @@ class XmppEventProcessor @Inject constructor(
      * kind plus the text with the prefix stripped; otherwise PRIVMSG with the text unchanged.
      */
     private fun actionAware(body: String): Pair<MessageKind, String> =
-        if (body.startsWith(ME_PREFIX)) MessageKind.ACTION to body.substring(ME_PREFIX.length)
-        else MessageKind.PRIVMSG to body
+        // Require actual text after the prefix so a bare "/me " never becomes a blank action row.
+        if (body.length > ME_PREFIX.length && body.startsWith(ME_PREFIX)) {
+            MessageKind.ACTION to body.substring(ME_PREFIX.length)
+        } else {
+            MessageKind.PRIVMSG to body
+        }
 
     private companion object {
         const val SERVER_BUFFER_NAME = "*"
