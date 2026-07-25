@@ -73,8 +73,14 @@ class ChannelListViewModel @Inject constructor(
 
     private var started = false
 
-    /** Set once in [start] from the network's persisted row; IRC unless proven XMPP. */
-    private var protocol: Protocol = Protocol.IRC
+    /**
+     * Cached from the network's persisted row, first opportunistically by [start] and — since
+     * that population is asynchronous — resolved on demand by [fetch] if still unknown, so the
+     * IRC/XMPP branch decision is never time-sensitive (a [fetch] invoked before [start]'s network
+     * lookup completes must not silently take the IRC branch for an XMPP account and reproduce the
+     * old clientFor timeout).
+     */
+    private var protocol: Protocol? = null
 
     /** Idempotent entry point: mirrors connection state and auto-fetches once Ready. */
     fun start() {
@@ -171,7 +177,13 @@ class ChannelListViewModel @Inject constructor(
         if (s.loading || s.isRoot || !s.isReady) return
         _state.value = s.copy(loading = true, error = null)
         viewModelScope.launch {
-            val result = if (protocol == Protocol.XMPP) fetchXmppRooms(s.query) else fetchIrcChannels(s.query)
+            // Resolve BEFORE branching: protocol may still be null if fetch() races start()'s own
+            // network lookup (e.g. an immediate UI retry), and guessing IRC here would silently
+            // reproduce the old clientFor timeout for an XMPP account.
+            val proto = protocol
+                ?: networkRepository.networkById(networkId)?.protocol?.also { protocol = it }
+                ?: Protocol.IRC
+            val result = if (proto == Protocol.XMPP) fetchXmppRooms(s.query) else fetchIrcChannels(s.query)
             _state.value = _state.value.copy(
                 loading = false,
                 loaded = result.isSuccess,

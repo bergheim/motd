@@ -1,5 +1,6 @@
 package io.github.trevarj.motd.xmpp
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -368,13 +369,14 @@ class SmackXmppSession(private val config: XmppAccountConfig) : XmppSession {
                         MucRoomListing(roomJid = hosted.jid.toString(), name = hosted.name)
                     }
                 }
-            } catch (e: XMPPException.XMPPErrorException) {
-                LOGGER.log(Level.WARNING, "MUC room discovery failed", e)
-                emptyList()
-            } catch (e: org.jivesoftware.smack.SmackException) {
-                // Covers NoResponseException (no reply from the server), NotConnectedException
-                // (transport already gone), and NotAMucServiceException (disco lied about MUC
-                // support) — none of these are worth crashing browse over.
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (e: Exception) {
+                // Covers XMPPErrorException, NoResponseException (no reply from the server),
+                // NotConnectedException (transport already gone), NotAMucServiceException (disco
+                // lied about MUC support), InterruptedException, and any other runtime surprise —
+                // none of these are worth crashing browse over; a server with no reachable MUC
+                // service (or a hiccup discovering one) just lists no rooms.
                 LOGGER.log(Level.WARNING, "MUC room discovery failed", e)
                 emptyList()
             }
