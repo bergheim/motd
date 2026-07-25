@@ -208,6 +208,9 @@ internal class XmppAccountActor(
         swallowTransport { session?.leaveMuc(roomJid) }
     }
 
+    /** Channel-browser MUC discovery; no live session (not yet connected/dropped) means no rooms. */
+    suspend fun listRooms(): List<MucRoomListing> = session?.listRooms() ?: emptyList()
+
     /** Run a best-effort wire write: a dead/closed transport must not crash the caller, but
      *  cancellation must still propagate (unlike [runCatching], which would swallow it). */
     private inline fun swallowTransport(block: () -> Unit) {

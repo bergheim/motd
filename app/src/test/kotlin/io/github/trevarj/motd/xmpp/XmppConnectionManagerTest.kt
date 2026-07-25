@@ -242,6 +242,30 @@ class XmppConnectionManagerTest {
     }
 
     @Test
+    fun listRooms_returnsSessionListings_whenReady() = runTest {
+        val s1 = FakeXmppSession().apply {
+            roomListings = listOf(
+                MucRoomListing(roomJid = "lobby@conf.glvortex.net", name = "Lobby"),
+                MucRoomListing(roomJid = "random@conf.glvortex.net", name = null),
+            )
+        }
+        bootstrap(listOf(s1))
+        manager.connect(nid)
+        advanceUntilIdle()
+        s1.emit(XmppEvent.Ready(selfJid))
+        advanceUntilIdle()
+
+        assertEquals(s1.roomListings, manager.listRooms(nid))
+    }
+
+    @Test
+    fun listRooms_emptyList_whenNoActor() = runTest {
+        bootstrap(emptyList())
+        // No connect() was ever called, so no actor exists for this network id.
+        assertEquals(emptyList<MucRoomListing>(), manager.listRooms(nid))
+    }
+
+    @Test
     fun ircRows_areIgnored() = runTest {
         bootstrap(emptyList())
         val ircNid = db.networkDao().insert(

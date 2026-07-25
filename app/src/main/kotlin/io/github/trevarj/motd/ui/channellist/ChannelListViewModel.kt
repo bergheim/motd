@@ -6,12 +6,14 @@ import androidx.lifecycle.viewModelScope
 import androidx.navigation.toRoute
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.github.trevarj.motd.data.db.NetworkRole
+import io.github.trevarj.motd.data.db.Protocol
 import io.github.trevarj.motd.data.repo.BufferRepository
 import io.github.trevarj.motd.data.repo.NetworkRepository
 import io.github.trevarj.motd.irc.client.ChannelListing
 import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 import io.github.trevarj.motd.service.ConnectionManager
+import io.github.trevarj.motd.service.XmppConnectionSurface
 import io.github.trevarj.motd.ui.nav.ChannelListRoute
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -61,6 +63,7 @@ class ChannelListViewModel @Inject constructor(
     private val networkRepository: NetworkRepository,
     private val bufferRepository: BufferRepository,
     private val connectionManager: ConnectionManager,
+    private val xmppConnectionSurface: XmppConnectionSurface,
 ) : ViewModel() {
 
     private val networkId: Long = savedStateHandle.toRoute<ChannelListRoute>().networkId
@@ -70,12 +73,16 @@ class ChannelListViewModel @Inject constructor(
 
     private var started = false
 
+    /** Set once in [start] from the network's persisted row; IRC unless proven XMPP. */
+    private var protocol: Protocol = Protocol.IRC
+
     /** Idempotent entry point: mirrors connection state and auto-fetches once Ready. */
     fun start() {
         if (started) return
         started = true
         viewModelScope.launch {
             val network = networkRepository.networkById(networkId)
+            protocol = network?.protocol ?: Protocol.IRC
             _state.value = _state.value.copy(
                 networkName = network?.name.orEmpty(),
                 isRoot = network?.role == NetworkRole.BOUNCER_ROOT,
@@ -157,30 +164,14 @@ class ChannelListViewModel @Inject constructor(
         _state.value = _state.value.copy(query = query)
     }
 
-    /** Fetch (or re-fetch) via LIST/ELIST, then sort by user count descending. */
+    /** Fetch (or re-fetch): LIST/ELIST for IRC, MUC service discovery for XMPP. Sorted by user
+     *  count descending (a no-op order-preserving pass for XMPP, which has no user counts). */
     fun fetch() {
         val s = _state.value
         if (s.loading || s.isRoot || !s.isReady) return
-        val args = listArgsFor(s.query)
         _state.value = s.copy(loading = true, error = null)
         viewModelScope.launch {
-            val client = withTimeoutOrNull(CLIENT_WAIT_TIMEOUT_MS) {
-                var current = connectionManager.clientFor(networkId)
-                while (current == null) {
-                    delay(CLIENT_WAIT_POLL_MS)
-                    current = connectionManager.clientFor(networkId)
-                }
-                current
-            }
-            val result = if (client == null) {
-                Result.failure(IllegalStateException("Channel listing is not available yet. Try again."))
-            } else runCatching {
-                client.listChannels(
-                    mask = args.mask,
-                    minUsers = args.minUsers,
-                    cap = channelListLimit(s.query),
-                )
-            }
+            val result = if (protocol == Protocol.XMPP) fetchXmppRooms(s.query) else fetchIrcChannels(s.query)
             _state.value = _state.value.copy(
                 loading = false,
                 loaded = result.isSuccess,
@@ -188,6 +179,27 @@ class ChannelListViewModel @Inject constructor(
                 error = result.exceptionOrNull()?.message,
             )
         }
+    }
+
+    private suspend fun fetchIrcChannels(query: String): Result<List<ChannelListing>> {
+        val args = listArgsFor(query)
+        val client = withTimeoutOrNull(CLIENT_WAIT_TIMEOUT_MS) {
+            var current = connectionManager.clientFor(networkId)
+            while (current == null) {
+                delay(CLIENT_WAIT_POLL_MS)
+                current = connectionManager.clientFor(networkId)
+            }
+            current
+        }
+        return if (client == null) {
+            Result.failure(IllegalStateException("Channel listing is not available yet. Try again."))
+        } else runCatching {
+            client.listChannels(mask = args.mask, minUsers = args.minUsers, cap = channelListLimit(query))
+        }
+    }
+
+    private suspend fun fetchXmppRooms(query: String): Result<List<ChannelListing>> = runCatching {
+        filterChannelListings(xmppConnectionSurface.listRooms(networkId).map(::toChannelListing), query)
     }
 
     /** Send a JOIN and retain its pending state until EventProcessor persists our self-JOIN. */

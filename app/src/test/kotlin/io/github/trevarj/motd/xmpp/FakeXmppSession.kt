@@ -14,6 +14,9 @@ class FakeXmppSession : XmppSession {
     /** Room JIDs whose [joinMuc] should throw, to exercise per-room rejoin degradation. */
     var failJoinFor: Set<String> = emptySet()
 
+    /** Canned [listRooms] result; channel-browser MUC discovery tests configure this directly. */
+    var roomListings: List<MucRoomListing> = emptyList()
+
     suspend fun emit(event: XmppEvent) = channel.send(event)
     override suspend fun connectAndLogin() { connectCalls++; failLoginWith?.let { throw it } }
     override suspend fun joinMuc(roomJid: String, nick: String) {
@@ -28,5 +31,6 @@ class FakeXmppSession : XmppSession {
         sentMuc += Triple(roomJid, text, originId)
     }
     override suspend fun sendChatState(toBareJid: String, composing: Boolean) = Unit
+    override suspend fun listRooms(): List<MucRoomListing> = roomListings
     override suspend fun close() { closed = true; channel.close() }
 }

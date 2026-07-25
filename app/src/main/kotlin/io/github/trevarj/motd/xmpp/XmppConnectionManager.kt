@@ -135,6 +135,9 @@ class XmppConnectionManager @Inject constructor(
         actors[networkId]?.joinChannel(roomJid)
     }
 
+    /** Channel-browser MUC discovery; no live actor for [networkId] means no rooms. */
+    suspend fun listRooms(networkId: Long): List<MucRoomListing> = actors[networkId]?.listRooms() ?: emptyList()
+
     suspend fun partChannel(bufferId: Long, reason: String?) {
         val buffer = db.bufferDao().rawById(bufferId) ?: return
         if (buffer.type != BufferType.CHANNEL) return

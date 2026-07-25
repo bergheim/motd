@@ -359,6 +359,28 @@ class SmackXmppSession(private val config: XmppAccountConfig) : XmppSession {
         }
     }
 
+    override suspend fun listRooms(): List<MucRoomListing> {
+        return withContext(Dispatchers.IO) {
+            try {
+                val manager = MultiUserChatManager.getInstanceFor(connection)
+                manager.mucServiceDomains.flatMap { domain ->
+                    manager.getRoomsHostedBy(domain).values.map { hosted ->
+                        MucRoomListing(roomJid = hosted.jid.toString(), name = hosted.name)
+                    }
+                }
+            } catch (e: XMPPException.XMPPErrorException) {
+                LOGGER.log(Level.WARNING, "MUC room discovery failed", e)
+                emptyList()
+            } catch (e: org.jivesoftware.smack.SmackException) {
+                // Covers NoResponseException (no reply from the server), NotConnectedException
+                // (transport already gone), and NotAMucServiceException (disco lied about MUC
+                // support) — none of these are worth crashing browse over.
+                LOGGER.log(Level.WARNING, "MUC room discovery failed", e)
+                emptyList()
+            }
+        }
+    }
+
     override suspend fun close() {
         withContext(Dispatchers.IO) {
             connection.disconnect(Presence(Presence.Type.unavailable))

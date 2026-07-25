@@ -7,6 +7,7 @@ import io.github.trevarj.motd.data.db.TimelineEventId
 import io.github.trevarj.motd.di.ApplicationScope
 import io.github.trevarj.motd.irc.client.IrcClient
 import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.xmpp.MucRoomListing
 import javax.inject.Inject
 import javax.inject.Qualifier
 import javax.inject.Singleton
@@ -45,6 +46,8 @@ interface XmppConnectionSurface {
     suspend fun sendMessage(bufferId: Long, text: String): SendAcceptance
     suspend fun sendTyping(bufferId: Long, state: String)
     suspend fun joinChannel(networkId: Long, roomJid: String)
+    /** Channel-browser MUC discovery for an XMPP network id (xmpp-support room-browse). */
+    suspend fun listRooms(networkId: Long): List<MucRoomListing>
     suspend fun partChannel(bufferId: Long, reason: String?)
     suspend fun ensureQueryBuffer(networkId: Long, bareJid: String): Long
     suspend fun ensureServerBuffer(networkId: Long): Long

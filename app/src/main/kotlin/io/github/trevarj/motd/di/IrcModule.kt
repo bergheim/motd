@@ -14,6 +14,7 @@ import io.github.trevarj.motd.service.IrcConnectionManager
 import io.github.trevarj.motd.service.RoutingConnectionManager
 import io.github.trevarj.motd.service.SendAcceptance
 import io.github.trevarj.motd.service.XmppConnectionSurface
+import io.github.trevarj.motd.xmpp.MucRoomListing
 import io.github.trevarj.motd.xmpp.XmppConnectionManager
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.StateFlow
@@ -70,6 +71,8 @@ internal abstract class IrcModule {
                     impl.sendTyping(bufferId, state)
                 override suspend fun joinChannel(networkId: Long, roomJid: String) =
                     impl.joinChannel(networkId, roomJid)
+                override suspend fun listRooms(networkId: Long): List<MucRoomListing> =
+                    impl.listRooms(networkId)
                 override suspend fun partChannel(bufferId: Long, reason: String?) =
                     impl.partChannel(bufferId, reason)
                 override suspend fun ensureQueryBuffer(networkId: Long, bareJid: String): Long =

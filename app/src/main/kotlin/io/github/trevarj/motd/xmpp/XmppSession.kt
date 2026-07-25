@@ -8,6 +8,9 @@ data class XmppAccountConfig(
     val directTls: Boolean, val mucNick: String,
 )
 
+/** One MUC room discovered via service discovery; [name] is the room's disco#items name, if any. */
+data class MucRoomListing(val roomJid: String, val name: String?)
+
 /**
  * Protocol seam over one Smack connection. Implementations MUST register all account-level
  * listeners before login and room listeners before join; every callback is surfaced only
@@ -21,6 +24,9 @@ interface XmppSession {
     suspend fun sendChat(toBareJid: String, text: String, originId: String)
     suspend fun sendMuc(roomJid: String, text: String, originId: String)
     suspend fun sendChatState(toBareJid: String, composing: Boolean)
+    /** Discover MUC rooms across every MUC service domain this connection can see (channel-browser
+     *  support). A server with no reachable MUC service is not an error worth surfacing. */
+    suspend fun listRooms(): List<MucRoomListing>
     suspend fun close()
 }
 

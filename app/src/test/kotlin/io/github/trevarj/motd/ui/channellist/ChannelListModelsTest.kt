@@ -3,6 +3,7 @@ package io.github.trevarj.motd.ui.channellist
 import io.github.trevarj.motd.irc.client.ChannelListing
 import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
+import io.github.trevarj.motd.xmpp.MucRoomListing
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -154,5 +155,42 @@ class ChannelListModelsTest {
     @Test
     fun `search query allows the larger result cap`() {
         assertEquals(CHANNEL_SEARCH_LIMIT, channelListLimit("kotlin"))
+    }
+
+    // -- MUC room-browse mapping/filtering (xmpp-support) --
+
+    @Test
+    fun `toChannelListing uses the room JID as name and disco name as topic`() {
+        val named = toChannelListing(MucRoomListing(roomJid = "lobby@conf.example.net", name = "Lobby"))
+        assertEquals("lobby@conf.example.net", named.name)
+        assertEquals("Lobby", named.topic)
+        assertEquals(0, named.userCount)
+
+        val unnamed = toChannelListing(MucRoomListing(roomJid = "random@conf.example.net", name = null))
+        assertEquals("", unnamed.topic)
+    }
+
+    @Test
+    fun `filterChannelListings blank query keeps every listing`() {
+        val listings = listOf(ChannelListing("lobby@conf.example.net", 0, "Lobby"))
+        assertEquals(listings, filterChannelListings(listings, "  "))
+    }
+
+    @Test
+    fun `filterChannelListings matches room JID or topic substring case-insensitively`() {
+        val listings = listOf(
+            ChannelListing("lobby@conf.example.net", 0, "Lobby"),
+            ChannelListing("random@conf.example.net", 0, "Off Topic"),
+        )
+
+        assertEquals(
+            listOf("lobby@conf.example.net"),
+            filterChannelListings(listings, "LOBBY").map { it.name },
+        )
+        assertEquals(
+            listOf("random@conf.example.net"),
+            filterChannelListings(listings, "topic").map { it.name },
+        )
+        assertEquals(emptyList<ChannelListing>(), filterChannelListings(listings, "nonexistent"))
     }
 }

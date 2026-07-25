@@ -8,6 +8,7 @@ import io.github.trevarj.motd.data.db.inMemoryDb
 import io.github.trevarj.motd.data.db.network
 import io.github.trevarj.motd.irc.client.IrcClient
 import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.xmpp.MucRoomListing
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runCurrent
@@ -119,6 +120,12 @@ class RoutingConnectionManagerTest {
 
         override suspend fun joinChannel(networkId: Long, roomJid: String) {
             lastJoinChannel = networkId to roomJid
+        }
+
+        var lastListRooms: Long? = null
+        override suspend fun listRooms(networkId: Long): List<MucRoomListing> {
+            lastListRooms = networkId
+            return emptyList()
         }
 
         override suspend fun partChannel(bufferId: Long, reason: String?) {
