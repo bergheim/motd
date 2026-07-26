@@ -5,6 +5,7 @@ import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import io.github.trevarj.motd.data.db.TimelineAnchor
 import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.irc.transport.OkioLineTransport
 import io.github.trevarj.motd.irc.transport.TransportFactory
@@ -81,6 +82,8 @@ internal abstract class IrcModule {
                     impl.ensureQueryBuffer(networkId, bareJid)
                 override suspend fun ensureServerBuffer(networkId: Long): Long =
                     impl.ensureServerBuffer(networkId)
+                override suspend fun markReadLocal(bufferId: Long, anchor: TimelineAnchor) =
+                    impl.markReadLocal(bufferId, anchor)
             }
     }
 }

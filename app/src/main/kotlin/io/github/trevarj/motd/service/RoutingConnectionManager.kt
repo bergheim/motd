@@ -54,6 +54,9 @@ interface XmppConnectionSurface {
     suspend fun partChannel(bufferId: Long, reason: String?)
     suspend fun ensureQueryBuffer(networkId: Long, bareJid: String): Long
     suspend fun ensureServerBuffer(networkId: Long): Long
+
+    /** Advance the local read anchor (clears the badge, cancels the notification); no wire sync. */
+    suspend fun markReadLocal(bufferId: Long, anchor: TimelineAnchor)
 }
 
 /** Inert [XmppConnectionSurface] for components (e.g. ViewModels under test) constructed without XMPP. */
@@ -73,6 +76,7 @@ object NoopXmppConnectionSurface : XmppConnectionSurface {
     override suspend fun partChannel(bufferId: Long, reason: String?) = Unit
     override suspend fun ensureQueryBuffer(networkId: Long, bareJid: String): Long = 0L
     override suspend fun ensureServerBuffer(networkId: Long): Long = 0L
+    override suspend fun markReadLocal(bufferId: Long, anchor: TimelineAnchor) = Unit
 }
 
 /**
@@ -221,8 +225,8 @@ class RoutingConnectionManager @Inject constructor(
             null -> false
         }
 
-    // sendReact/requestMembers/markRead are IRC-only features (reactions, roster refresh, wire
-    // read-marker sync) with nothing to route to on the XMPP side; XMPP buffers silently no-op.
+    // sendReact/requestMembers are IRC-only features (reactions, roster refresh) with nothing to
+    // route to on the XMPP side; XMPP buffers silently no-op.
 
     override suspend fun sendReact(bufferId: Long, msgid: String, emoji: String) {
         if (bufferProtocol(bufferId) == Protocol.IRC) irc.sendReact(bufferId, msgid, emoji)
@@ -233,8 +237,13 @@ class RoutingConnectionManager @Inject constructor(
     }
 
     override suspend fun markRead(bufferId: Long, anchor: TimelineAnchor) {
-        // XMPP read anchors are local-only in v1 (no wire MARKREAD-equivalent wired up yet).
-        if (bufferProtocol(bufferId) == Protocol.IRC) irc.markRead(bufferId, anchor)
+        // IRC advances the local anchor and syncs it over the wire (draft/read-marker); XMPP does the
+        // same local advance (clears badge, cancels notification) but has no wire sync in v1 (XEP-0333).
+        when (bufferProtocol(bufferId)) {
+            Protocol.IRC -> irc.markRead(bufferId, anchor)
+            Protocol.XMPP -> xmpp.markReadLocal(bufferId, anchor)
+            null -> Unit
+        }
     }
 
     // -- Unconditional IRC delegation: no XMPP counterpart exists for these yet. --

@@ -11,6 +11,7 @@ import io.github.trevarj.motd.data.db.MotdDatabase
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
 import io.github.trevarj.motd.data.db.Protocol
+import io.github.trevarj.motd.data.sync.CanonicalTimelineStore
 import io.github.trevarj.motd.data.sync.MessageNotifier
 import io.github.trevarj.motd.data.sync.TypingTrackerImpl
 import kotlinx.coroutines.test.runTest
@@ -35,7 +36,7 @@ class XmppEventProcessorTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         db = Room.inMemoryDatabaseBuilder(context, MotdDatabase::class.java)
             .allowMainThreadQueries().build()
-        p = XmppEventProcessor(db, TypingTrackerImpl(), MessageNotifier.Noop)
+        p = XmppEventProcessor(db, TypingTrackerImpl(), MessageNotifier.Noop, CanonicalTimelineStore(db))
         nid = db.networkDao().insert(
             NetworkEntity(
                 name = "glvortex", protocol = Protocol.XMPP, role = NetworkRole.DIRECT,

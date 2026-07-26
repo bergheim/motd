@@ -134,6 +134,7 @@ class ChannelListViewModelTest {
         override suspend fun partChannel(bufferId: Long, reason: String?) = Unit
         override suspend fun ensureQueryBuffer(networkId: Long, bareJid: String): Long = 0
         override suspend fun ensureServerBuffer(networkId: Long): Long = 0
+        override suspend fun markReadLocal(bufferId: Long, anchor: TimelineAnchor) = Unit
     }
 
     private val networkId = 1L

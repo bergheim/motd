@@ -9,6 +9,7 @@ import io.github.trevarj.motd.data.db.MotdDatabase
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
 import io.github.trevarj.motd.data.db.Protocol
+import io.github.trevarj.motd.data.sync.CanonicalTimelineStore
 import io.github.trevarj.motd.data.sync.MessageNotifier
 import io.github.trevarj.motd.data.sync.TypingTrackerImpl
 import io.github.trevarj.motd.irc.event.IrcClientState
@@ -74,7 +75,7 @@ class XmppConnectionManagerTest {
             .setTransactionExecutor(dispatcher.asExecutor())
             .allowMainThreadQueries()
             .build()
-        processor = XmppEventProcessor(db, TypingTrackerImpl(), MessageNotifier.Noop)
+        processor = XmppEventProcessor(db, TypingTrackerImpl(), MessageNotifier.Noop, CanonicalTimelineStore(db))
         appScope = CoroutineScope(SupervisorJob() + dispatcher)
         factory = FakeXmppSessionFactory(sessions)
         manager = XmppConnectionManager(context, db, processor, factory, appScope)
