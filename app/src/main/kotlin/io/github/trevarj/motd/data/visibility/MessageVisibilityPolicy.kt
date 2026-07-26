@@ -116,7 +116,7 @@ internal class MessageVisibilitySql(
     private fun notJoinPartQuit(alias: String): String =
         "${column(alias, "kind")} NOT IN ($JOIN_PART_QUIT_KIND_SQL)"
 
-    private fun notFool(alias: String): String =
+    internal fun notFool(alias: String): String =
         if (alias == "m") defaultNotFoolPredicate else buildNotFoolPredicate(alias)
 
     private fun buildNotFoolPredicate(alias: String = "m"): String {
@@ -187,6 +187,49 @@ internal fun countVisibleUnreadInTimelinePrefixQuery(
             after.eventId,
             maxCount.coerceAtLeast(0),
         ),
+    )
+}
+
+/** One network's id paired with its IRC identity rules, used to scope the firehose fool clause. */
+data class FirehoseNetwork(
+    val networkId: Long,
+    val identityRules: IrcIdentityRules = IrcIdentityRules(),
+)
+
+/**
+ * Cross-buffer reverse-chronological conversation stream (the "firehose"). Conversation-kind
+ * filtering is a single static IN clause; the fool predicate is composed per network so a nick
+ * muted on one network is not hidden on another — each side normalizes the configured fools with
+ * that network's own casemap. A network with no matching fools contributes `(n.id = X AND 1)`, and
+ * any network absent from [networks] is left unfiltered via the trailing `n.id NOT IN (...)` term.
+ */
+internal fun firehosePagingQuery(
+    spec: MessageVisibilitySpec,
+    networks: List<FirehoseNetwork>,
+): SimpleSQLiteQuery {
+    val foolClause = if (spec.fools.isEmpty() || networks.isEmpty()) {
+        TRUE
+    } else {
+        val ids = networks.joinToString(",") { it.networkId.toString() }
+        networks.joinToString(
+            separator = " OR ",
+            prefix = "(",
+            postfix = " OR n.id NOT IN ($ids))",
+        ) { net ->
+            "(n.id = ${net.networkId} AND ${MessageVisibilitySql(spec, net.identityRules).notFool("m")})"
+        }
+    }
+    return SimpleSQLiteQuery(
+        "SELECT m.*, b.displayName AS bufferDisplayName, n.name AS networkName, " +
+            "n.protocol AS networkProtocol " +
+            "FROM messages m " +
+            "JOIN buffers b ON b.id = m.bufferId " +
+            "JOIN networks n ON n.id = b.networkId " +
+            // Channels and DMs only (no SERVER console), and not a dismissed QUERY. Kind filter keeps
+            // conversation lines; the per-network fool clause hides muted users.
+            "WHERE b.type IN ('CHANNEL','QUERY') AND b.dismissed = 0 " +
+            "AND m.kind IN ($CONVERSATION_KIND_SQL) AND $foolClause " +
+            "ORDER BY m.serverTime DESC, m.id DESC",
     )
 }
 

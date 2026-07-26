@@ -29,6 +29,8 @@ import io.github.trevarj.motd.data.prefs.SettingsRepository
 import io.github.trevarj.motd.data.repo.BufferRepository
 import io.github.trevarj.motd.data.repo.BufferRepositoryImpl
 import io.github.trevarj.motd.data.repo.ChatHistoryMediatorFactory
+import io.github.trevarj.motd.data.repo.FirehoseRepository
+import io.github.trevarj.motd.data.repo.FirehoseRepositoryImpl
 import io.github.trevarj.motd.data.repo.LinkPreviewRepository
 import io.github.trevarj.motd.data.repo.LinkPreviewRepositoryImpl
 import io.github.trevarj.motd.data.repo.MessageRepository
@@ -99,6 +101,9 @@ internal abstract class AppModule {
 
     @Binds @Singleton
     abstract fun searchRepository(impl: SearchRepositoryImpl): SearchRepository
+
+    @Binds @Singleton
+    abstract fun firehoseRepository(impl: FirehoseRepositoryImpl): FirehoseRepository
 
     @Binds @Singleton
     abstract fun linkPreviewRepository(impl: LinkPreviewRepositoryImpl): LinkPreviewRepository

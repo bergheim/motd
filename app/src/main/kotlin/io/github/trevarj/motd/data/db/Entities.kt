@@ -216,6 +216,9 @@ data class RoomAliasEntity(
     tableName = "messages",
     indices = [
         Index(value = ["bufferId", "serverTime", "id"]),
+        // Cross-buffer reverse-chrono scan for the firehose (v18); bufferId-prefixed index above
+        // cannot serve a global ORDER BY serverTime, id.
+        Index(value = ["serverTime", "id"]),
         Index(value = ["replyToEventId"]),
         Index(value = ["bufferId", "msgid"]),
         Index(value = ["bufferId", "replyToMsgid", "replyToEventId"]),

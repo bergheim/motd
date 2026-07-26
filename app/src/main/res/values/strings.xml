@@ -4,7 +4,13 @@
 
     <!-- Chat list (WP6) -->
     <string name="chatlist_search">Search</string>
+    <string name="chatlist_firehose">Firehose</string>
     <string name="chatlist_settings">Settings</string>
+
+    <!-- Firehose: unified cross-buffer conversation stream -->
+    <string name="firehose_title">Firehose</string>
+    <string name="firehose_empty_title">Nothing here yet</string>
+    <string name="firehose_empty_message">Conversation lines from every channel and DM will appear here.</string>
     <string name="chatlist_new_conversation">New conversation</string>
     <string name="chatlist_scroll_to_top">Scroll to top</string>
     <plurals name="chatlist_scroll_to_top_with_unread">
