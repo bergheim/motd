@@ -64,13 +64,6 @@ jobs:
             app/build/reports/tests/testFossDebugUnitTest/**
             app/build/reports/tests/testFossReleaseUnitTest/**
           if-no-files-found: ignore
-      # TEMP(firehose): capture the KSP-generated v18 schema export; removed once 18.json is committed.
-      - name: TEMP upload generated schemas
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: generated-schemas-fh-${{ github.run_id }}
-          path: app/schemas/
       - name: Verify checked-in Room schemas
         run: |
           git diff --exit-code -- app/schemas

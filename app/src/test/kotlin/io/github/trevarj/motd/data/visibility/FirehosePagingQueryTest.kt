@@ -30,7 +30,7 @@ class FirehosePagingQueryTest {
             networks = listOf(FirehoseNetwork(1L), FirehoseNetwork(2L)),
         ).sql
         assertTrue(sql.contains("AND 1 ORDER BY"))
-        assertFalse(sql.contains("n.id ="))
+        assertFalse(sql.contains("n.id = 1")) // no per-network fool clause (the JOIN uses n.id = b.networkId)
     }
 
     @Test
