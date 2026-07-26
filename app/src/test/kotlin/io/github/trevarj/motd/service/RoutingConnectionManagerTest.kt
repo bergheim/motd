@@ -141,6 +141,11 @@ class RoutingConnectionManagerTest {
 
         override suspend fun ensureQueryBuffer(networkId: Long, bareJid: String): Long = 300L
         override suspend fun ensureServerBuffer(networkId: Long): Long = 400L
+
+        var lastMarkReadLocal: Pair<Long, TimelineAnchor>? = null
+        override suspend fun markReadLocal(bufferId: Long, anchor: TimelineAnchor) {
+            lastMarkReadLocal = bufferId to anchor
+        }
     }
 
     private lateinit var db: MotdDatabase
@@ -239,5 +244,21 @@ class RoutingConnectionManagerTest {
         assertTrue(result)
         assertEquals(xmppBufferId to "bye", xmpp.lastPartChannel)
         assertNull(irc.lastPartChannelForClose)
+    }
+
+    @Test
+    fun markRead_ircBuffer_routesToIrcWireSync() = runTest {
+        val router = router(backgroundScope)
+        router.markRead(ircBufferId, TimelineAnchor(10L, 1L))
+        assertTrue(irc.markReadCalled)
+        assertNull(xmpp.lastMarkReadLocal)
+    }
+
+    @Test
+    fun markRead_xmppBuffer_routesToLocalAdvance() = runTest {
+        val router = router(backgroundScope)
+        router.markRead(xmppBufferId, TimelineAnchor(10L, 1L))
+        assertEquals(xmppBufferId to TimelineAnchor(10L, 1L), xmpp.lastMarkReadLocal)
+        assertFalse(irc.markReadCalled)
     }
 }
