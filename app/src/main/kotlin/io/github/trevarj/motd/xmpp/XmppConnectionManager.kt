@@ -6,6 +6,7 @@ import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.db.MotdDatabase
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.Protocol
+import io.github.trevarj.motd.data.db.TimelineAnchor
 import io.github.trevarj.motd.di.ApplicationScope
 import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.service.SendAcceptance
@@ -221,6 +222,9 @@ class XmppConnectionManager @Inject constructor(
         requireXmpp(networkId)
         return processor.ensureServerBuffer(networkId)
     }
+
+    suspend fun markReadLocal(bufferId: Long, anchor: TimelineAnchor) =
+        processor.markReadLocal(bufferId, anchor)
 
     /**
      * These entry points return a buffer id, so a silent wrong answer for a non-XMPP row is worse

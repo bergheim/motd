@@ -7,6 +7,7 @@ import io.github.trevarj.motd.data.db.MotdDatabase
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
 import io.github.trevarj.motd.data.db.Protocol
+import io.github.trevarj.motd.data.sync.CanonicalTimelineStore
 import io.github.trevarj.motd.data.sync.MessageNotifier
 import io.github.trevarj.motd.data.sync.TypingTrackerImpl
 import io.github.trevarj.motd.xmpp.RosterContact
@@ -48,7 +49,7 @@ class XmppEventProcessorFuzzTest {
             val opened = open(databaseName)
             db = opened
             val networkId = opened.networkDao().insert(network(fuzz))
-            val processor = XmppEventProcessor(opened, TypingTrackerImpl(), MessageNotifier.Noop)
+            val processor = XmppEventProcessor(opened, TypingTrackerImpl(), MessageNotifier.Noop, CanonicalTimelineStore(opened))
 
             val senders = listOf("alice-${fuzz.index}@example.net", "bob-${fuzz.index}@example.net")
             val stanzaIds = listOf("s1-${fuzz.index}", "s2-${fuzz.index}")

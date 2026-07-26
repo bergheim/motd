@@ -1,6 +1,7 @@
 package io.github.trevarj.motd.data.sync
 
 import androidx.room.withTransaction
+import kotlinx.coroutines.CancellationException
 import io.github.trevarj.motd.data.db.EventAliasEntity
 import io.github.trevarj.motd.data.db.EventAliasNamespace
 import io.github.trevarj.motd.data.db.EventObservationEntity
@@ -145,6 +146,29 @@ class CanonicalTimelineStore @Inject constructor(
 
     suspend fun releaseNotification(eventId: TimelineEventId) =
         dao.releaseNotification(eventId)
+
+    /**
+     * Durable single-shot notification presentation: claim the event, run [present], then mark it
+     * handled. On failure the claim is released so startup recovery can retry; on cancellation it is
+     * released and the cancellation rethrown. A lost claim (another owner, or already handled)
+     * returns without presenting. Shared by [EventProcessor] and the XMPP writer so both post
+     * through the same exactly-once discipline.
+     */
+    suspend fun presentNotification(eventId: TimelineEventId, present: suspend () -> Unit) {
+        if (!claimNotification(eventId)) return
+        try {
+            present()
+            completeNotification(eventId)
+        } catch (cancelled: CancellationException) {
+            releaseNotification(eventId)
+            throw cancelled
+        } catch (error: Exception) {
+            releaseNotification(eventId)
+            diagnostics.record("notifications", "presentation_failed") {
+                mapOf("event_id" to eventId, "error" to (error::class.simpleName ?: "unknown"))
+            }
+        }
+    }
 
     /** Move canonical rows and rekey only the room-scoped aliases they already owned. */
     suspend fun moveEventsToRoom(networkId: Long, fromRoomId: RoomId, toRoomId: RoomId) =

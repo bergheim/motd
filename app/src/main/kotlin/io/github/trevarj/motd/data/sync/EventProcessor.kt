@@ -459,11 +459,7 @@ class EventProcessor @Inject constructor(
                     }
                 }
             }
-            if (origin.notifies &&
-                !sourceIsSelf &&
-                type != BufferType.SERVER &&
-                (type == BufferType.QUERY || hasMention)
-            ) {
+            if (origin.notifies && shouldNotify(sourceIsSelf, type, hasMention)) {
                 presentNotification(canonical.id) {
                     maybeNotify(
                         networkId,
@@ -2250,11 +2246,8 @@ class EventProcessor @Inject constructor(
         eventId: TimelineEventId,
         e: IrcEvent.ChatMessage,
     ) {
-        if (e.isSelf) return
-        // Never raise a notification for a SERVER buffer: a MOTD line containing the user's nick
-        // must not fire a mention (plans/16 §5.6.5).
-        if (type == BufferType.SERVER) return
-        if (type != BufferType.QUERY && !hasMention) return
+        // Gate shared with the XMPP writer (self / SERVER / DM-or-mention) — see [shouldNotify].
+        if (!shouldNotify(e.isSelf, type, hasMention)) return
         notifier.onCanonicalIncoming(networkId, bufferId, type, hasMention, eventId, e)
     }
 
@@ -2262,21 +2255,8 @@ class EventProcessor @Inject constructor(
      * Atomically serialize notification presentation, but only mark it durable after the notifier
      * returns. Startup releases interrupted claims and rebuilds the notification from Room.
      */
-    private suspend fun presentNotification(eventId: TimelineEventId, present: suspend () -> Unit) {
-        if (!canonicalTimeline.claimNotification(eventId)) return
-        try {
-            present()
-            canonicalTimeline.completeNotification(eventId)
-        } catch (cancelled: CancellationException) {
-            canonicalTimeline.releaseNotification(eventId)
-            throw cancelled
-        } catch (error: Exception) {
-            canonicalTimeline.releaseNotification(eventId)
-            diagnostics.record("notifications", "presentation_failed") {
-                mapOf("event_id" to eventId, "error" to error::class.simpleName)
-            }
-        }
-    }
+    private suspend fun presentNotification(eventId: TimelineEventId, present: suspend () -> Unit) =
+        canonicalTimeline.presentNotification(eventId, present)
 
     private fun kindOf(k: IrcEvent.ChatKind): MessageKind = when (k) {
         IrcEvent.ChatKind.PRIVMSG -> MessageKind.PRIVMSG

@@ -9,11 +9,19 @@ import io.github.trevarj.motd.data.db.MemberEntity
 import io.github.trevarj.motd.data.db.MessageEntity
 import io.github.trevarj.motd.data.db.MessageKind
 import io.github.trevarj.motd.data.db.MotdDatabase
+import io.github.trevarj.motd.data.db.TimelineAnchor
 import io.github.trevarj.motd.data.db.TimelineEventEntity
 import io.github.trevarj.motd.data.db.TimelineEventId
 import io.github.trevarj.motd.data.db.UserEntity
+import io.github.trevarj.motd.data.sync.CanonicalTimelineStore
 import io.github.trevarj.motd.data.sync.MessageNotifier
 import io.github.trevarj.motd.data.sync.TypingTrackerImpl
+import io.github.trevarj.motd.data.sync.shouldNotify
+import io.github.trevarj.motd.irc.event.IrcEvent
+import io.github.trevarj.motd.irc.event.MessageContext
+import io.github.trevarj.motd.irc.event.ServerTimeSource
+import io.github.trevarj.motd.irc.proto.Prefix
+import io.github.trevarj.motd.service.resolveAndAdvanceCurrentReadTarget
 import java.nio.charset.StandardCharsets
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -37,6 +45,7 @@ class XmppEventProcessor @Inject constructor(
     private val db: MotdDatabase,
     private val typing: TypingTrackerImpl,
     private val notifier: MessageNotifier,
+    private val canonicalTimeline: CanonicalTimelineStore,
 ) {
     private val locks = ConcurrentHashMap<Long, Mutex>()
 
@@ -176,7 +185,7 @@ class XmppEventProcessor @Inject constructor(
         val bareJid = normalizeJid(event.fromBareJid)
         val bufferId = ensureQueryBufferLocked(networkId, bareJid)
         val (kind, text) = actionAware(event.text)
-        insertDedupedMessage(
+        val eventId = insertDedupedMessage(
             networkId = networkId,
             bufferId = bufferId,
             senderIdentity = bareJid,
@@ -187,6 +196,12 @@ class XmppEventProcessor @Inject constructor(
             isSelf = false,
             delayedAtMs = event.delayedAtMs,
             hasMention = false,
+        )
+        // A 1:1 message always notifies (QUERY); mention detection is irrelevant for DMs.
+        maybeNotifyLive(
+            networkId, bufferId, BufferType.QUERY, eventId, event.delayedAtMs,
+            isSelf = false, hasMention = false, sender = bareJid, target = bareJid, text = text, kind = kind,
+            stanzaId = event.stanzaId,
         )
     }
 
@@ -217,7 +232,7 @@ class XmppEventProcessor @Inject constructor(
         }
         val (kind, text) = actionAware(event.text)
         val hasMention = !isOwnNick && ourNick != null && containsMention(text, ourNick)
-        insertDedupedMessage(
+        val eventId = insertDedupedMessage(
             networkId = networkId,
             bufferId = bufferId,
             // MUC identity uses occupantNick rather than the spec's sender bare JID: real JIDs are
@@ -232,6 +247,11 @@ class XmppEventProcessor @Inject constructor(
             isSelf = isOwnNick,
             delayedAtMs = event.delayedAtMs,
             hasMention = hasMention,
+        )
+        maybeNotifyLive(
+            networkId, bufferId, BufferType.CHANNEL, eventId, event.delayedAtMs,
+            isSelf = isOwnNick, hasMention = hasMention, sender = event.occupantNick, target = roomJid,
+            text = text, kind = kind, stanzaId = stanzaId,
         )
     }
 
@@ -412,6 +432,72 @@ class XmppEventProcessor @Inject constructor(
         } else {
             eventId
         }
+    }
+
+    /**
+     * Present a live-socket notification for a just-persisted incoming message, mirroring the IRC
+     * path ([io.github.trevarj.motd.data.sync.EventProcessor] → shared
+     * [CanonicalTimelineStore.presentNotification]). Skips deduped rows (null [eventId]) and replayed
+     * history (a delay-stamped stanza — [delayedAtMs] set), so a MUC join backlog cannot flood
+     * notifications. The [IrcEvent.ChatMessage] is the notifier's neutral payload; with a real event
+     * id the notifier re-reads time/actor/mention/fool from the canonical row, so only [sender] and
+     * [text] are load-bearing here. Runs after the insert transaction has committed.
+     */
+    private suspend fun maybeNotifyLive(
+        networkId: Long,
+        bufferId: Long,
+        type: BufferType,
+        eventId: TimelineEventId?,
+        delayedAtMs: Long?,
+        isSelf: Boolean,
+        hasMention: Boolean,
+        sender: String,
+        target: String,
+        text: String,
+        kind: MessageKind,
+        stanzaId: String?,
+    ) {
+        if (eventId == null || delayedAtMs != null) return
+        if (!shouldNotify(isSelf, type, hasMention)) return
+        canonicalTimeline.presentNotification(eventId) {
+            notifier.onCanonicalIncoming(
+                networkId, bufferId, type, hasMention, eventId,
+                IrcEvent.ChatMessage(
+                    ctx = MessageContext(
+                        msgid = stanzaId,
+                        serverTime = System.currentTimeMillis(),
+                        account = null,
+                        batchId = null,
+                        label = null,
+                        serverTimeSource = ServerTimeSource.LOCAL,
+                    ),
+                    kind = kind.toChatKind(),
+                    source = Prefix(sender),
+                    target = target,
+                    text = text,
+                    isSelf = isSelf,
+                    replyToMsgid = null,
+                ),
+            )
+        }
+    }
+
+    /**
+     * Advance the local read anchor for an XMPP buffer, clearing its unread/mention badge and
+     * cancelling any posted notification via [MessageNotifier.onRead]. This is the protocol-neutral
+     * half of the IRC read-marker path ([io.github.trevarj.motd.service.ConnectionManagerImpl]),
+     * without the wire MARKREAD (XEP-0333 read sync is deferred). Preserves the sole-writer
+     * invariant: the XMPP processor is the only writer of XMPP read state.
+     */
+    suspend fun markReadLocal(bufferId: Long, anchor: TimelineAnchor) {
+        val target = resolveAndAdvanceCurrentReadTarget(db, bufferId, anchor) ?: return
+        notifier.onRead(target.buffer.id, target.anchor)
+    }
+
+    private fun MessageKind.toChatKind(): IrcEvent.ChatKind = when (this) {
+        MessageKind.NOTICE -> IrcEvent.ChatKind.NOTICE
+        MessageKind.ACTION -> IrcEvent.ChatKind.ACTION
+        else -> IrcEvent.ChatKind.PRIVMSG
     }
 
     /** Insert an administrative (JOIN/PART/TOPIC/ERROR/KICK) row with no dedup identity. */
