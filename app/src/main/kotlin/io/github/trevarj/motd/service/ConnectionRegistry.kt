@@ -21,6 +21,12 @@ internal data class ConnectionActorSnapshot(
     val isAlive: Boolean,
     val fingerprint: String,
     val generation: Long,
+    /**
+     * Monotonic id of the actor's current attached connection. Unlike [generation] (per actor
+     * rebuild), this advances on every redial, so it is the seam's per-session identity: an actor
+     * that transparently reconnects still yields a fresh value for ConnectionState.Ready.
+     */
+    val sessionSeq: Long,
 )
 
 internal data class ConnectionRegistrySnapshot(
@@ -91,8 +97,11 @@ internal class ConnectionRegistry(
         val generation: Long,
         var connection: ManagedConnection? = null,
         var isAlive: Boolean = false,
+        /** See [ConnectionActorSnapshot.sessionSeq]; bumped on every non-null connection attach. */
+        var sessionSeq: Long = 0,
     )
     private val actors = LinkedHashMap<Long, OwnedActor>()
+    private var sessionCounter = 0L
     private val states = LinkedHashMap<Long, IrcClientState>()
     private val terminalFingerprints = HashMap<Long, String>()
     private val observerJobs = mutableListOf<Job>()
@@ -262,7 +271,10 @@ internal class ConnectionRegistry(
             }
             is Command.ActorConnection -> {
                 if (generations.isCurrent(command.networkId, command.generation)) {
-                    actors[command.networkId]?.connection = command.connection
+                    actors[command.networkId]?.let { owned ->
+                        owned.connection = command.connection
+                        if (command.connection != null) owned.sessionSeq = ++sessionCounter
+                    }
                     publish()
                 }
             }
@@ -395,6 +407,7 @@ internal class ConnectionRegistry(
                     isAlive = owned.isAlive,
                     fingerprint = owned.fingerprint,
                     generation = owned.generation,
+                    sessionSeq = owned.sessionSeq,
                 )
             },
             states = immutableStates,
