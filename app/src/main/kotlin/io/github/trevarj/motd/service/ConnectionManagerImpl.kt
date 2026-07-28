@@ -474,7 +474,7 @@ class ConnectionManagerImpl @Inject constructor(
             // reading the snapshot's generation here observes the same (or a newer) publish.
             val actors = registry.snapshot.value.actors
             states.mapValues { (networkId, state) ->
-                state.toConnectionState(generation = actors[networkId]?.generation ?: 0L)
+                state.toConnectionState(generation = actors[networkId]?.sessionSeq ?: 0L)
             }
         }
 

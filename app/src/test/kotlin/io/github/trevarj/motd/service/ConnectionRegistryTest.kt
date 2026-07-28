@@ -44,6 +44,16 @@ class ConnectionRegistryTest {
         override fun probe() { probes++ }
     }
 
+    private class FakeManagedConnection : ManagedConnection {
+        override val state =
+            kotlinx.coroutines.flow.MutableStateFlow<IrcClientState>(IrcClientState.Disconnected)
+        override val criticalEvents =
+            kotlinx.coroutines.channels.Channel<io.github.trevarj.motd.irc.event.IrcEvent>()
+        override fun start() = Unit
+        override fun stop() = Unit
+        override suspend fun awaitTermination() = Unit
+    }
+
     private fun network(id: Long = 1, host: String = "irc.example") = NetworkEntity(
         id = id,
         name = "network-$id",
@@ -379,5 +389,31 @@ class ConnectionRegistryTest {
 
         assertTrue(registry.snapshot.value.actors.isEmpty())
         assertTrue(registry.connectionStates.value.isEmpty())
+    }
+
+    @Test
+    fun redialOnTheSameActorAdvancesSessionSeq() = runTest {
+        val registry = ConnectionRegistry(
+            backgroundScope,
+            actorFactory = { _, _ -> FakeActor() },
+            isConfigurationFailure = { false },
+        )
+        registry.beginStart()
+        registry.reconcile(listOf(network() to "fp"), setOf(1), emptySet())
+        val generation = registry.snapshot.value.actors.getValue(1).generation
+
+        registry.actorConnection(1, generation, FakeManagedConnection())
+        runCurrent()
+        val firstSession = registry.snapshot.value.actors.getValue(1).sessionSeq
+
+        // A transparent redial attaches a new connection to the SAME actor. The per-session id
+        // must still advance so seam observers detect the reconnect even when the intermediate
+        // non-Ready state emission is conflated (codex review, group 1).
+        registry.actorConnection(1, generation, FakeManagedConnection())
+        runCurrent()
+        val secondSession = registry.snapshot.value.actors.getValue(1).sessionSeq
+
+        assertTrue(firstSession > 0)
+        assertTrue(secondSession > firstSession)
     }
 }
