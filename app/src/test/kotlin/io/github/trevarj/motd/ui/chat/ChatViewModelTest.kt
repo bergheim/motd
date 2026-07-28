@@ -1387,6 +1387,7 @@ class ChatViewModelTest {
             dccTransferDao = db.dccTransferDao(),
             dccTransferController = FakeDccTransferController(),
             connectionManager = manager,
+            ircSessions = fakeIrcSessions(manager),
             typingTracker = FakeTypingTracker(),
             foregroundBufferTracker = foreground,
             linkPreviewRepository = object : LinkPreviewRepository {

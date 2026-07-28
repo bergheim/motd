@@ -49,6 +49,7 @@ import io.github.trevarj.motd.diagnostics.AutoFollowTrace
 import io.github.trevarj.motd.irc.proto.IrcMessage
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 import io.github.trevarj.motd.irc.client.HistoryAvailability
+import io.github.trevarj.motd.ircbackend.IrcSessions
 import io.github.trevarj.motd.service.ConnectionManager
 import io.github.trevarj.motd.service.RosterLoadState
 import io.github.trevarj.motd.service.PresenceKey
@@ -183,6 +184,7 @@ class ChatViewModel @Inject constructor(
     private val dccTransferDao: DccTransferDao,
     private val dccTransferController: DccTransferController,
     private val connectionManager: ConnectionManager,
+    private val ircSessions: IrcSessions,
     private val typingTracker: TypingTracker,
     private val foregroundBufferTracker: ForegroundBufferTracker,
     private val linkPreviewRepository: LinkPreviewRepository,
@@ -895,16 +897,16 @@ class ChatViewModel @Inject constructor(
                 onOpenBuffer(connectionManager.ensureQueryBuffer(nid, cmd.nick))
             }
             is ChatCommand.Nick -> networkId?.let { nid ->
-                connectionManager.clientFor(nid)?.send(IrcMessage(command = "NICK", params = listOf(cmd.nick)))
+                ircSessions.sessionFor(nid)?.send(IrcMessage(command = "NICK", params = listOf(cmd.nick)))
             }
             is ChatCommand.Topic -> networkId?.let { nid ->
                 val channel = state.value.buffer?.ircTarget ?: return@launch
-                connectionManager.clientFor(nid)
+                ircSessions.sessionFor(nid)
                     ?.send(IrcMessage(command = "TOPIC", params = listOf(channel, cmd.topic)))
             }
             // `/away [msg]` — confirmations (305/306) land in the SERVER buffer via §5.6.3.
             is ChatCommand.Away -> networkId?.let { nid ->
-                connectionManager.clientFor(nid)
+                ircSessions.sessionFor(nid)
                     ?.send(IrcMessage(command = "AWAY", params = listOfNotNull(cmd.message)))
             }
             is ChatCommand.Whois -> openNickSheet(cmd.nick)
@@ -913,7 +915,7 @@ class ChatViewModel @Inject constructor(
             is ChatCommand.Kick -> if (state.value.buffer?.type == BufferType.CHANNEL) kick(cmd.nick, cmd.reason)
             is ChatCommand.Ban -> if (state.value.buffer?.type == BufferType.CHANNEL) ban(cmd.nick)
             is ChatCommand.RawLine -> networkId?.let { nid ->
-                connectionManager.clientFor(nid)?.send(IrcMessage.parse(cmd.line))
+                ircSessions.sessionFor(nid)?.send(IrcMessage.parse(cmd.line))
             }
         }
     }
@@ -929,7 +931,7 @@ class ChatViewModel @Inject constructor(
             uiEventQueue.enqueue(ChatUiEvent.InvalidCommand)
             return
         }
-        val client = connectionManager.clientFor(nid) ?: return
+        val client = ircSessions.sessionFor(nid) ?: return
         val submission = prepareDraftSubmission(raw) ?: return
         try {
             client.send(msg)
@@ -958,7 +960,7 @@ class ChatViewModel @Inject constructor(
         ensureMembersObserved()
         _nickSheet.value = NickSheetState(nick = nick)
         val networkId = state.value.buffer?.networkId ?: return
-        val client = connectionManager.clientFor(networkId)
+        val client = ircSessions.sessionFor(networkId)
         val normalizedNick = identityRules.value.normalize(nick)
         nickDetailsJob?.cancel()
         nickDetailsJob = viewModelScope.launch {
@@ -1001,7 +1003,7 @@ class ChatViewModel @Inject constructor(
         val nid = state.value.buffer?.networkId ?: return@launch
         val channel = state.value.buffer?.ircTarget ?: return@launch
         val flag = (if (grant) "+" else "-") + mode
-        connectionManager.clientFor(nid)?.send(IrcMessage(command = "MODE", params = listOf(channel, flag, nick)))
+        ircSessions.sessionFor(nid)?.send(IrcMessage(command = "MODE", params = listOf(channel, flag, nick)))
     }
 
     /** KICK <channel> <nick> [:reason]. */
@@ -1009,14 +1011,14 @@ class ChatViewModel @Inject constructor(
         val nid = state.value.buffer?.networkId ?: return@launch
         val channel = state.value.buffer?.ircTarget ?: return@launch
         val params = if (reason.isNullOrBlank()) listOf(channel, nick) else listOf(channel, nick, reason)
-        connectionManager.clientFor(nid)?.send(IrcMessage(command = "KICK", params = params))
+        ircSessions.sessionFor(nid)?.send(IrcMessage(command = "KICK", params = params))
     }
 
     /** MODE <channel> +b <banMask(nick)>. */
     fun ban(nick: String) = viewModelScope.launch {
         val nid = state.value.buffer?.networkId ?: return@launch
         val channel = state.value.buffer?.ircTarget ?: return@launch
-        connectionManager.clientFor(nid)
+        ircSessions.sessionFor(nid)
             ?.send(IrcMessage(command = "MODE", params = listOf(channel, "+b", io.github.trevarj.motd.ui.channelinfo.banMask(nick))))
     }
 
@@ -1055,7 +1057,7 @@ class ChatViewModel @Inject constructor(
         val myNick = (connState.value as? ConnectionState.Ready)?.selfHandle ?: return false
         val normalize = nickNormalizer()
         val me = _members.value.firstOrNull { normalize(it.nick) == normalize(myNick) } ?: return false
-        val order = buffer.networkId.let { connectionManager.clientFor(it) }
+        val order = buffer.networkId.let { ircSessions.sessionFor(it) }
             ?.let { io.github.trevarj.motd.ui.channelinfo.prefixOrderFrom(it.isupport.prefixModes) }
             ?: io.github.trevarj.motd.ui.channelinfo.DEFAULT_PREFIX_ORDER
         return io.github.trevarj.motd.ui.channelinfo.canModerate(me.prefixes, order)
