@@ -17,7 +17,7 @@ import io.github.trevarj.motd.data.db.NetworkRole
 import io.github.trevarj.motd.data.db.ObfsMode
 import io.github.trevarj.motd.data.db.ircTarget
 import io.github.trevarj.motd.di.ApplicationScope
-import io.github.trevarj.motd.service.ConnectionManager
+import io.github.trevarj.motd.ircbackend.IrcSessions
 import io.github.trevarj.motd.service.LocalSocksProvider
 import io.github.trevarj.motd.service.resolveTransportProxy
 import java.io.InputStream
@@ -59,7 +59,7 @@ interface DccTransferController {
 class DccTransferControllerImpl @Inject constructor(
     @param:ApplicationContext private val context: Context,
     private val db: MotdDatabase,
-    private val connectionManager: ConnectionManager,
+    private val ircSessions: IrcSessions,
     private val localSocksProvider: LocalSocksProvider,
     @param:ApplicationScope private val applicationScope: CoroutineScope,
 ) : DccTransferController {
@@ -274,7 +274,7 @@ class DccTransferControllerImpl @Inject constructor(
     }
 
     private suspend fun sendCtcp(networkId: Long, target: String, ctcp: String): Boolean {
-        val client = connectionManager.clientFor(networkId) ?: return false
+        val client = ircSessions.sessionFor(networkId) ?: return false
         return client.sendMessage(target, ctcp, replyToMsgid = null, label = "motd-${UUID.randomUUID()}")
     }
 

@@ -1,6 +1,7 @@
 package io.github.trevarj.motd.bouncer
 
 import io.github.trevarj.motd.irc.event.IrcEvent
+import io.github.trevarj.motd.ircbackend.IrcSessions
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
@@ -53,9 +54,10 @@ interface BouncerServSessionProvider {
 @Singleton
 class ConnectionBouncerServSessionProvider @Inject constructor(
     private val connections: io.github.trevarj.motd.service.ConnectionManager,
+    private val ircSessions: IrcSessions,
 ) : BouncerServSessionProvider {
     override suspend fun session(rootNetworkId: Long): BouncerServSession? {
-        val client = connections.clientFor(rootNetworkId) ?: return null
+        val client = ircSessions.sessionFor(rootNetworkId) ?: return null
         return BouncerServSession(
             token = client,
             events = client.broadcastEvents,
@@ -63,7 +65,7 @@ class ConnectionBouncerServSessionProvider @Inject constructor(
                 val bufferId = connections.ensureQueryBuffer(rootNetworkId, SERVICE_NICK)
                 connections.sendMessage(bufferId, wire)
             },
-            isCurrent = { connections.clientFor(rootNetworkId) === client },
+            isCurrent = { ircSessions.sessionFor(rootNetworkId) === client },
         )
     }
 }

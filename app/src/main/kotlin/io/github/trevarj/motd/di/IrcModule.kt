@@ -7,6 +7,7 @@ import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import io.github.trevarj.motd.irc.transport.OkioLineTransport
 import io.github.trevarj.motd.irc.transport.TransportFactory
+import io.github.trevarj.motd.ircbackend.IrcSessions
 import io.github.trevarj.motd.service.ConnectionManager
 import io.github.trevarj.motd.service.ConnectionManagerImpl
 import javax.inject.Singleton
@@ -20,6 +21,10 @@ import javax.inject.Singleton
 internal abstract class IrcModule {
     @Binds @Singleton
     abstract fun connectionManager(impl: ConnectionManagerImpl): ConnectionManager
+
+    /** IRC-owned session accessor for IRC feature surfaces (docs/backend-neutral-xmpp-rollout.md). */
+    @Binds @Singleton
+    abstract fun ircSessions(impl: ConnectionManagerImpl): IrcSessions
 
     companion object {
         /**

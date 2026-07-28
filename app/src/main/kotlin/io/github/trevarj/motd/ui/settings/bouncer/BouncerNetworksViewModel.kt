@@ -16,6 +16,7 @@ import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
 import io.github.trevarj.motd.data.repo.NetworkRepository
 import io.github.trevarj.motd.backend.ConnectionState
+import io.github.trevarj.motd.ircbackend.IrcSessions
 import io.github.trevarj.motd.service.ConnectionManager
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -50,6 +51,7 @@ data class BouncerNetworksUiState(
 class BouncerNetworksViewModel @Inject constructor(
     private val networkRepository: NetworkRepository,
     private val connectionManager: ConnectionManager,
+    private val ircSessions: IrcSessions,
     private val bouncerServ: BouncerServClient,
     private val messageDao: MessageDao,
 ) : ViewModel() {
@@ -283,7 +285,7 @@ class BouncerNetworksViewModel @Inject constructor(
 
     private suspend fun refreshInline(showLoading: Boolean = false) {
         if (showLoading) _state.value = _state.value.copy(loading = true, error = null)
-        val client = connectionManager.clientFor(rootNetworkId)
+        val client = ircSessions.sessionFor(rootNetworkId)
         val listing = if (client == null) {
             emptyList()
         } else {

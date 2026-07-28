@@ -13,6 +13,7 @@ import io.github.trevarj.motd.data.db.NetworkRole
 import io.github.trevarj.motd.data.repo.NetworkRepository
 import io.github.trevarj.motd.irc.client.IrcClient
 import io.github.trevarj.motd.backend.ConnectionState
+import io.github.trevarj.motd.ircbackend.IrcSessions
 import io.github.trevarj.motd.service.CertPrompt
 import io.github.trevarj.motd.service.ConnectionManager
 import kotlinx.coroutines.CompletableDeferred
@@ -73,9 +74,13 @@ class BouncerNetworksViewModelTest {
         }
         val ready = ConnectionState.Ready("motd")
         val connections = FakeConnectionManager(mapOf(root.id to ready))
+        val sessions = object : IrcSessions {
+            override fun sessionFor(networkId: Long) = connections.clientFor(networkId)
+        }
         val viewModel = BouncerNetworksViewModel(
             networkRepository = repository,
             connectionManager = connections,
+            ircSessions = sessions,
             bouncerServ = FakeBouncerServClient,
             messageDao = database.messageDao(),
         )

@@ -5,7 +5,7 @@ import io.github.trevarj.motd.irc.client.IrcCommandException
 import io.github.trevarj.motd.irc.client.IrcDisconnectedException
 import io.github.trevarj.motd.irc.client.BouncerNetwork
 import io.github.trevarj.motd.irc.event.IrcClientState
-import io.github.trevarj.motd.service.ConnectionManager
+import io.github.trevarj.motd.ircbackend.IrcSessions
 import kotlinx.coroutines.flow.StateFlow
 import javax.inject.Inject
 
@@ -20,9 +20,9 @@ interface OnboardingBouncerOperations {
 }
 
 class ConnectionManagerOnboardingBouncerOperations @Inject constructor(
-    private val connectionManager: ConnectionManager,
+    private val ircSessions: IrcSessions,
 ) : OnboardingBouncerOperations {
-    override fun snapshots(rootNetworkId: Long) = connectionManager.clientFor(rootNetworkId)?.bouncerNetworks
+    override fun snapshots(rootNetworkId: Long) = ircSessions.sessionFor(rootNetworkId)?.bouncerNetworks
 
     override suspend fun list(rootNetworkId: Long): List<BouncerNetwork> =
         client(rootNetworkId).bouncerListNetworks()
@@ -31,7 +31,7 @@ class ConnectionManagerOnboardingBouncerOperations @Inject constructor(
         client(rootNetworkId).bouncerAddNetwork(mapOf("name" to name, "host" to host))
 
     private fun client(rootNetworkId: Long): IrcClient =
-        connectionManager.clientFor(rootNetworkId)
+        ircSessions.sessionFor(rootNetworkId)
             ?.takeIf { it.state.value is IrcClientState.Ready }
             ?: throw IrcDisconnectedException("BOUNCER", "connection is no longer ready")
 }
