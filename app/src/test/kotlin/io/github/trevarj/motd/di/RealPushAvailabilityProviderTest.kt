@@ -4,7 +4,6 @@ import app.cash.turbine.test
 import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
-import io.github.trevarj.motd.irc.client.IrcClient
 import io.github.trevarj.motd.push.NetworkPushHealth
 import io.github.trevarj.motd.push.PushRegistrationState
 import io.github.trevarj.motd.service.CertPrompt
@@ -31,7 +30,6 @@ class RealPushAvailabilityProviderTest {
         override val serverPushAvailable: MutableStateFlow<Boolean> = MutableStateFlow(false),
     ) : ConnectionManager {
         override val connectionStates: StateFlow<Map<Long, ConnectionState>> = MutableStateFlow(emptyMap())
-        override fun clientFor(networkId: Long): IrcClient? = null
         override suspend fun startAll() = Unit
         override suspend fun stopAll() = Unit
         override suspend fun connect(networkId: Long) = Unit

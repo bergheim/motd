@@ -3,7 +3,6 @@ package io.github.trevarj.motd.service
 import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.backend.ReactionCapability
 import io.github.trevarj.motd.irc.client.HistoryAvailability
-import io.github.trevarj.motd.irc.client.IrcClient
 import io.github.trevarj.motd.irc.event.IrcEvent
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 import io.github.trevarj.motd.data.db.TimelineAnchor
@@ -138,9 +137,6 @@ interface ConnectionManager {
      * until the neutral history boundary lands (docs/backend-neutral-xmpp-rollout.md).
      */
     fun historyAvailability(networkId: Long): HistoryAvailability? = null
-
-    /** Live client for a connected network, null otherwise. */
-    fun clientFor(networkId: Long): IrcClient?
 
     /** Start/stop the whole subsystem (invoked by service / delivery-mode changes). */
     suspend fun startAll()

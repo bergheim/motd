@@ -8,7 +8,6 @@ import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
 import io.github.trevarj.motd.data.repo.NetworkRepository
 import io.github.trevarj.motd.data.prefs.PresetEnrollmentPrefs
-import io.github.trevarj.motd.irc.client.IrcClient
 import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.service.CertPrompt
 import io.github.trevarj.motd.service.ConnectionManager
@@ -83,7 +82,6 @@ class AddNetworkViewModelTest {
         fun emit(id: Long, state: ConnectionState) {
             connectionStates.value = connectionStates.value + (id to state)
         }
-        override fun clientFor(networkId: Long): IrcClient? = null
         override suspend fun startAll() = Unit
         override suspend fun stopAll() = Unit
         override suspend fun connect(networkId: Long) { connected += networkId }

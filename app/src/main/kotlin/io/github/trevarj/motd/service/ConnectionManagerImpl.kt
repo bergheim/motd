@@ -498,7 +498,8 @@ class ConnectionManagerImpl @Inject constructor(
         graceMs = EMBEDDED_REALITY_BACKGROUND_GRACE_MS,
     )
 
-    override fun clientFor(networkId: Long): IrcClient? =
+    /** Adapter-internal session accessor; external surfaces go through [IrcSessions]. */
+    internal fun clientFor(networkId: Long): IrcClient? =
         (registry.snapshot.value.actors[networkId]?.connection as? IrcClientConnection)?.client
 
     override fun sessionFor(networkId: Long): IrcClient? = clientFor(networkId)

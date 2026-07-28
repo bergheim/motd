@@ -7,7 +7,6 @@ import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
 import io.github.trevarj.motd.data.db.inMemoryDb
 import io.github.trevarj.motd.di.AppClock
-import io.github.trevarj.motd.irc.client.IrcClient
 import io.github.trevarj.motd.backend.ConnectionState
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -198,7 +197,6 @@ class PendingChannelCloseCoordinatorTest {
         var failPart = false
         var reportPartSuccess = true
         override val connectionStates: StateFlow<Map<Long, ConnectionState>> = states
-        override fun clientFor(networkId: Long): IrcClient? = null
         override suspend fun startAll() = Unit
         override suspend fun stopAll() = Unit
         override suspend fun connect(networkId: Long) = Unit

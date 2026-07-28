@@ -100,7 +100,7 @@ class BouncerNetworksViewModelTest {
     private class FakeConnectionManager(initial: Map<Long, ConnectionState>) : ConnectionManager {
         override val connectionStates = MutableStateFlow(initial)
         override val certPrompts = MutableStateFlow<List<CertPrompt>>(emptyList())
-        override fun clientFor(networkId: Long): IrcClient? = null
+        fun clientFor(networkId: Long): IrcClient? = null
         override suspend fun startAll() = Unit
         override suspend fun stopAll() = Unit
         override suspend fun connect(networkId: Long) = Unit
