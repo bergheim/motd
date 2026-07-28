@@ -90,6 +90,13 @@ data class NetworkEntity(
     val pendingCredentialRequirements: String? = null,
     /** Desired auto-connect value restored once [pendingCredentialRequirements] has been repaired. */
     val restoreAutoConnect: Boolean = false,
+    /**
+     * Persisted protocol discriminator resolved through the backend registry
+     * (docs/backend-neutral-xmpp-rollout.md). Pre-v21 rows are IRC by definition, so the column
+     * defaults to "irc"; protocol-owned account surfaces set it explicitly for new rows.
+     */
+    @ColumnInfo(defaultValue = "irc")
+    val protocol: String = "irc",
 ) {
     // Redact secrets (saslPassword, serverPassword, obfsLink) from logs; proxyHost/port are
     // non-sensitive so keep them out
