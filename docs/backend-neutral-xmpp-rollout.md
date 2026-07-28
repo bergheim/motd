@@ -139,7 +139,8 @@ is fixed:
 - Ingestion has two entry points: the live session and UnifiedPush delivery
   (`IrcEventSink.processPush`, `WebPushRegistrar`). Both are IRC-adapter
   surfaces behind the same boundary; the push path must not feed protocol
-  events into shared code directly.
+  events into shared code directly. PR 1 defines no neutral push contract;
+  XEP-0357 arrives later with its own design.
 - IRC-only surfaces such as DCC and bouncer administration may use IRC-specific
   capabilities inside clearly owned IRC feature packages. General chat,
   notification, history, and connection code may not.
@@ -173,6 +174,14 @@ must not change connected or offline behavior.
 `EventProcessor` remains the sole owner of IRC-derived Room writes. It may call
 shared canonical repositories, but no second IRC path may write the same state.
 
+This invariant generalizes instead of duplicating. Each backend has exactly
+one processor that turns its wire events into canonical facts, and every
+processor persists those facts only through the shared canonical
+repositories; no backend adds a private Room write path. A network belongs to
+exactly one backend, so chat-derived state keeps a single writer per network.
+PR 2's XMPP processor follows the same rule: it is not a second writer for
+IRC state and owns no tables of its own.
+
 Canonical native identifiers must be backend-neutral. A third backend must not
 require a new protocol-named alias such as `XMPP_MSGID`. Prefer a generic
 backend-scoped identity containing the network/account, identifier namespace,
@@ -180,7 +189,9 @@ assigning authority when applicable, and opaque value.
 
 The persisted protocol discriminator is the one schema change PR 1 is
 expected to make: a migration that adds a protocol column to the network row,
-defaulted to IRC, and nothing else. Beyond that, PR 1 should not change the
+defaulted to IRC, and nothing else. Its version number tracks whatever `main`
+holds at freeze time; `20 -> 21` is the current expectation, not a contract.
+Beyond that, PR 1 should not change the
 Room schema unless a neutral canonical model genuinely requires it. Any PR 1
 migration must not contain XMPP-specific names or semantics. PR 2 then uses
 the next available schema version; it never assumes that it owns migration
@@ -192,7 +203,8 @@ and remain owned by the IRC adapter; moving them into a detail table is not
 part of PR 1. No new protocol-specific columns are added to shared tables: a
 backend persists its account and protocol detail in its own per-protocol
 table keyed by the network row. PR 2 adds an XMPP detail table rather than
-nullable `jid`-style columns on the shared row.
+nullable `jid`-style columns on the shared row. Shared code outside the IRC
+adapter must not read or write the grandfathered IRC columns.
 
 ### Scope limits
 
@@ -236,7 +248,8 @@ PR 1 is complete only when:
 
 - all existing IRC behavior remains available;
 - the complete documented FOSS release-parity build passes;
-- required CI E2E passes;
+- required CI E2E passes on the branch, runnable from a fork push or manual
+  dispatch before any PR exists;
 - deterministic EventProcessor and canonical-timeline seeds produce the same
   normalized state as the recorded `main` baseline;
 - shared packages have no forbidden IRC or XMPP imports;
@@ -253,7 +266,9 @@ PR 1 is complete only when:
 The seeded fuzz generators and their versions stay frozen while PR 1 is in
 flight so that identical seeds produce identical sequences on `main` and
 Branch 1. If a generator must change, the `main` baseline is re-recorded
-before comparisons continue.
+before comparisons continue. The baseline itself is reproducible rather than
+an archived artifact: it is regenerated from the recorded Branch 1 base
+commit with the same seeds and harness version.
 
 The final local gate is:
 
@@ -304,6 +319,11 @@ real backend:
 - room and gateway discovery already proven on the reference branch;
 - fake-session, processor, actor, routing-contract, and stanza-fixture tests.
 
+Protocol-aware UI is confined to protocol-owned surfaces such as account
+setup and protocol-specific settings, reached through the registry and
+capabilities. Shared conversation, chat-list, and notification UI stays
+switch-free and renders capability and detail data instead.
+
 XMPP persistence starts at the next schema version available after PR 1 and
 includes dedicated migration and exported-schema tests.
 
@@ -341,6 +361,12 @@ PR 2 must pass:
 - live ejabberd login, direct-message, MUC, and acknowledgement tests;
 - maintainer manual testing.
 
+The baseline live gate asserts that reconnect re-establishes the session and
+that messages flow again afterwards. It does not assert gapless delivery
+across reconnects or multi-device consistency; those guarantees arrive with
+MAM, carbons, and stream resumption in the cross-device follow-ups, and the
+baseline is never presented as providing them.
+
 The ordinary environment-gated live test may continue to skip in general CI.
 A separate maintainer live-test command must fail, rather than skip, when its
 required credentials are missing. A skipped test is not accepted as live-test
@@ -352,6 +378,11 @@ it. An APK may be built and handed to the maintainer for the manual gate.
 ## Stacked branch workflow
 
 Use separate worktrees for Branch 1 and Branch 2 to avoid scope contamination.
+
+While the branches are in flight, Branch 1 is rebased onto current `main`
+routinely, not only before the pull requests open, and Branch 2 is restacked
+immediately after every rebase. Drift against `main` is treated as a process
+defect to fix when it appears, not at the end.
 
 Before opening the pull requests:
 
