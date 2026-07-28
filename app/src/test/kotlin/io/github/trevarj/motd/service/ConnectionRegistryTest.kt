@@ -75,7 +75,9 @@ class ConnectionRegistryTest {
         assertTrue(activity.progressing.getValue(1))
         assertEquals(ConnectionState.Connecting, activity.states.getValue(1))
         assertEquals(
-            registry.connectionStates.value.mapValues { (_, state) -> state.toConnectionState() },
+            registry.connectionStates.value.mapValues { (_, state) ->
+                state.toConnectionState(generation)
+            },
             activity.states,
         )
     }

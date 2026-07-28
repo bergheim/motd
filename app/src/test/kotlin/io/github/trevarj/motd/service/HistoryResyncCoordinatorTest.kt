@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.paging.PagingSource
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import dagger.Lazy
 import io.github.trevarj.motd.data.db.BufferEntity
 import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.db.HistoryCursorEntity
@@ -26,6 +27,7 @@ import io.github.trevarj.motd.irc.client.ChatHistoryResponse
 import io.github.trevarj.motd.irc.client.ChatHistoryTarget
 import io.github.trevarj.motd.irc.client.HistoryAvailability
 import io.github.trevarj.motd.irc.client.HistoryReferenceType
+import io.github.trevarj.motd.irc.client.IrcClient
 import io.github.trevarj.motd.irc.client.IrcCommandException
 import io.github.trevarj.motd.irc.client.IrcDisconnectedException
 import io.github.trevarj.motd.irc.client.IrcProtocolException
@@ -33,6 +35,7 @@ import io.github.trevarj.motd.irc.event.IrcEvent
 import io.github.trevarj.motd.irc.event.MessageContext
 import io.github.trevarj.motd.irc.ext.ChatHistorySelectors
 import io.github.trevarj.motd.irc.proto.Prefix
+import io.github.trevarj.motd.ircbackend.IrcSessions
 import java.io.IOException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -75,6 +78,18 @@ class HistoryResyncCoordinatorTest {
         override suspend fun clear(networkId: Long) { values.remove(networkId) }
     }
 
+    // The public HistoryResyncController boundary resolves its own session via IrcSessions; every
+    // resync/reconcile test in this file exercises the internal HistorySource-based overloads
+    // directly instead, so no test needs a live session here. Always-null also exercises the
+    // no-session early return of the public boundary itself (see the tests at the bottom of file).
+    // Wrapped in dagger.Lazy to mirror the real constructor, which needs it lazy to avoid a Dagger
+    // cycle through the IrcSessions -> ConnectionManagerImpl -> HistoryResyncCoordinator binding.
+    private val ircSessions = Lazy<IrcSessions> {
+        object : IrcSessions {
+            override fun sessionFor(networkId: Long): IrcClient? = null
+        }
+    }
+
     @Before
     fun setUp() = runTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
@@ -85,6 +100,7 @@ class HistoryResyncCoordinatorTest {
         coordinator = HistoryResyncCoordinator(
             db,
             processor,
+            ircSessions,
             syncPrefs,
             CoroutineScope(SupervisorJob() + Dispatchers.Default),
         )
@@ -274,7 +290,7 @@ class HistoryResyncCoordinatorTest {
         // serialization in the loader: an urgent pending promotion must be serviced BETWEEN two
         // pages of an in-flight network resync — never queued behind the entire pass.
         val loader = HistoryPageLoader(processor)
-        coordinator = HistoryResyncCoordinator(db, processor, syncPrefs, backgroundScope, loader = loader)
+        coordinator = HistoryResyncCoordinator(db, processor, ircSessions, syncPrefs, backgroundScope, loader = loader)
         val otherId = db.bufferDao().insert(
             BufferEntity(networkId = networkId, name = "#other", displayName = "#other", type = BufferType.CHANNEL),
         )
@@ -1576,5 +1592,32 @@ class HistoryResyncCoordinatorTest {
                 ),
             ),
         )
+    }
+
+    // -- public HistoryResyncController boundary: no live IRC session (docs/backend-neutral-xmpp-
+    // rollout.md client-escape-hatch removal). This file's ircSessions fake always returns null, so
+    // every public-boundary call below takes the coordinator's own "no session" early return instead
+    // of ever constructing a ClientHistorySource.
+
+    @Test
+    fun reconcileBufferWithNoLiveSessionFails() = runTest {
+        val buffer = db.bufferDao().observeById(bufferId)!!
+
+        assertTrue(coordinator.reconcileBuffer(buffer) is HistoryResyncState.Failed)
+    }
+
+    @Test
+    fun reconcilePendingMessageWithNoLiveSessionFails() = runTest {
+        val buffer = db.bufferDao().observeById(bufferId)!!
+
+        assertTrue(coordinator.reconcilePendingMessage(buffer) is HistoryResyncState.Failed)
+    }
+
+    @Test
+    fun fetchAroundWithNoLiveSessionReturnsFalse() = runTest {
+        val buffer = db.bufferDao().observeById(bufferId)!!
+
+        assertTrue(!coordinator.fetchAround(buffer, "#chan", "some-msgid", 1_000L, 50))
+        assertTrue(rows().isEmpty())
     }
 }

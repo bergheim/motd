@@ -470,7 +470,12 @@ class ConnectionManagerImpl @Inject constructor(
 
     override val connectionStates: StateFlow<Map<Long, ConnectionState>> =
         MappedStateFlow(registry.connectionStates) { states ->
-            states.mapValues { (_, state) -> state.toConnectionState() }
+            // states and the actor snapshot publish together from the registry's command loop, so
+            // reading the snapshot's generation here observes the same (or a newer) publish.
+            val actors = registry.snapshot.value.actors
+            states.mapValues { (networkId, state) ->
+                state.toConnectionState(generation = actors[networkId]?.generation ?: 0L)
+            }
         }
 
     override val connectionActivity: StateFlow<ConnectionActivitySnapshot> = registry.connectionActivity
@@ -553,6 +558,9 @@ class ConnectionManagerImpl @Inject constructor(
 
     override fun liveIdentityRules(networkId: Long): IrcIdentityRules? =
         clientFor(networkId)?.isupport?.identityRules
+
+    override fun historyAvailability(networkId: Long): HistoryAvailability? =
+        clientFor(networkId)?.historyAvailability
 
     private fun Set<String>.hasWebPushCap(): Boolean =
         any { it == WebPushRegistrar.WEBPUSH_CAP || it.startsWith("${WebPushRegistrar.WEBPUSH_CAP}=") }
@@ -2378,11 +2386,11 @@ internal fun wantedNetworkIds(
         .toSet()
 
 /** Maps the IRC adapter's wire lifecycle onto the backend-neutral seam vocabulary. */
-internal fun IrcClientState.toConnectionState(): ConnectionState = when (this) {
+internal fun IrcClientState.toConnectionState(generation: Long = 0L): ConnectionState = when (this) {
     IrcClientState.Disconnected -> ConnectionState.Disconnected
     IrcClientState.Connecting -> ConnectionState.Connecting
     IrcClientState.Registering -> ConnectionState.Authenticating
-    is IrcClientState.Ready -> ConnectionState.Ready(selfHandle = nick)
+    is IrcClientState.Ready -> ConnectionState.Ready(selfHandle = nick, generation = generation)
     is IrcClientState.Failed -> ConnectionState.Failed(reason = reason, fatal = fatal)
 }
 

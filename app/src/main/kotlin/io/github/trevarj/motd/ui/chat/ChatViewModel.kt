@@ -49,7 +49,6 @@ import io.github.trevarj.motd.diagnostics.AutoFollowTrace
 import io.github.trevarj.motd.irc.proto.IrcMessage
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 import io.github.trevarj.motd.irc.client.HistoryAvailability
-import io.github.trevarj.motd.irc.client.IrcClient
 import io.github.trevarj.motd.service.ConnectionManager
 import io.github.trevarj.motd.service.RosterLoadState
 import io.github.trevarj.motd.service.PresenceKey
@@ -57,7 +56,6 @@ import io.github.trevarj.motd.service.PresenceState
 import io.github.trevarj.motd.service.ForegroundBufferTracker
 import io.github.trevarj.motd.service.HistoryResyncController
 import io.github.trevarj.motd.service.HistorySyncStatus
-import io.github.trevarj.motd.service.IrcEventSink
 import io.github.trevarj.motd.service.SendAcceptance
 import io.github.trevarj.motd.service.SendRejectionReason
 import io.github.trevarj.motd.service.TypingTracker
@@ -192,7 +190,6 @@ class ChatViewModel @Inject constructor(
     private val audioPlaybackController: AudioPlaybackController,
     private val draftStore: ComposerDraftStore,
     private val scrollPositionStore: ChatScrollPositionStore,
-    private val eventSink: IrcEventSink,
     private val settingsRepository: SettingsRepository,
     private val replyPrefs: ReplyPrefs,
     private val visibilityReader: MessageVisibilityReader,
@@ -398,7 +395,7 @@ class ChatViewModel @Inject constructor(
         when {
             current == null || current.type == BufferType.SERVER -> HistoryAvailability.Unsupported
             connection !is ConnectionState.Ready -> HistoryAvailability.NegotiatingOrOffline
-            else -> connectionManager.clientFor(current.networkId)?.historyAvailability
+            else -> connectionManager.historyAvailability(current.networkId)
                 ?: HistoryAvailability.NegotiatingOrOffline
         }
     }.distinctUntilChanged().stateIn(
@@ -765,15 +762,8 @@ class ChatViewModel @Inject constructor(
         coroutineScope {
             val reconciliation = launch {
                 val currentBuffer = buffer.value
-                val client = currentBuffer?.let { connectionManager.clientFor(it.networkId) }
-                if (currentBuffer != null && client != null) {
-                    historyResyncCoordinator.reconcilePendingMessage(
-                        buffer = currentBuffer,
-                        client = client,
-                        isCurrent = {
-                            connectionManager.clientFor(currentBuffer.networkId) === client
-                        },
-                    )
+                if (currentBuffer != null) {
+                    historyResyncCoordinator.reconcilePendingMessage(currentBuffer)
                 }
             }
             try {
@@ -1260,34 +1250,12 @@ class ChatViewModel @Inject constructor(
      */
     private val resolver = ChatJumpResolver(
         messages = messageRepository,
+        // Session resolution and the CHATHISTORY AROUND fetch itself live in the coordinator
+        // (docs/backend-neutral-xmpp-rollout.md client-escape-hatch removal); this lambda only
+        // supplies the buffer, which is ChatViewModel-owned state.
         fetchAround = fetch@ { name, msgid, timeMs, limit ->
             val buffer = state.value.buffer ?: return@fetch false
-            val networkId = buffer.networkId
-            val client = connectionManager.clientFor(networkId) ?: return@fetch false
-            val availability = client.historyAvailability as? HistoryAvailability.Ready
-                ?: return@fetch false
-            try {
-                fetchAroundHistoryPage(
-                    target = name,
-                    msgid = msgid,
-                    timeMs = timeMs,
-                    limit = limit,
-                    availability = availability,
-                    requestPage = client::chathistory,
-                    persistPage = { request, response ->
-                        eventSink.persistHistoryPage(
-                            networkId,
-                            request,
-                            response,
-                            expectedRoomId = buffer.id,
-                        )
-                    },
-                )
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                false
-            }
+            historyResyncCoordinator.fetchAround(buffer, name, msgid, timeMs, limit)
         },
         countNewer = { targetBufferId, serverTime, id ->
             messageRepository.countNewerThan(
