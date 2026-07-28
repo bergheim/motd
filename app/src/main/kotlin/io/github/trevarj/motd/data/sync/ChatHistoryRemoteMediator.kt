@@ -18,7 +18,7 @@ import io.github.trevarj.motd.irc.client.HistoryReferenceType
 import io.github.trevarj.motd.irc.client.IrcCommandException
 import io.github.trevarj.motd.irc.client.IrcDisconnectedException
 import io.github.trevarj.motd.irc.ext.ChatHistorySelectors
-import io.github.trevarj.motd.service.ConnectionManager
+import io.github.trevarj.motd.ircbackend.IrcSessions
 import javax.inject.Inject
 import javax.inject.Singleton
 import java.util.concurrent.ConcurrentHashMap
@@ -292,7 +292,7 @@ class ChatHistoryRemoteMediator(
 @OptIn(ExperimentalPagingApi::class)
 @Singleton
 class ChatHistoryMediatorFactoryImpl @Inject constructor(
-    private val connectionManager: ConnectionManager,
+    private val ircSessions: IrcSessions,
     private val bufferDao: BufferDao,
     private val messageDao: MessageDao,
     private val processor: EventProcessor,
@@ -308,13 +308,13 @@ class ChatHistoryMediatorFactoryImpl @Inject constructor(
             historyCursorDao = historyCursorDao,
         )
 
-    // Resolve the live client lazily per call: the buffer can open before its network reaches
-    // Ready, and clientFor(...) is only stable once connected. Missing/negotiating clients remain
+    // Resolve the live session lazily per call: the buffer can open before its network reaches
+    // Ready, and sessionFor(...) is only stable once connected. Missing/negotiating sessions remain
     // retryable rather than masquerading as unsupported or a completed empty history response.
     private fun historyFor(bufferId: Long): ChatHistoryRemoteMediator.HistorySource =
         object : ChatHistoryRemoteMediator.HistorySource {
             private suspend fun client() =
-                bufferDao.observeById(bufferId)?.networkId?.let { connectionManager.clientFor(it) }
+                bufferDao.observeById(bufferId)?.networkId?.let { ircSessions.sessionFor(it) }
 
             override suspend fun availability(): HistoryAvailability =
                 client()?.historyAvailability ?: HistoryAvailability.NegotiatingOrOffline

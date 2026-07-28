@@ -14,8 +14,13 @@ sealed interface ConnectionState {
     /** Transport up; protocol negotiation and authentication in progress (IRC registration, SASL). */
     data object Authenticating : ConnectionState
 
-    /** Session established. [selfHandle] is the network-assigned own identity (the IRC nick). */
-    data class Ready(val selfHandle: String) : ConnectionState
+    /**
+     * Session established. [selfHandle] is the network-assigned own identity (the IRC nick).
+     * [generation] identifies this session instance: it changes whenever a new session is
+     * established, so callers can detect reconnects without holding protocol session objects
+     * (docs/backend-neutral-xmpp-rollout.md connection-generation boundary).
+     */
+    data class Ready(val selfHandle: String, val generation: Long = 0) : ConnectionState
 
     /** [fatal] = do not auto-retry (e.g. failed authentication). */
     data class Failed(val reason: String, val fatal: Boolean) : ConnectionState

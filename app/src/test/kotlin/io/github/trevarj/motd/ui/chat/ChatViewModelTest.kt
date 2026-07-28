@@ -51,12 +51,14 @@ import io.github.trevarj.motd.audio.AudioPlaybackController
 import io.github.trevarj.motd.audio.AudioPlaybackState
 import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.backend.ReactionCapability
+import io.github.trevarj.motd.irc.client.HistoryAvailability
 import io.github.trevarj.motd.irc.client.IrcClient
 import io.github.trevarj.motd.irc.client.IrcClientConfig
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 import io.github.trevarj.motd.irc.proto.IrcMessage
 import io.github.trevarj.motd.irc.transport.IrcTransport
 import io.github.trevarj.motd.irc.transport.TransportFactory
+import io.github.trevarj.motd.ircbackend.IrcSessions
 import io.github.trevarj.motd.service.CertPrompt
 import io.github.trevarj.motd.service.ConnectionManager
 import io.github.trevarj.motd.service.DeliveryMode
@@ -66,7 +68,6 @@ import io.github.trevarj.motd.service.HistoryResyncController
 import io.github.trevarj.motd.service.HistoryRefreshRange
 import io.github.trevarj.motd.service.HistoryResyncState
 import io.github.trevarj.motd.service.HistorySyncStatus
-import io.github.trevarj.motd.service.IrcEventSink
 import io.github.trevarj.motd.service.PresenceKey
 import io.github.trevarj.motd.service.PresenceState
 import io.github.trevarj.motd.service.RosterLoadState
@@ -1025,6 +1026,10 @@ class ChatViewModelTest {
         history: HistoryResyncController = HistoryResyncCoordinator(
             db = db,
             processor = processor,
+            // dagger.Lazy: mirrors the real constructor's cycle-avoidance wrapper (see
+            // HistoryResyncCoordinator's ircSessions doc); this fake has no cycle to avoid, but the
+            // constructor still expects a Lazy<IrcSessions>.
+            ircSessions = dagger.Lazy<IrcSessions> { fakeIrcSessions(manager) },
             scope = CoroutineScope(Dispatchers.Unconfined),
         ),
         messages: MessageRepository = FakeMessageRepository(),
@@ -1035,7 +1040,6 @@ class ChatViewModelTest {
         buffers: FakeBufferRepository = FakeBufferRepository(buffer, routeBufferId),
         jumpToMsgid: String? = null,
     ): ChatViewModel {
-        val eventSink: IrcEventSink = processor
         val routeState = mutableMapOf<String, Any>("bufferId" to routeBufferId)
         jumpToMsgid?.let { routeState["jumpToMsgid"] = it }
         return ChatViewModel(
@@ -1053,7 +1057,6 @@ class ChatViewModelTest {
             },
             draftStore = ComposerDraftStore(db),
             scrollPositionStore = scrollPositions,
-            eventSink = eventSink,
             settingsRepository = settings,
             replyPrefs = FakeReplyPrefs(),
             visibilityReader = MessageVisibilityReader(db),
@@ -1071,6 +1074,12 @@ class ChatViewModelTest {
         factory = TransportFactory { _, _, _, _, _ -> transport ?: error("transport is not used") },
         scope = CoroutineScope(SupervisorJob() + dispatcher),
     )
+
+    /** Adapts a fake ConnectionManager's clientFor to the IrcSessions seam so fakes stay in sync. */
+    private fun fakeIrcSessions(connections: ConnectionManager): IrcSessions =
+        object : IrcSessions {
+            override fun sessionFor(networkId: Long): IrcClient? = connections.clientFor(networkId)
+        }
 
     private fun message(
         bufferId: Long,
@@ -1132,6 +1141,9 @@ class ChatViewModelTest {
         val typingSent = CompletableDeferred<Unit>()
 
         override fun clientFor(networkId: Long): IrcClient? = client
+        // Mirrors ConnectionManagerImpl.historyAvailability's clientFor(...)?.historyAvailability
+        // delegation so this fake stays behaviorally in sync with the real seam.
+        override fun historyAvailability(networkId: Long): HistoryAvailability? = client?.historyAvailability
         override suspend fun startAll() = Unit
         override suspend fun stopAll() = Unit
         override suspend fun connect(networkId: Long) = Unit
@@ -1198,32 +1210,28 @@ class ChatViewModelTest {
         override fun cancelBufferResync(bufferId: Long) = Unit
         override suspend fun resyncBuffer(
             buffer: BufferEntity,
-            client: IrcClient,
-            isCurrent: () -> Boolean,
             range: HistoryRefreshRange,
         ): HistoryResyncState = HistoryResyncState.UpToDate
 
-        override suspend fun reconcileBuffer(
-            buffer: BufferEntity,
-            client: IrcClient,
-            isCurrent: () -> Boolean,
-        ): HistoryResyncState {
-            check(isCurrent())
+        override suspend fun reconcileBuffer(buffer: BufferEntity): HistoryResyncState {
             reconciledBuffers += buffer.id
             onReconcile(reconciledBuffers.size)
             return HistoryResyncState.UpToDate
         }
 
-        override suspend fun reconcilePendingMessage(
-            buffer: BufferEntity,
-            client: IrcClient,
-            isCurrent: () -> Boolean,
-        ): HistoryResyncState {
-            check(isCurrent())
+        override suspend fun reconcilePendingMessage(buffer: BufferEntity): HistoryResyncState {
             pendingReconciledBuffers += buffer.id
             onReconcile(pendingReconciledBuffers.size)
             return HistoryResyncState.UpToDate
         }
+
+        override suspend fun fetchAround(
+            buffer: BufferEntity,
+            target: String,
+            msgid: String,
+            timeMs: Long,
+            limit: Int,
+        ): Boolean = false
     }
 
     private class FakeBufferRepository(

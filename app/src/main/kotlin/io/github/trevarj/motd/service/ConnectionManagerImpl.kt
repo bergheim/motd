@@ -419,7 +419,12 @@ class ConnectionManagerImpl @Inject constructor(
 
     override val connectionStates: StateFlow<Map<Long, ConnectionState>> =
         MappedStateFlow(registry.connectionStates) { states ->
-            states.mapValues { (_, state) -> state.toConnectionState() }
+            // states and the actor snapshot publish together from the registry's command loop, so
+            // reading the snapshot's generation here observes the same (or a newer) publish.
+            val actors = registry.snapshot.value.actors
+            states.mapValues { (networkId, state) ->
+                state.toConnectionState(generation = actors[networkId]?.generation ?: 0L)
+            }
         }
 
     override val serverPushAvailable: StateFlow<Boolean> =
@@ -501,11 +506,14 @@ class ConnectionManagerImpl @Inject constructor(
     override fun liveIdentityRules(networkId: Long): IrcIdentityRules? =
         clientFor(networkId)?.isupport?.identityRules
 
-    private fun IrcClientState.toConnectionState(): ConnectionState = when (this) {
+    override fun historyAvailability(networkId: Long): HistoryAvailability? =
+        clientFor(networkId)?.historyAvailability
+
+    private fun IrcClientState.toConnectionState(generation: Long): ConnectionState = when (this) {
         IrcClientState.Disconnected -> ConnectionState.Disconnected
         IrcClientState.Connecting -> ConnectionState.Connecting
         IrcClientState.Registering -> ConnectionState.Authenticating
-        is IrcClientState.Ready -> ConnectionState.Ready(selfHandle = nick)
+        is IrcClientState.Ready -> ConnectionState.Ready(selfHandle = nick, generation = generation)
         is IrcClientState.Failed -> ConnectionState.Failed(reason = reason, fatal = fatal)
     }
 

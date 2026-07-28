@@ -1,5 +1,6 @@
 package io.github.trevarj.motd.service
 
+import dagger.Lazy
 import io.github.trevarj.motd.data.db.BufferEntity
 import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.db.MotdDatabase
@@ -23,6 +24,8 @@ import io.github.trevarj.motd.irc.client.IrcCommandException
 import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.irc.ext.ChatHistorySelectors
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
+import io.github.trevarj.motd.ircbackend.IrcSessions
+import io.github.trevarj.motd.ui.chat.fetchAroundHistoryPage
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
@@ -101,7 +104,12 @@ internal fun initialSyncStatusIfCurrent(
     current
 }
 
-/** Chat-facing boundary for manual and lifecycle-driven history reconciliation. */
+/**
+ * Chat-facing boundary for manual and lifecycle-driven history reconciliation. Callers supply only
+ * the [BufferEntity]; the coordinator resolves and re-validates the live IRC session itself via
+ * [IrcSessions] (docs/backend-neutral-xmpp-rollout.md client-escape-hatch removal), so no
+ * `IrcClient`/`isCurrent` plumbing crosses this boundary.
+ */
 interface HistoryResyncController {
     fun state(bufferId: Long): Flow<HistoryResyncState>
     fun syncStatus(bufferId: Long): Flow<HistorySyncStatus>
@@ -110,15 +118,11 @@ interface HistoryResyncController {
 
     suspend fun resyncBuffer(
         buffer: BufferEntity,
-        client: IrcClient,
-        isCurrent: () -> Boolean,
         range: HistoryRefreshRange = HistoryRefreshRange.MISSING,
     ): HistoryResyncState
 
     suspend fun reconcileBuffer(
         buffer: BufferEntity,
-        client: IrcClient,
-        isCurrent: () -> Boolean,
     ): HistoryResyncState
 
     /**
@@ -127,9 +131,21 @@ interface HistoryResyncController {
      */
     suspend fun reconcilePendingMessage(
         buffer: BufferEntity,
-        client: IrcClient,
-        isCurrent: () -> Boolean,
     ): HistoryResyncState
+
+    /**
+     * CHATHISTORY AROUND fetch for a msgid target not yet local in [buffer] (search/reply jump).
+     * Requires a live session advertising `draft/chathistory`; returns false when there is none,
+     * the fetch fails, or the response cannot be used. A successful fetch persists the completed
+     * page through the sole IRC→Room writer before returning true.
+     */
+    suspend fun fetchAround(
+        buffer: BufferEntity,
+        target: String,
+        msgid: String,
+        timeMs: Long,
+        limit: Int,
+    ): Boolean
 }
 
 /**
@@ -142,6 +158,10 @@ interface HistoryResyncController {
 class HistoryResyncCoordinator @Inject constructor(
     private val db: MotdDatabase,
     private val processor: EventProcessor,
+    // Lazy because ConnectionManagerImpl holds this coordinator directly (like its avatarCoordinator
+    // and webPushRegistrar dependencies) while also being the IrcSessions binding target; an eager
+    // IrcSessions here would be a Dagger dependency cycle.
+    private val ircSessions: Lazy<IrcSessions>,
     private val syncPrefs: HistorySyncPrefs = NoopHistorySyncPrefs,
     @param:ApplicationScope private val scope: CoroutineScope,
     private val diagnostics: DiagnosticLogger = DiagnosticLogger.Noop,
@@ -240,25 +260,48 @@ class HistoryResyncCoordinator @Inject constructor(
         states.update { it - bufferId }
     }
 
+    /**
+     * Resolve the live session for [buffer]'s network and re-validate identity around suspension
+     * points exactly as the removed `ConnectionManager.clientFor` contract required (see
+     * [IrcSessions]). No session at entry is treated the same as the mid-flight staleness this
+     * file already detects via `isCurrent()`: [staleConnection]. Chat-facing callers previously
+     * never invoked this boundary without first resolving a non-null client themselves, so this
+     * mirrors that same terminal state rather than inventing a new one.
+     */
     override suspend fun resyncBuffer(
         buffer: BufferEntity,
-        client: IrcClient,
-        isCurrent: () -> Boolean,
         range: HistoryRefreshRange,
-    ): HistoryResyncState = resyncBuffer(
-        buffer,
-        client,
-        isCurrent,
-        range,
-        publishState = true,
-        healSparseGaps = true,
-    )
+    ): HistoryResyncState {
+        val client = ircSessions.get().sessionFor(buffer.networkId) ?: return staleConnection()
+        val isCurrent = { ircSessions.get().sessionFor(buffer.networkId) === client }
+        return resyncBuffer(
+            buffer,
+            client,
+            isCurrent,
+            range,
+            publishState = true,
+            healSparseGaps = true,
+        )
+    }
 
     /**
      * Reconcile a visible chat without exposing manual-refresh progress or result snackbars. The
-     * request still shares the exact same per-buffer single flight as [resyncBuffer].
+     * request still shares the exact same per-buffer single flight as [resyncBuffer]. See
+     * [resyncBuffer]'s doc for the no-session/staleness mapping.
      */
-    override suspend fun reconcileBuffer(
+    override suspend fun reconcileBuffer(buffer: BufferEntity): HistoryResyncState {
+        val client = ircSessions.get().sessionFor(buffer.networkId) ?: return staleConnection()
+        val isCurrent = { ircSessions.get().sessionFor(buffer.networkId) === client }
+        return reconcileBuffer(buffer, client, isCurrent)
+    }
+
+    /**
+     * Preserved for [ConnectionManagerImpl]'s `seedJoinedChannelHistory` (an IRC-internal
+     * registration-race caller reached through the concrete coordinator type, not the chat-facing
+     * [HistoryResyncController] boundary). Body unchanged from before the client/isCurrent params
+     * were removed from the interface above.
+     */
+    suspend fun reconcileBuffer(
         buffer: BufferEntity,
         client: IrcClient,
         isCurrent: () -> Boolean,
@@ -271,17 +314,59 @@ class HistoryResyncCoordinator @Inject constructor(
         healSparseGaps = false,
     )
 
-    override suspend fun reconcilePendingMessage(
+    override suspend fun reconcilePendingMessage(buffer: BufferEntity): HistoryResyncState {
+        val client = ircSessions.get().sessionFor(buffer.networkId) ?: return staleConnection()
+        val isCurrent = { ircSessions.get().sessionFor(buffer.networkId) === client }
+        return reconcilePendingMessage(
+            networkId = buffer.networkId,
+            bufferId = buffer.id,
+            target = buffer.ircTarget,
+            source = ClientHistorySource(client),
+            isCurrent = isCurrent,
+        )
+    }
+
+    /**
+     * Copied from the `ChatJumpResolver` `fetchAround` lambda that used to live in ChatViewModel
+     * (docs/backend-neutral-xmpp-rollout.md client-escape-hatch removal): only the session
+     * resolution changed, from `ConnectionManager.clientFor` to [IrcSessions.sessionFor].
+     * Persistence still routes through [processor], the sole IRC→Room writer, via the same
+     * [IrcEventSink.persistHistoryPage] override it implements.
+     */
+    override suspend fun fetchAround(
         buffer: BufferEntity,
-        client: IrcClient,
-        isCurrent: () -> Boolean,
-    ): HistoryResyncState = reconcilePendingMessage(
-        networkId = buffer.networkId,
-        bufferId = buffer.id,
-        target = buffer.ircTarget,
-        source = ClientHistorySource(client),
-        isCurrent = isCurrent,
-    )
+        target: String,
+        msgid: String,
+        timeMs: Long,
+        limit: Int,
+    ): Boolean {
+        val networkId = buffer.networkId
+        val client = ircSessions.get().sessionFor(networkId) ?: return false
+        val availability = client.historyAvailability as? HistoryAvailability.Ready
+            ?: return false
+        return try {
+            fetchAroundHistoryPage(
+                target = target,
+                msgid = msgid,
+                timeMs = timeMs,
+                limit = limit,
+                availability = availability,
+                requestPage = client::chathistory,
+                persistPage = { request, response ->
+                    processor.persistHistoryPage(
+                        networkId,
+                        request,
+                        response,
+                        expectedRoomId = buffer.id,
+                    )
+                },
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            false
+        }
+    }
 
     /**
      * A normal reconciliation owns the coarse per-network gate while it discovers targets and

@@ -48,7 +48,6 @@ import io.github.trevarj.motd.diagnostics.AutoFollowTrace
 import io.github.trevarj.motd.irc.proto.IrcMessage
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 import io.github.trevarj.motd.irc.client.HistoryAvailability
-import io.github.trevarj.motd.irc.client.IrcClient
 import io.github.trevarj.motd.service.ConnectionManager
 import io.github.trevarj.motd.service.RosterLoadState
 import io.github.trevarj.motd.service.PresenceKey
@@ -58,7 +57,6 @@ import io.github.trevarj.motd.service.HistoryResyncController
 import io.github.trevarj.motd.service.HistoryRefreshRange
 import io.github.trevarj.motd.service.HistoryResyncState
 import io.github.trevarj.motd.service.HistorySyncStatus
-import io.github.trevarj.motd.service.IrcEventSink
 import io.github.trevarj.motd.service.SendAcceptance
 import io.github.trevarj.motd.service.SendRejectionReason
 import io.github.trevarj.motd.service.TypingTracker
@@ -191,7 +189,6 @@ class ChatViewModel @Inject constructor(
     private val audioPlaybackController: AudioPlaybackController,
     private val draftStore: ComposerDraftStore,
     private val scrollPositionStore: ChatScrollPositionStore,
-    private val eventSink: IrcEventSink,
     private val settingsRepository: SettingsRepository,
     private val replyPrefs: ReplyPrefs,
     private val visibilityReader: MessageVisibilityReader,
@@ -343,7 +340,7 @@ class ChatViewModel @Inject constructor(
         when {
             current == null || current.type == BufferType.SERVER -> HistoryAvailability.Unsupported
             connection !is ConnectionState.Ready -> HistoryAvailability.NegotiatingOrOffline
-            else -> connectionManager.clientFor(current.networkId)?.historyAvailability
+            else -> connectionManager.historyAvailability(current.networkId)
                 ?: HistoryAvailability.NegotiatingOrOffline
         }
     }.distinctUntilChanged().stateIn(
@@ -385,7 +382,7 @@ class ChatViewModel @Inject constructor(
     private data class AutomaticHistoryTrigger(
         val visibleSession: Long,
         val buffer: BufferEntity,
-        val client: IrcClient,
+        val generation: Long,
     )
 
     init {
@@ -393,28 +390,21 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             combine(buffer, connState, visibleSession) { currentBuffer, connection, session ->
                 val eligible = currentBuffer?.takeIf { it.type != BufferType.SERVER }
-                val client = eligible?.let { connectionManager.clientFor(it.networkId) }
-                if (session != null && eligible != null && connection is ConnectionState.Ready && client != null) {
-                    AutomaticHistoryTrigger(session, eligible, client)
+                if (session != null && eligible != null && connection is ConnectionState.Ready) {
+                    AutomaticHistoryTrigger(session, eligible, connection.generation)
                 } else {
                     null
                 }
             }
-                // Keep the null transition: it rearms the same client after a real disconnect.
+                // Keep the null transition: it rearms the same session after a real disconnect.
                 .distinctUntilChanged { old, new ->
                     old?.visibleSession == new?.visibleSession &&
                         old?.buffer?.id == new?.buffer?.id &&
-                        old?.client === new?.client
+                        old?.generation == new?.generation
                 }
                 .filterNotNull()
                 .collectLatest { trigger ->
-                    historyResyncCoordinator.reconcileBuffer(
-                        buffer = trigger.buffer,
-                        client = trigger.client,
-                        isCurrent = {
-                            connectionManager.clientFor(trigger.buffer.networkId) === trigger.client
-                        },
-                    )
+                    historyResyncCoordinator.reconcileBuffer(trigger.buffer)
                 }
         }
         viewModelScope.launch {
@@ -757,15 +747,8 @@ class ChatViewModel @Inject constructor(
         coroutineScope {
             val reconciliation = launch {
                 val currentBuffer = buffer.value
-                val client = currentBuffer?.let { connectionManager.clientFor(it.networkId) }
-                if (currentBuffer != null && client != null) {
-                    historyResyncCoordinator.reconcilePendingMessage(
-                        buffer = currentBuffer,
-                        client = client,
-                        isCurrent = {
-                            connectionManager.clientFor(currentBuffer.networkId) === client
-                        },
-                    )
+                if (currentBuffer != null) {
+                    historyResyncCoordinator.reconcilePendingMessage(currentBuffer)
                 }
             }
             try {
@@ -838,16 +821,17 @@ class ChatViewModel @Inject constructor(
 
     fun refreshHistory(range: HistoryRefreshRange = HistoryRefreshRange.MISSING) {
         val currentBuffer = buffer.value ?: return
-        val client = connectionManager.clientFor(currentBuffer.networkId)
-        if (client == null || connState.value !is ConnectionState.Ready) {
+        // historyAvailability == null means no live session: keeps the pre-refactor null-client
+        // behavior where a Ready/session race still surfaces the offline snackbar.
+        if (connState.value !is ConnectionState.Ready ||
+            connectionManager.historyAvailability(currentBuffer.networkId) == null
+        ) {
             uiEventQueue.enqueue(ChatUiEvent.HistoryOffline)
             return
         }
         viewModelScope.launch {
             historyResyncCoordinator.resyncBuffer(
                 buffer = currentBuffer,
-                client = client,
-                isCurrent = { connectionManager.clientFor(currentBuffer.networkId) === client },
                 range = range,
             )
         }
@@ -1273,34 +1257,12 @@ class ChatViewModel @Inject constructor(
      */
     private val resolver = ChatJumpResolver(
         messages = messageRepository,
+        // Session resolution and the CHATHISTORY AROUND fetch itself live in the coordinator
+        // (docs/backend-neutral-xmpp-rollout.md client-escape-hatch removal); this lambda only
+        // supplies the buffer, which is ChatViewModel-owned state.
         fetchAround = fetch@ { name, msgid, timeMs, limit ->
             val buffer = state.value.buffer ?: return@fetch false
-            val networkId = buffer.networkId
-            val client = connectionManager.clientFor(networkId) ?: return@fetch false
-            val availability = client.historyAvailability as? HistoryAvailability.Ready
-                ?: return@fetch false
-            try {
-                fetchAroundHistoryPage(
-                    target = name,
-                    msgid = msgid,
-                    timeMs = timeMs,
-                    limit = limit,
-                    availability = availability,
-                    requestPage = client::chathistory,
-                    persistPage = { request, response ->
-                        eventSink.persistHistoryPage(
-                            networkId,
-                            request,
-                            response,
-                            expectedRoomId = buffer.id,
-                        )
-                    },
-                )
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                false
-            }
+            historyResyncCoordinator.fetchAround(buffer, name, msgid, timeMs, limit)
         },
         countNewer = { targetBufferId, serverTime, id ->
             messageRepository.countNewerThan(
