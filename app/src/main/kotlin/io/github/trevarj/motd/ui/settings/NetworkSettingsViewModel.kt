@@ -13,7 +13,7 @@ import io.github.trevarj.motd.data.prefs.NoopBouncerKindPrefs
 import io.github.trevarj.motd.data.repo.NetworkRepository
 import io.github.trevarj.motd.data.prefs.PresetEnrollmentPrefs
 import io.github.trevarj.motd.obfs.VlessLink
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.irc.proto.IrcMessage
 import io.github.trevarj.motd.service.ConnectionManager
 import io.github.trevarj.motd.service.liberaEndpointChanged
@@ -50,7 +50,7 @@ data class NetworkSettingsUiState(
     val isZnc: Boolean = false,
     val zncLogin: ZncLoginForm = ZncLoginForm(),
     // Round 5 (plans/16 §5.3): live status + autoConnect editing.
-    val connState: IrcClientState = IrcClientState.Disconnected,
+    val connState: ConnectionState = ConnectionState.Disconnected,
     val autoConnect: Boolean = true,
     val parentName: String? = null,   // root name for a BOUNCER_CHILD's "Managed by" row
     /** A bouncer transport/login change can invalidate all locally imported child mirrors. */
@@ -170,7 +170,7 @@ class NetworkSettingsViewModel @Inject constructor(
         viewModelScope.launch {
             connectionManager.connectionStates.collect { states ->
                 _state.value = _state.value.copy(
-                    connState = states[networkId] ?: IrcClientState.Disconnected,
+                    connState = states[networkId] ?: ConnectionState.Disconnected,
                     avatarPublishingAvailable = avatarController.publishingAvailable(networkId),
                 )
             }

@@ -9,7 +9,7 @@ import io.github.trevarj.motd.irc.client.BouncerNetwork
 import io.github.trevarj.motd.irc.client.IrcClient
 import io.github.trevarj.motd.irc.client.IrcCommandException
 import io.github.trevarj.motd.irc.client.IrcDisconnectedException
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.service.CertPrompt
 import io.github.trevarj.motd.service.ConnectionManager
 import io.github.trevarj.motd.service.SendAcceptance
@@ -54,10 +54,10 @@ class OnboardingViewModelTest {
     }
 
     private class FakeConnectionManager : ConnectionManager {
-        override val connectionStates = MutableStateFlow<Map<Long, IrcClientState>>(emptyMap())
+        override val connectionStates = MutableStateFlow<Map<Long, ConnectionState>>(emptyMap())
         override fun clientFor(networkId: Long): IrcClient? = null
-        fun connecting(id: Long) { connectionStates.value += id to IrcClientState.Connecting }
-        fun ready(id: Long) { connectionStates.value += id to IrcClientState.Ready("motd", emptySet(), emptyMap()) }
+        fun connecting(id: Long) { connectionStates.value += id to ConnectionState.Connecting }
+        fun ready(id: Long) { connectionStates.value += id to ConnectionState.Ready("motd") }
         override suspend fun startAll() = Unit
         override suspend fun stopAll() = Unit
         override suspend fun connect(networkId: Long) = Unit

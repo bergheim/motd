@@ -11,8 +11,8 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performTextInput
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.irc.client.ChannelListing
-import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.ui.theme.MotdTheme
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -31,7 +31,7 @@ class ChannelListScreenUiTest {
                     state = ChannelListUiState(
                         networkId = 2,
                         initialized = true,
-                        connState = IrcClientState.Ready("trev", emptySet(), emptyMap()),
+                        connState = ConnectionState.Ready("trev"),
                     ),
                     onBack = {},
                     onQueryChange = {},
@@ -53,7 +53,7 @@ class ChannelListScreenUiTest {
         var state by mutableStateOf(ChannelListUiState(
             networkId = 2,
             initialized = true,
-            connState = IrcClientState.Ready("trev", emptySet(), emptyMap()),
+            connState = ConnectionState.Ready("trev"),
             query = "bitcoin",
             loading = true,
         ))
@@ -89,7 +89,7 @@ class ChannelListScreenUiTest {
                     state = ChannelListUiState(
                         networkId = 2,
                         initialized = true,
-                        connState = IrcClientState.Ready("trev", emptySet(), emptyMap()),
+                        connState = ConnectionState.Ready("trev"),
                         loaded = true,
                         listings = listOf(
                             ChannelListing("#open", 30, "Open fixture"),

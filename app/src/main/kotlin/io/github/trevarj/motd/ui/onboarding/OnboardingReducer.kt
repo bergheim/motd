@@ -4,7 +4,7 @@ import io.github.trevarj.motd.bouncer.BouncerKind
 import io.github.trevarj.motd.bouncer.SojuLoginForm
 import io.github.trevarj.motd.bouncer.ZncLoginForm
 import io.github.trevarj.motd.data.db.NetworkRole
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.ui.settings.addnetwork.NetworkPresetId
 import io.github.trevarj.motd.ui.settings.addnetwork.applyNetworkPreset
 import io.github.trevarj.motd.ui.settings.addnetwork.networkPreset
@@ -144,8 +144,8 @@ data class OnboardingState(
     val zncLogin: ZncLoginForm = ZncLoginForm(),
     // Connect-test progress.
     val networkId: Long? = null,
-    val connState: IrcClientState? = null,
-    val stateLog: List<IrcClientState> = emptyList(),
+    val connState: ConnectionState? = null,
+    val stateLog: List<ConnectionState> = emptyList(),
     val bouncerDiscovery: BouncerDiscoveryState? = null,
     /** Monotonic root-session identity; changes only when the onboarding root is replaced. */
     val bouncerSessionGeneration: Long = 0L,
@@ -171,7 +171,7 @@ data class OnboardingState(
         }
 
     /** True once the connect test reached a Ready state. */
-    val isReady: Boolean get() = connState is IrcClientState.Ready
+    val isReady: Boolean get() = connState is ConnectionState.Ready
 
     val bouncerNetworks: List<BouncerNetworkRow>
         get() = when (val discovery = bouncerDiscovery) {
@@ -218,7 +218,7 @@ sealed interface OnboardingAction {
 
     // Connect-test lifecycle (folded back from ViewModel side effects).
     data class NetworkCreated(val networkId: Long) : OnboardingAction
-    data class ConnStateChanged(val state: IrcClientState) : OnboardingAction
+    data class ConnStateChanged(val state: ConnectionState) : OnboardingAction
     data class BouncerListLoading(
         val networkId: Long,
         val sessionGeneration: Long,
@@ -353,7 +353,7 @@ fun onboardingReducer(state: OnboardingState, action: OnboardingAction): Onboard
             state.copy(
                 connState = action.state,
                 stateLog = state.stateLog + action.state,
-                error = (action.state as? IrcClientState.Failed)?.reason ?: state.error,
+                error = (action.state as? ConnectionState.Failed)?.reason ?: state.error,
             )
 
         is OnboardingAction.BouncerListLoading ->

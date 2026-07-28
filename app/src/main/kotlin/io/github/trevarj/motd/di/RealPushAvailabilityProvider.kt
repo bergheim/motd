@@ -5,13 +5,11 @@ import io.github.trevarj.motd.BuildConfig
 import io.github.trevarj.motd.data.db.NetworkDao
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
-import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.push.NetworkPushHealth
 import io.github.trevarj.motd.push.PushCapability
 import io.github.trevarj.motd.push.PushHealthStore
 import io.github.trevarj.motd.push.PushRegistrationState
 import io.github.trevarj.motd.push.UnifiedPushApi
-import io.github.trevarj.motd.push.WebPushRegistrar
 import io.github.trevarj.motd.service.ConnectionManager
 import io.github.trevarj.motd.ui.settings.PushAvailability
 import io.github.trevarj.motd.ui.settings.PushAvailabilityProvider
@@ -73,13 +71,13 @@ class RealPushAvailabilityProvider(
     )
 
     override fun availability(): Flow<PushAvailability> = combine(
-        connectionManager.connectionStates,
+        connectionManager.serverPushAvailable,
         networks,
         health,
         notificationPermission,
-    ) { states, networkRows, healthByNetwork, notificationsGranted ->
+    ) { serverPushAvailable, networkRows, healthByNetwork, notificationsGranted ->
         buildAvailability(
-            states = states,
+            liveWebpush = serverPushAvailable,
             networks = networkRows,
             health = healthByNetwork,
             installed = distributors(),
@@ -90,7 +88,7 @@ class RealPushAvailabilityProvider(
     }.distinctUntilChanged()
 
     private fun buildAvailability(
-        states: Map<Long, IrcClientState>,
+        liveWebpush: Boolean,
         networks: List<NetworkEntity>,
         health: Map<Long, NetworkPushHealth>,
         installed: List<PushDistributor>,
@@ -99,9 +97,6 @@ class RealPushAvailabilityProvider(
         notificationsGranted: Boolean,
     ): PushAvailability {
         val eligible = networks.filter { it.autoConnect && it.role != NetworkRole.BOUNCER_ROOT }
-        val liveWebpush = states.values.any {
-            it is IrcClientState.Ready && it.caps.hasCap(WebPushRegistrar.WEBPUSH_CAP)
-        }
         val durableWebpush = health.values.any { it.capability == PushCapability.SUPPORTED }
         val protected = eligible.count { health[it.id]?.registrationState == PushRegistrationState.ACTIVE }
         val latest = eligible.mapNotNull { row ->
@@ -136,8 +131,6 @@ class RealPushAvailabilityProvider(
         )
     }
 }
-
-private fun Set<String>.hasCap(cap: String): Boolean = any { it == cap || it.startsWith("$cap=") }
 
 private fun Context.applicationLabel(packageName: String): String = runCatching {
     val info = packageManager.getApplicationInfo(packageName, 0)

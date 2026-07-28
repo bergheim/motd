@@ -12,8 +12,8 @@ import io.github.trevarj.motd.data.visibility.MessageVisibilitySpec
 import io.github.trevarj.motd.data.visibility.MessageWindowBounds
 import io.github.trevarj.motd.data.prefs.LayoutDensity
 import io.github.trevarj.motd.data.repo.HistoryWindowFocus
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.irc.client.HistoryAvailability
-import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 import io.github.trevarj.motd.ui.components.ReactionChip
 import androidx.paging.LoadState
@@ -516,7 +516,7 @@ sealed interface ChatHistoryUiState {
 
 internal fun chatHistoryUiState(
     bufferType: BufferType?,
-    connectionState: IrcClientState?,
+    connectionState: ConnectionState?,
     availability: HistoryAvailability,
     append: LoadState,
     historyComplete: Boolean,
@@ -545,9 +545,9 @@ internal fun chatHistoryUiState(
     }
 }
 
-private fun isHistoryOffline(connectionState: IrcClientState?): Boolean = when (connectionState) {
-    IrcClientState.Disconnected -> true
-    is IrcClientState.Failed -> connectionState.fatal
+private fun isHistoryOffline(connectionState: ConnectionState?): Boolean = when (connectionState) {
+    ConnectionState.Disconnected -> true
+    is ConnectionState.Failed -> connectionState.fatal
     else -> false
 }
 

@@ -35,7 +35,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import io.github.trevarj.motd.R
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.ui.theme.MotdMotion
 import io.github.trevarj.motd.ui.theme.MotdTheme
 import kotlinx.coroutines.delay
@@ -45,12 +45,12 @@ internal const val CONNECTION_BANNER_GRACE_MS = 3_000L
 
 /**
  * Thin banner under the top bar summarizing connection health across all networks. Hidden when
- * every network is [IrcClientState.Ready] or the user dismisses the current status. Derives a
+ * every network is [ConnectionState.Ready] or the user dismisses the current status. Derives a
  * single line from the aggregate worst state.
  */
 @Composable
 fun ConnectionBanner(
-    states: Map<Long, IrcClientState>,
+    states: Map<Long, ConnectionState>,
     networkName: (Long) -> String?,
     modifier: Modifier = Modifier,
 ) {
@@ -155,14 +155,14 @@ internal fun visibleBannerStatus(
 
 /** null when nothing to report (empty or all Ready). Prefers errors over in-progress states. */
 internal fun bannerStatus(
-    states: Map<Long, IrcClientState>,
+    states: Map<Long, ConnectionState>,
     networkName: (Long) -> String?,
 ): BannerStatus? {
     if (states.isEmpty()) return null
 
     // Fatal failure wins the banner.
-    states.entries.firstOrNull { (_, s) -> s is IrcClientState.Failed }?.let { (id, s) ->
-        val failed = s as IrcClientState.Failed
+    states.entries.firstOrNull { (_, s) -> s is ConnectionState.Failed }?.let { (id, s) ->
+        val failed = s as ConnectionState.Failed
         val name = networkName(id)
         val prefix = name?.let { "$it: " } ?: ""
         return if (failed.fatal) {
@@ -177,7 +177,7 @@ internal fun bannerStatus(
     // (for example an old imported network or a manually disconnected account); showing it as
     // "Connecting…" makes a healthy bouncer child look stuck.
     val pending = states.entries.firstOrNull { (_, s) ->
-        s is IrcClientState.Connecting || s is IrcClientState.Registering
+        s is ConnectionState.Connecting || s is ConnectionState.Authenticating
     } ?: return null
 
     val name = networkName(pending.key)
@@ -193,7 +193,7 @@ internal fun bannerStatus(
 private fun ConnectionBannerConnectingPreview() {
     MotdTheme {
         ConnectionBanner(
-            states = mapOf(1L to IrcClientState.Connecting),
+            states = mapOf(1L to ConnectionState.Connecting),
             networkName = { "Libera" },
         )
     }
@@ -204,7 +204,7 @@ private fun ConnectionBannerConnectingPreview() {
 private fun ConnectionBannerOfflinePreview() {
     MotdTheme {
         ConnectionBanner(
-            states = mapOf(1L to IrcClientState.Failed("timeout", fatal = false)),
+            states = mapOf(1L to ConnectionState.Failed("timeout", fatal = false)),
             networkName = { "Libera" },
         )
     }

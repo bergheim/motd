@@ -6,7 +6,7 @@ import io.github.trevarj.motd.data.db.MotdDatabase
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.di.AppClock
 import io.github.trevarj.motd.di.ApplicationScope
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
@@ -133,7 +133,7 @@ class PendingChannelCloseCoordinator private constructor(
         buffer: BufferEntity,
         network: NetworkEntity,
     ): CloseOutcome {
-        if (connections.connectionStates.value[network.id] !is IrcClientState.Ready) {
+        if (connections.connectionStates.value[network.id] !is ConnectionState.Ready) {
             return CloseOutcome.RETRY
         }
         // The boolean seam distinguishes a real transport write from a client that disappeared
@@ -148,9 +148,9 @@ class PendingChannelCloseCoordinator private constructor(
 
     private fun isReadyFor(
         network: NetworkEntity,
-        states: Map<Long, IrcClientState>,
+        states: Map<Long, ConnectionState>,
     ): Boolean {
-        return states[network.id] is IrcClientState.Ready
+        return states[network.id] is ConnectionState.Ready
     }
 
     private fun scheduleRetry(bufferId: Long) {

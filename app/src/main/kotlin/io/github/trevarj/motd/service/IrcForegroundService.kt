@@ -7,7 +7,7 @@ import android.os.Build
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import dagger.hilt.android.AndroidEntryPoint
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import javax.inject.Inject
 import kotlinx.coroutines.launch
 
@@ -64,10 +64,10 @@ class IrcForegroundService : LifecycleService() {
         }
     }
 
-    private fun updateStatus(states: Map<Long, IrcClientState>) {
-        val connected = states.values.count { it is IrcClientState.Ready }
+    private fun updateStatus(states: Map<Long, ConnectionState>) {
+        val connected = states.values.count { it is ConnectionState.Ready }
         val reconnecting = states.values.any {
-            it is IrcClientState.Connecting || it is IrcClientState.Registering
+            it is ConnectionState.Connecting || it is ConnectionState.Authenticating
         }
         val notification = notifications.statusNotification(
             connectedCount = connected,

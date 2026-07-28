@@ -67,7 +67,7 @@ import io.github.trevarj.motd.bouncer.SojuLoginForm
 import io.github.trevarj.motd.bouncer.ZncLoginForm
 import io.github.trevarj.motd.data.db.NetworkRole
 import io.github.trevarj.motd.data.db.ObfsMode
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.ui.onboarding.AuthForm
 import io.github.trevarj.motd.ui.onboarding.AuthMode
 import io.github.trevarj.motd.ui.onboarding.ServerForm
@@ -411,7 +411,7 @@ fun NetworkSettingsContent(
 /** Status header: a dot + state label with a state-appropriate action button. */
 @Composable
 private fun StatusCard(
-    connState: IrcClientState,
+    connState: ConnectionState,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
 ) {
@@ -431,11 +431,11 @@ private fun StatusCard(
             // Single stable handle; the label varies Connect/Disconnect/Reconnect by state.
             val connButton = Modifier.testTag("network_settings_conn_button")
             when (connState) {
-                is IrcClientState.Disconnected ->
+                is ConnectionState.Disconnected ->
                     FilledTonalButton(onClick = onConnect, modifier = connButton) {
                         Text(stringResource(R.string.network_settings_status_connect))
                     }
-                is IrcClientState.Failed ->
+                is ConnectionState.Failed ->
                     FilledTonalButton(onClick = onConnect, modifier = connButton) {
                         Text(stringResource(R.string.network_settings_status_reconnect))
                     }
@@ -449,22 +449,22 @@ private fun StatusCard(
 }
 
 @Composable
-private fun statusLabel(connState: IrcClientState): String = when (connState) {
-    is IrcClientState.Ready -> stringResource(R.string.network_settings_status_ready, connState.nick)
-    IrcClientState.Connecting -> stringResource(R.string.network_settings_status_connecting)
-    IrcClientState.Registering -> stringResource(R.string.network_settings_status_registering)
-    IrcClientState.Disconnected -> stringResource(R.string.network_settings_status_disconnected)
-    is IrcClientState.Failed -> stringResource(R.string.network_settings_status_failed, connState.reason)
+private fun statusLabel(connState: ConnectionState): String = when (connState) {
+    is ConnectionState.Ready -> stringResource(R.string.network_settings_status_ready, connState.selfHandle)
+    ConnectionState.Connecting -> stringResource(R.string.network_settings_status_connecting)
+    ConnectionState.Authenticating -> stringResource(R.string.network_settings_status_registering)
+    ConnectionState.Disconnected -> stringResource(R.string.network_settings_status_disconnected)
+    is ConnectionState.Failed -> stringResource(R.string.network_settings_status_failed, connState.reason)
 }
 
 @Composable
-private fun statusColor(connState: IrcClientState): Color {
+private fun statusColor(connState: ConnectionState): Color {
     val semanticColors = LocalMotdSemanticColors.current
     return when (connState) {
-    is IrcClientState.Ready -> semanticColors.success
-    IrcClientState.Connecting, IrcClientState.Registering -> semanticColors.warning
-    is IrcClientState.Failed -> MaterialTheme.colorScheme.error
-    IrcClientState.Disconnected -> MaterialTheme.colorScheme.outlineVariant
+    is ConnectionState.Ready -> semanticColors.success
+    ConnectionState.Connecting, ConnectionState.Authenticating -> semanticColors.warning
+    is ConnectionState.Failed -> MaterialTheme.colorScheme.error
+    ConnectionState.Disconnected -> MaterialTheme.colorScheme.outlineVariant
     }
 }
 

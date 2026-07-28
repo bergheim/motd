@@ -17,7 +17,7 @@ import io.github.trevarj.motd.data.prefs.SettingsRepository
 import io.github.trevarj.motd.data.prefs.ThemeMode
 import io.github.trevarj.motd.data.repo.BufferRepository
 import io.github.trevarj.motd.irc.client.IrcClient
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.service.CertPrompt
 import io.github.trevarj.motd.service.ConnectionManager
 import io.github.trevarj.motd.service.DeliveryMode
@@ -222,7 +222,7 @@ class ChannelInfoTopicMutationTest {
         private val partAccepted: Boolean = false,
         private val partFailure: Throwable? = null,
     ) : ConnectionManager {
-        override val connectionStates: StateFlow<Map<Long, IrcClientState>> = MutableStateFlow(emptyMap())
+        override val connectionStates: StateFlow<Map<Long, ConnectionState>> = MutableStateFlow(emptyMap())
         override val certPrompts = MutableStateFlow<List<CertPrompt>>(emptyList())
         val attempts = mutableListOf<Pair<Long, String>>()
 

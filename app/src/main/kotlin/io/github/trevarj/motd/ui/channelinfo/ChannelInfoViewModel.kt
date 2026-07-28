@@ -15,7 +15,7 @@ import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.repo.BufferRepository
 import io.github.trevarj.motd.data.repo.NetworkIgnoreRepository
 import io.github.trevarj.motd.data.repo.NoopNetworkIgnoreRepository
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.irc.proto.IrcMessage
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 import io.github.trevarj.motd.service.ConnectionManager
@@ -171,7 +171,7 @@ class ChannelInfoViewModel @Inject constructor(
         } else {
             connectionManager.lagStates
                 .combine(connectionManager.connectionStates) { lags, states ->
-                    lags[buffer.networkId] to (states[buffer.networkId] is IrcClientState.Ready)
+                    lags[buffer.networkId] to (states[buffer.networkId] is ConnectionState.Ready)
                 }
         }
     }
@@ -460,7 +460,7 @@ class ChannelInfoViewModel @Inject constructor(
     private fun viewerCanModerate(buffer: BufferEntity?, members: List<MemberEntity>, prefixOrder: String): Boolean {
         if (buffer?.type != BufferType.CHANNEL) return false
         val client = connectionManager.clientFor(buffer.networkId) ?: return false
-        val myNick = (connectionManager.connectionStates.value[buffer.networkId] as? IrcClientState.Ready)?.nick
+        val myNick = (connectionManager.connectionStates.value[buffer.networkId] as? ConnectionState.Ready)?.selfHandle
             ?: return false
         val normalize: (String) -> String = { client.isupport.normalize(it) }
         val me = members.firstOrNull { normalize(it.nick) == normalize(myNick) } ?: return false

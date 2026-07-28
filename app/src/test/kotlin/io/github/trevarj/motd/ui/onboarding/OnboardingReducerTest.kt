@@ -4,7 +4,7 @@ import io.github.trevarj.motd.bouncer.BouncerKind
 import io.github.trevarj.motd.bouncer.SojuLoginForm
 import io.github.trevarj.motd.bouncer.ZncLoginForm
 import io.github.trevarj.motd.data.db.NetworkRole
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.ui.settings.addnetwork.NetworkPresetId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -308,9 +308,9 @@ class OnboardingReducerTest {
     fun `conn state changes accumulate a log and surface failure reason`() {
         val s = reduce(
             OnboardingState(step = OnboardingStep.CONNECT),
-            OnboardingAction.ConnStateChanged(IrcClientState.Connecting),
-            OnboardingAction.ConnStateChanged(IrcClientState.Registering),
-            OnboardingAction.ConnStateChanged(IrcClientState.Failed("bad password", fatal = true)),
+            OnboardingAction.ConnStateChanged(ConnectionState.Connecting),
+            OnboardingAction.ConnStateChanged(ConnectionState.Authenticating),
+            OnboardingAction.ConnStateChanged(ConnectionState.Failed("bad password", fatal = true)),
         )
         assertEquals(3, s.stateLog.size)
         assertEquals("bad password", s.error)
@@ -323,7 +323,7 @@ class OnboardingReducerTest {
         val s = onboardingReducer(
             OnboardingState(step = OnboardingStep.CONNECT),
             OnboardingAction.ConnStateChanged(
-                IrcClientState.Ready("me", emptySet(), emptyMap()),
+                ConnectionState.Ready("me"),
             ),
         )
         assertTrue(s.isReady)

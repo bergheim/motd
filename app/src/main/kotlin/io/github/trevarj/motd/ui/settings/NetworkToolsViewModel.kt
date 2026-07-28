@@ -8,7 +8,7 @@ import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkIgnoreEntity
 import io.github.trevarj.motd.data.repo.NetworkIgnoreRepository
 import io.github.trevarj.motd.data.repo.NetworkRepository
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.irc.proto.IrcMessage
 import io.github.trevarj.motd.service.ConnectionManager
 import javax.inject.Inject
@@ -72,7 +72,7 @@ class NetworkToolsViewModel @Inject constructor(
                     network = network,
                     ignores = ignores,
                     buffers = buffers,
-                    connected = states[networkId] is IrcClientState.Ready,
+                    connected = states[networkId] is ConnectionState.Ready,
                 )
             },
             statusFlow,

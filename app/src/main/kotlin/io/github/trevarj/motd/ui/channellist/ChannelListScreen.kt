@@ -45,8 +45,8 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.trevarj.motd.R
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.irc.client.ChannelListing
-import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.ui.components.EmptyState
 import io.github.trevarj.motd.ui.theme.MotdTheme
 
@@ -362,7 +362,7 @@ private fun ChannelListLoadedPreview() {
     MotdTheme {
         ChannelListContent(
             state = ChannelListUiState(
-                connState = IrcClientState.Ready("me", emptySet(), emptyMap()),
+                connState = ConnectionState.Ready("me"),
                 initialized = true,
                 listings = PREVIEW_LISTINGS,
                 loaded = true,
@@ -382,7 +382,7 @@ private fun ChannelListNotReadyPreview() {
     MotdTheme {
         ChannelListContent(
             state = ChannelListUiState(
-                connState = IrcClientState.Disconnected,
+                connState = ConnectionState.Disconnected,
                 initialized = true,
             ),
             onBack = {},

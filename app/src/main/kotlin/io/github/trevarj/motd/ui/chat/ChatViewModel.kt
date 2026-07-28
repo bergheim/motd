@@ -43,13 +43,13 @@ import io.github.trevarj.motd.data.prefs.ReplyPrefs
 import io.github.trevarj.motd.data.visibility.MessageVisibilityReader
 import io.github.trevarj.motd.data.visibility.MessageVisibilitySpec
 import io.github.trevarj.motd.dcc.DccTransferController
+import io.github.trevarj.motd.backend.ConnectionState
+import io.github.trevarj.motd.backend.ReactionCapability
 import io.github.trevarj.motd.diagnostics.AutoFollowTrace
-import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.irc.proto.IrcMessage
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 import io.github.trevarj.motd.irc.client.HistoryAvailability
 import io.github.trevarj.motd.irc.client.IrcClient
-import io.github.trevarj.motd.irc.client.canSendReactionTags
 import io.github.trevarj.motd.service.ConnectionManager
 import io.github.trevarj.motd.service.RosterLoadState
 import io.github.trevarj.motd.service.PresenceKey
@@ -108,12 +108,14 @@ data class ChatState(
     val replyTo: MessageEntity? = null,
     // Null means the buffer/connection snapshot has not loaded yet. Do not use Disconnected as a
     // loading sentinel: it briefly paints a false status while entering an already-connected chat.
-    val connState: IrcClientState? = null,
+    val connState: ConnectionState? = null,
     val presence: Map<PresenceKey, PresenceState> = emptyMap(),
     val conversationLayout: ConversationLayoutState = ConversationLayoutState(),
     // True for a CHANNEL buffer we are no longer a member of (server-confirmed or reflected self-PART).
     // Drives the "You're not in #channel — Rejoin" banner and disables the composer.
     val parted: Boolean = false,
+    val reactionCapability: ReactionCapability? = null,
+    val attachmentUploadAvailable: Boolean = false,
 )
 
 data class ComposerDraftState(
@@ -350,11 +352,23 @@ class ChatViewModel @Inject constructor(
         .distinctUntilChanged()
         .stateIn(viewModelScope, SharingStarted.Eagerly, bufferId)
 
-    private val connState: StateFlow<IrcClientState?> = buffer
+    private val connState: StateFlow<ConnectionState?> = buffer
         .combine(connectionManager.connectionActivity) { buffer, activity ->
-            buffer?.let { activity.states[it.networkId] ?: IrcClientState.Disconnected }
+            buffer?.let { activity.states[it.networkId] ?: ConnectionState.Disconnected }
         }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    private val reactionCapability: StateFlow<ReactionCapability?> = buffer
+        .combine(connectionManager.reactionCapabilities) { buffer, capabilities ->
+            buffer?.let { capabilities[it.networkId] }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    private val attachmentUploadAvailable: StateFlow<Boolean> = buffer
+        .combine(connectionManager.attachmentUploadEndpoints) { buffer, endpoints ->
+            buffer?.let { endpoints.containsKey(it.networkId) } == true
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     private val persistedIdentity = buffer
         .flatMapLatest { current ->
@@ -370,7 +384,7 @@ class ChatViewModel @Inject constructor(
         connState,
         persistedIdentity,
     ) { current, connection, persisted ->
-        if (current != null && connection is IrcClientState.Ready) {
+        if (current != null && connection is ConnectionState.Ready) {
             connectionManager.clientFor(current.networkId)?.isupport?.identityRules
                 ?: persisted?.identityRules
                 ?: IrcIdentityRules()
@@ -383,7 +397,7 @@ class ChatViewModel @Inject constructor(
     val historyAvailability: StateFlow<HistoryAvailability> = combine(buffer, connState) { current, connection ->
         when {
             current == null || current.type == BufferType.SERVER -> HistoryAvailability.Unsupported
-            connection !is IrcClientState.Ready -> HistoryAvailability.NegotiatingOrOffline
+            connection !is ConnectionState.Ready -> HistoryAvailability.NegotiatingOrOffline
             else -> connectionManager.clientFor(current.networkId)?.historyAvailability
                 ?: HistoryAvailability.NegotiatingOrOffline
         }
@@ -407,7 +421,7 @@ class ChatViewModel @Inject constructor(
         identityRules,
         persistedIdentity,
     ) { current, connection, rules, persisted ->
-        val nick = (connection as? IrcClientState.Ready)?.nick ?: persisted?.selfNick
+        val nick = (connection as? ConnectionState.Ready)?.selfHandle ?: persisted?.selfNick
         if (current == null || nick == null) null else OwnIdentityLookup(
             current.networkId,
             nick,
@@ -458,6 +472,10 @@ class ChatViewModel @Inject constructor(
         )
     }.combine(conversationLayout) { current, layout ->
         current.copy(conversationLayout = layout)
+    }.combine(reactionCapability) { current, capability ->
+        current.copy(reactionCapability = capability)
+    }.combine(attachmentUploadAvailable) { current, uploadAvailable ->
+        current.copy(attachmentUploadAvailable = uploadAvailable)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ChatState())
 
     /** Persist to the canonical id captured at the time of selection; Room then drives the UI. */
@@ -713,11 +731,12 @@ class ChatViewModel @Inject constructor(
      * arrived) surface a snackbar rather than failing silently.
      */
     fun react(message: MessageEntity, emoji: String) = viewModelScope.launch {
-        val ready = connState.value as? IrcClientState.Ready
+        val networkId = buffer.value?.networkId
         val removing = message.msgid?.let { msgid ->
             reactionChips.value[msgid]?.firstOrNull { it.emoji == emoji }?.mine
         } == true
-        if (ready == null || !canSendReactionTags(ready.caps, ready.isupport, removing)) {
+        val capability = networkId?.let { connectionManager.reactionCapabilities.value[it] }
+        if (capability == null || (if (removing) !capability.canRemoveOwn else !capability.canAdd)) {
             uiEventQueue.enqueue(ChatUiEvent.ReactionBlocked)
             return@launch
         }
@@ -1043,7 +1062,7 @@ class ChatViewModel @Inject constructor(
     fun canModerate(): Boolean {
         val buffer = state.value.buffer ?: return false
         if (buffer.type != BufferType.CHANNEL) return false
-        val myNick = (connState.value as? IrcClientState.Ready)?.nick ?: return false
+        val myNick = (connState.value as? ConnectionState.Ready)?.selfHandle ?: return false
         val normalize = nickNormalizer()
         val me = _members.value.firstOrNull { normalize(it.nick) == normalize(myNick) } ?: return false
         val order = buffer.networkId.let { connectionManager.clientFor(it) }
@@ -1828,12 +1847,12 @@ internal fun entryHistoryReady(
     activity: io.github.trevarj.motd.service.ConnectionActivitySnapshot,
     networkId: Long,
 ): Boolean = when (activity.states[networkId]) {
-    is IrcClientState.Ready -> networkId !in activity.historyCatchUpPending
-    IrcClientState.Connecting,
-    IrcClientState.Registering,
+    is ConnectionState.Ready -> networkId !in activity.historyCatchUpPending
+    ConnectionState.Connecting,
+    ConnectionState.Authenticating,
     -> false
-    IrcClientState.Disconnected,
+    ConnectionState.Disconnected,
     null,
     -> activity.initializationComplete && activity.progressing[networkId] != true
-    is IrcClientState.Failed -> activity.progressing[networkId] != true
+    is ConnectionState.Failed -> activity.progressing[networkId] != true
 }

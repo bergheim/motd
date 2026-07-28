@@ -5,7 +5,7 @@ import android.content.Context
 import dagger.hilt.android.qualifiers.ApplicationContext
 import io.github.trevarj.motd.audio.NetworkMediaRoute
 import io.github.trevarj.motd.audio.NetworkMediaRouteProvider
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.service.ConnectionManager
 import java.io.BufferedReader
 import java.io.IOException
@@ -168,9 +168,10 @@ class AttachmentUploaderImpl @Inject constructor(
     ): UploadProgress.Complete {
         val networkId = context.networkId
             ?: throw UploadException("Choose a chat with a connected Soju file host.")
-        val ready = connectionManager.connectionStates.value[networkId] as? IrcClientState.Ready
-            ?: throw UploadException("This IRC network is not connected.")
-        val endpoint = sojuFileHostEndpoint(ready.isupport)
+        if (connectionManager.connectionStates.value[networkId] !is ConnectionState.Ready) {
+            throw UploadException("This IRC network is not connected.")
+        }
+        val endpoint = connectionManager.attachmentUploadEndpoints.value[networkId]
             ?: throw UploadException("This IRC network is not advertising a Soju file host.")
         val route = routeProvider.routeForNetwork(networkId)
             ?: throw UploadException("No route for this network.")

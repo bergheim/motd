@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.navigation.toRoute
 import dagger.hilt.android.lifecycle.HiltViewModel
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.repo.BufferRepository
 import io.github.trevarj.motd.irc.agentwire.AGENTWIRE_TAG
@@ -87,7 +88,13 @@ class AgentwireViewModel @Inject constructor(
             ) { enabled, buffer, states -> Triple(enabled, buffer, buffer?.let { states[it.networkId] }) }
                 .collect { (enabled, buffer, connection) ->
                     val topic = buffer?.topic?.let(::parseAgentwireTopic)
-                    val ready = connection as? IrcClientState.Ready
+                    val nextClient = buffer?.let { connections.clientFor(it.networkId) }
+                    // Agentwire is an IRC-owned surface: its cap/ISUPPORT gating reads the live
+                    // client, while the neutral seam state drives when this recomputes.
+                    // Interim until clientFor is removed (docs/backend-neutral-xmpp-rollout.md)
+                    val ready = (connection as? ConnectionState.Ready)?.let {
+                        nextClient?.state?.value as? IrcClientState.Ready
+                    }
                     val missing = ready?.let {
                         agentwireMissingCaps(it.caps) + if (canSendClientTag(it.caps, it.isupport, AGENTWIRE_TAG)) {
                             emptySet()
@@ -115,7 +122,6 @@ class AgentwireViewModel @Inject constructor(
                             connected = ready != null,
                         )
                     }
-                    val nextClient = buffer?.let { connections.clientFor(it.networkId) }
                     if (gate == AgentwireGate.ACTIVE && ready != null && nextClient != null && (nextClient !== client || identityChanged)) {
                         startSession(nextClient)
                     } else if (gate != AgentwireGate.ACTIVE || ready == null) {

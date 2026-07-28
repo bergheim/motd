@@ -8,7 +8,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.test.platform.app.InstrumentationRegistry
 import io.github.trevarj.motd.data.db.NetworkRole
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.ui.chatlist.DrawerRow
 import io.github.trevarj.motd.ui.chatlist.ServerDrawerContent
 import io.github.trevarj.motd.ui.theme.MotdTheme
@@ -25,9 +25,9 @@ class ServerDrawerUiTest {
             MotdTheme(dynamicColor = false) {
                 ServerDrawerContent(
                     drawerRows = listOf(
-                        drawerRow(1, IrcClientState.Ready("alice", emptySet(), emptyMap())),
-                        drawerRow(2, IrcClientState.Connecting),
-                        drawerRow(3, IrcClientState.Disconnected),
+                        drawerRow(1, ConnectionState.Ready("alice")),
+                        drawerRow(2, ConnectionState.Connecting),
+                        drawerRow(3, ConnectionState.Disconnected),
                     ),
                     selectedNetworkId = null,
                     allUnread = 0,
@@ -60,13 +60,13 @@ class ServerDrawerUiTest {
         }
     }
 
-    private fun drawerRow(networkId: Long, state: IrcClientState) = DrawerRow(
+    private fun drawerRow(networkId: Long, state: ConnectionState) = DrawerRow(
         networkId = networkId,
         name = "Network $networkId",
         role = NetworkRole.DIRECT,
         depth = 0,
         state = state,
-        nick = (state as? IrcClientState.Ready)?.nick,
+        nick = (state as? ConnectionState.Ready)?.selfHandle,
         unread = 0,
         mentions = 0,
     )

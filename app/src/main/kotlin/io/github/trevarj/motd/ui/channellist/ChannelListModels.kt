@@ -1,7 +1,7 @@
 package io.github.trevarj.motd.ui.channellist
 
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.irc.client.ChannelListing
-import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 
 /** Server-side user-count floor when the network advertises ELIST 'U'. */
@@ -18,12 +18,12 @@ fun sortListings(listings: List<ChannelListing>): List<ChannelListing> =
 
 /** Prefer the scoped client's live state, especially when the manager snapshot has not caught up. */
 fun channelBrowserConnectionState(
-    managerState: IrcClientState?,
-    clientState: IrcClientState?,
-): IrcClientState = when {
+    managerState: ConnectionState?,
+    clientState: ConnectionState?,
+): ConnectionState = when {
     clientState != null -> clientState
     managerState != null -> managerState
-    else -> IrcClientState.Disconnected
+    else -> ConnectionState.Disconnected
 }
 
 enum class ChannelBrowserAvailability {
@@ -38,24 +38,24 @@ enum class ChannelBrowserAvailability {
 fun channelBrowserAvailability(
     initialized: Boolean,
     isRoot: Boolean,
-    connection: IrcClientState,
+    connection: ConnectionState,
 ): ChannelBrowserAvailability = when {
     !initialized -> ChannelBrowserAvailability.INITIALIZING
     isRoot -> ChannelBrowserAvailability.ROOT_UNAVAILABLE
-    connection is IrcClientState.Ready -> ChannelBrowserAvailability.READY
-    connection is IrcClientState.Connecting || connection is IrcClientState.Registering ->
+    connection is ConnectionState.Ready -> ChannelBrowserAvailability.READY
+    connection is ConnectionState.Connecting || connection is ConnectionState.Authenticating ->
         ChannelBrowserAvailability.CONNECTING
-    connection is IrcClientState.Failed -> ChannelBrowserAvailability.FAILED
+    connection is ConnectionState.Failed -> ChannelBrowserAvailability.FAILED
     else -> ChannelBrowserAvailability.OFFLINE
 }
 
 /** Whether entering the browser should request the locally bounded popular-channel set. */
 fun shouldAutoFetchPopularChannels(
-    connection: IrcClientState,
+    connection: ConnectionState,
     loaded: Boolean,
     isRoot: Boolean,
 ): Boolean =
-    connection is IrcClientState.Ready &&
+    connection is ConnectionState.Ready &&
         !loaded &&
         !isRoot
 

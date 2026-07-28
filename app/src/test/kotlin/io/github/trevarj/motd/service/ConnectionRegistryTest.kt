@@ -2,6 +2,7 @@ package io.github.trevarj.motd.service
 
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.ui.chat.entryHistoryReady
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -72,8 +73,11 @@ class ConnectionRegistryTest {
         val activity = registry.connectionActivity.value
         assertTrue(activity.initializationComplete)
         assertTrue(activity.progressing.getValue(1))
-        assertEquals(IrcClientState.Connecting, activity.states.getValue(1))
-        assertEquals(registry.connectionStates.value, activity.states)
+        assertEquals(ConnectionState.Connecting, activity.states.getValue(1))
+        assertEquals(
+            registry.connectionStates.value.mapValues { (_, state) -> state.toConnectionState() },
+            activity.states,
+        )
     }
 
     @Test
@@ -94,7 +98,7 @@ class ConnectionRegistryTest {
         registry.actorState(1, generation, "fp", IrcClientState.Failed("retry", fatal = false))
         runCurrent()
         val retrying = registry.connectionActivity.value
-        assertTrue(retrying.states[1] is IrcClientState.Failed)
+        assertTrue(retrying.states[1] is ConnectionState.Failed)
         assertFalse(1 in retrying.historyCatchUpPending)
         assertFalse(entryHistoryReady(retrying, 1))
 

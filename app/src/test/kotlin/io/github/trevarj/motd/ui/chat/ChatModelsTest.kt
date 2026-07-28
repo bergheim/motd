@@ -16,7 +16,7 @@ import io.github.trevarj.motd.ui.theme.spacingFor
 import io.github.trevarj.motd.irc.client.HistoryAvailability
 import io.github.trevarj.motd.irc.client.HistoryReferenceType
 import io.github.trevarj.motd.irc.client.IrcDisconnectedException
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.irc.proto.IrcCaseMapping
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 import kotlin.random.Random
@@ -617,11 +617,11 @@ class ChatModelsTest {
         val idle = LoadState.NotLoading(endOfPaginationReached = false)
         val ended = LoadState.NotLoading(endOfPaginationReached = true)
         val failed = LoadState.Error(IllegalStateException("boom"))
-        val connected = IrcClientState.Ready("me", emptySet(), emptyMap())
+        val connected = ConnectionState.Ready("me")
 
         fun state(
             bufferType: BufferType?,
-            connection: IrcClientState?,
+            connection: ConnectionState?,
             availability: HistoryAvailability,
             append: LoadState,
             historyComplete: Boolean = false,
@@ -645,15 +645,15 @@ class ChatModelsTest {
         // whether the append is an error or merely idle.
         assertEquals(
             ChatHistoryUiState.Unavailable(offline = true),
-            state(BufferType.CHANNEL, IrcClientState.Disconnected, HistoryAvailability.NegotiatingOrOffline, failed),
+            state(BufferType.CHANNEL, ConnectionState.Disconnected, HistoryAvailability.NegotiatingOrOffline, failed),
         )
         assertEquals(
             ChatHistoryUiState.Unavailable(offline = false),
-            state(BufferType.CHANNEL, IrcClientState.Registering, HistoryAvailability.NegotiatingOrOffline, failed),
+            state(BufferType.CHANNEL, ConnectionState.Authenticating, HistoryAvailability.NegotiatingOrOffline, failed),
         )
         assertEquals(
             ChatHistoryUiState.Unavailable(offline = false),
-            state(BufferType.CHANNEL, IrcClientState.Registering, HistoryAvailability.NegotiatingOrOffline, idle),
+            state(BufferType.CHANNEL, ConnectionState.Authenticating, HistoryAvailability.NegotiatingOrOffline, idle),
         )
 
         // Unsupported: the capability decision supersedes any append state.

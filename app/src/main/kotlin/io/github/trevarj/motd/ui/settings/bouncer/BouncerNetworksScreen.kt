@@ -59,7 +59,7 @@ import io.github.trevarj.motd.R
 import io.github.trevarj.motd.bouncer.ChannelCommandFields
 import io.github.trevarj.motd.bouncer.NetworkCommandFields
 import io.github.trevarj.motd.bouncer.UserCommandFields
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.ui.theme.LocalMotdSemanticColors
 import io.github.trevarj.motd.ui.theme.MotdTheme
 
@@ -151,7 +151,7 @@ fun BouncerNetworksContent(
     onBack: () -> Unit,
     callbacks: BouncerControlCallbacks,
 ) {
-    val ready = state.rootState is IrcClientState.Ready
+    val ready = state.rootState is ConnectionState.Ready
     Scaffold(
         containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
         topBar = {
@@ -214,7 +214,7 @@ private fun ConnectionAndCapabilityCard(
     state: BouncerNetworksUiState,
     callbacks: BouncerControlCallbacks,
 ) {
-    val ready = state.rootState is IrcClientState.Ready
+    val ready = state.rootState is ConnectionState.Ready
     val container = when {
         !ready -> MaterialTheme.colorScheme.errorContainer
         !state.capabilities.verified -> MaterialTheme.colorScheme.tertiaryContainer
@@ -435,7 +435,7 @@ private fun BouncerNetworksReadyPreview() {
     MotdTheme {
         BouncerNetworksContent(
             state = BouncerNetworksUiState(
-                rootState = IrcClientState.Ready("me", emptySet(), emptyMap()),
+                rootState = ConnectionState.Ready("me"),
                 capabilities = io.github.trevarj.motd.bouncer.BouncerServCapabilities(
                     setOf("network create", "network update", "server status"),
                     verified = true,

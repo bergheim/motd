@@ -14,7 +14,7 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.text.AnnotatedString
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.ui.onboarding.BouncerAddDraft
 import io.github.trevarj.motd.ui.onboarding.BouncerAddState
 import io.github.trevarj.motd.ui.onboarding.BouncerDiscoveryState
@@ -130,7 +130,7 @@ class OnboardingBouncerUiTest {
         step = OnboardingStep.CONNECT,
         choice = ConnectionChoice.BOUNCER,
         networkId = 1L,
-        connState = IrcClientState.Ready("motd", emptySet(), emptyMap()),
+        connState = ConnectionState.Ready("motd"),
         bouncerDiscovery = discovery,
         bouncerSessionGeneration = 1L,
         bouncerAddDraft = draft,

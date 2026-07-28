@@ -443,7 +443,7 @@ internal class ConnectionRegistry(
             callbackCount = callbackJobs.size,
         )
         _connectionActivity.value = ConnectionActivitySnapshot(
-            states = immutableStates,
+            states = immutableStates.mapValues { (_, state) -> state.toConnectionState() },
             progressing = actors.mapValues { (_, actor) -> actor.isAlive },
             initializationComplete = initialReconcileComplete,
             historyCatchUpPending = historyCatchUpGenerations.keys.toSet(),

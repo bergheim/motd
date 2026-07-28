@@ -5,7 +5,7 @@ import io.github.trevarj.motd.data.db.NetworkRole
 import io.github.trevarj.motd.data.repo.NetworkRepository
 import io.github.trevarj.motd.data.prefs.PresetEnrollmentPrefs
 import io.github.trevarj.motd.irc.client.IrcClient
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.service.CertPrompt
 import io.github.trevarj.motd.service.ConnectionManager
 import io.github.trevarj.motd.ui.onboarding.AuthForm
@@ -68,7 +68,7 @@ class NetworkSettingsViewModelTest {
     }
 
     private class FakeConnectionManager(
-        initial: Map<Long, IrcClientState> = emptyMap(),
+        initial: Map<Long, ConnectionState> = emptyMap(),
     ) : ConnectionManager {
         override val connectionStates = MutableStateFlow(initial)
         val disconnected = mutableListOf<Long>()
@@ -376,7 +376,7 @@ class NetworkSettingsViewModelTest {
     @Test
     fun unavailableAvatarPublishing_isNotAttempted_andShowsFailure() = runTest {
         val repo = FakeNetworkRepository(listOf(root()))
-        val ready = IrcClientState.Ready("motd", emptySet(), emptyMap())
+        val ready = ConnectionState.Ready("motd")
         val vm = NetworkSettingsViewModel(
             repo,
             FakeConnectionManager(mapOf(1L to ready)),
@@ -412,7 +412,7 @@ class NetworkSettingsViewModelTest {
             }
             override suspend fun childrenOf(rootId: Long) = emptyList<NetworkEntity>()
         }
-        val ready = IrcClientState.Ready("motd", emptySet(), emptyMap())
+        val ready = ConnectionState.Ready("motd")
         FakeAvatarController.available = true
         val vm = NetworkSettingsViewModel(
             repo,
@@ -425,13 +425,13 @@ class NetworkSettingsViewModelTest {
         vm.init(1)
         runCurrent()
         assertTrue(lookupStarted.isCompleted)
-        assertTrue(vm.state.value.connState is IrcClientState.Ready)
+        assertTrue(vm.state.value.connState is ConnectionState.Ready)
         assertTrue(vm.state.value.avatarPublishingAvailable)
 
         releaseLookup.complete(Unit)
         runCurrent()
 
-        assertTrue(vm.state.value.connState is IrcClientState.Ready)
+        assertTrue(vm.state.value.connState is ConnectionState.Ready)
         assertTrue(vm.state.value.avatarPublishingAvailable)
         assertEquals(root, vm.state.value.entity)
     }

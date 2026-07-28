@@ -43,7 +43,7 @@ import io.github.trevarj.motd.R
 import io.github.trevarj.motd.bouncer.BouncerKind
 import io.github.trevarj.motd.bouncer.SojuLoginForm
 import io.github.trevarj.motd.bouncer.ZncLoginForm
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.ui.onboarding.AuthForm
 import io.github.trevarj.motd.ui.onboarding.ConnectionChoice
 import io.github.trevarj.motd.ui.onboarding.ServerForm
@@ -298,7 +298,7 @@ private fun BouncerKindSelector(
 }
 
 @Composable
-private fun TestingRow(connState: IrcClientState?) {
+private fun TestingRow(connState: ConnectionState?) {
     ListItem(
         headlineContent = { Text(stringResource(R.string.add_network_testing)) },
         supportingContent = { Text(connStateLabel(connState)) },
@@ -307,12 +307,12 @@ private fun TestingRow(connState: IrcClientState?) {
 }
 
 @Composable
-private fun connStateLabel(connState: IrcClientState?): String = when (connState) {
-    is IrcClientState.Ready -> stringResource(R.string.network_settings_status_ready, connState.nick)
-    IrcClientState.Connecting, null -> stringResource(R.string.network_settings_status_connecting)
-    IrcClientState.Registering -> stringResource(R.string.network_settings_status_registering)
-    IrcClientState.Disconnected -> stringResource(R.string.network_settings_status_disconnected)
-    is IrcClientState.Failed -> stringResource(R.string.network_settings_status_failed, connState.reason)
+private fun connStateLabel(connState: ConnectionState?): String = when (connState) {
+    is ConnectionState.Ready -> stringResource(R.string.network_settings_status_ready, connState.selfHandle)
+    ConnectionState.Connecting, null -> stringResource(R.string.network_settings_status_connecting)
+    ConnectionState.Authenticating -> stringResource(R.string.network_settings_status_registering)
+    ConnectionState.Disconnected -> stringResource(R.string.network_settings_status_disconnected)
+    is ConnectionState.Failed -> stringResource(R.string.network_settings_status_failed, connState.reason)
 }
 
 @Composable

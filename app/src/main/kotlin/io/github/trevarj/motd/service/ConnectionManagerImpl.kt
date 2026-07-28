@@ -46,7 +46,11 @@ import io.github.trevarj.motd.irc.client.canSendClientTag
 import io.github.trevarj.motd.irc.client.canSendReactionTags
 import io.github.trevarj.motd.irc.client.preferredNoImplicitNames
 import io.github.trevarj.motd.irc.client.preferredExtendedMonitor
+import io.github.trevarj.motd.attachment.sojuFileHostEndpoint
+import io.github.trevarj.motd.backend.ConnectionState
+import io.github.trevarj.motd.backend.ReactionCapability
 import io.github.trevarj.motd.irc.event.IrcClientState
+import kotlinx.coroutines.flow.FlowCollector
 import io.github.trevarj.motd.irc.event.IrcEvent
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 import io.github.trevarj.motd.irc.ext.MonitorCommands
@@ -463,8 +467,45 @@ class ConnectionManagerImpl @Inject constructor(
     // manual disconnect/connect is not undone by the next DB write. Reset by stopAll (not persisted).
     private val userIntents = java.util.concurrent.ConcurrentHashMap<Long, Boolean>()
 
-    override val connectionStates: StateFlow<Map<Long, IrcClientState>> = registry.connectionStates
+    override val connectionStates: StateFlow<Map<Long, ConnectionState>> =
+        MappedStateFlow(registry.connectionStates) { states ->
+            states.mapValues { (_, state) -> state.toConnectionState() }
+        }
+
     override val connectionActivity: StateFlow<ConnectionActivitySnapshot> = registry.connectionActivity
+
+    override val serverPushAvailable: StateFlow<Boolean> =
+        MappedStateFlow(registry.connectionStates) { states ->
+            states.values.any { it is IrcClientState.Ready && it.caps.hasWebPushCap() }
+        }
+
+    override val attachmentUploadEndpoints: StateFlow<Map<Long, String>> =
+        MappedStateFlow(registry.connectionStates) { states ->
+            buildMap {
+                states.forEach { (networkId, state) ->
+                    if (state is IrcClientState.Ready) {
+                        sojuFileHostEndpoint(state.isupport)?.let { put(networkId, it) }
+                    }
+                }
+            }
+        }
+
+    override val reactionCapabilities: StateFlow<Map<Long, ReactionCapability>> =
+        MappedStateFlow(registry.connectionStates) { states ->
+            buildMap {
+                states.forEach { (networkId, state) ->
+                    if (state is IrcClientState.Ready) {
+                        put(
+                            networkId,
+                            ReactionCapability(
+                                canAdd = canSendReactionTags(state.caps, state.isupport, false),
+                                canRemoveOwn = canSendReactionTags(state.caps, state.isupport, true),
+                            ),
+                        )
+                    }
+                }
+            }
+        }
 
     private val _channelJoinOutcomes = MutableSharedFlow<ChannelJoinOutcome>(extraBufferCapacity = 16)
     override val channelJoinOutcomes: SharedFlow<ChannelJoinOutcome> = _channelJoinOutcomes.asSharedFlow()
@@ -506,6 +547,21 @@ class ConnectionManagerImpl @Inject constructor(
 
     override fun clientFor(networkId: Long): IrcClient? =
         (registry.snapshot.value.actors[networkId]?.connection as? IrcClientConnection)?.client
+
+    private fun Set<String>.hasWebPushCap(): Boolean =
+        any { it == WebPushRegistrar.WEBPUSH_CAP || it.startsWith("${WebPushRegistrar.WEBPUSH_CAP}=") }
+
+    /** StateFlow view mapping [source] on read; keeps the seam neutral without an extra scope. */
+    private class MappedStateFlow<T, R>(
+        private val source: StateFlow<T>,
+        private val transform: (T) -> R,
+    ) : StateFlow<R> {
+        override val value: R get() = transform(source.value)
+        override val replayCache: List<R> get() = listOf(value)
+        override suspend fun collect(collector: FlowCollector<R>): Nothing {
+            source.collect { collector.emit(transform(it)) }
+        }
+    }
 
     // -- lifecycle ----------------------------------------------------------
 
@@ -596,7 +652,7 @@ class ConnectionManagerImpl @Inject constructor(
         ) return
         if (backgroundRetention.isRetaining) return
         val all = networkDao.observeAll().first()
-        val wanted = wantedNetworkIds(all, userIntents, connectionStates.value)
+        val wanted = wantedNetworkIds(all, userIntents, registry.connectionStates.value)
         val endpoints = pushPrefs.endpoints()
         val health = pushHealthStore.snapshot()
         val suspend = pushSuspendedNetworkIds(all, wanted, endpoints, health)
@@ -672,7 +728,7 @@ class ConnectionManagerImpl @Inject constructor(
     }
 
     private fun hasWantedEmbeddedReality(all: List<NetworkEntity>): Boolean =
-        wantedNetworkIds(all, userIntents, connectionStates.value).any { networkId ->
+        wantedNetworkIds(all, userIntents, registry.connectionStates.value).any { networkId ->
             wantedNetworkUsesEmbeddedReality(networkId, all)
         }
 
@@ -683,7 +739,7 @@ class ConnectionManagerImpl @Inject constructor(
     private suspend fun releaseKeeperWhenPushCanOwnEverything() {
         if (appForeground || settings.settings.first().deliveryMode != DeliveryMode.UNIFIED_PUSH) return
         val all = networkDao.observeAll().first()
-        val wanted = wantedNetworkIds(all, userIntents, connectionStates.value)
+        val wanted = wantedNetworkIds(all, userIntents, registry.connectionStates.value)
         val pushOwned = pushSuspendedNetworkIds(
             all,
             wanted,
@@ -1817,9 +1873,9 @@ class ConnectionManagerImpl @Inject constructor(
                 ) > 0
             },
             awaitReady = {
-                if (connectionStates.value[buffer.networkId] !is IrcClientState.Ready) connect(buffer.networkId)
+                if (registry.connectionStates.value[buffer.networkId] !is IrcClientState.Ready) connect(buffer.networkId)
                 withTimeoutOrNull(INVITE_READY_TIMEOUT_MS) {
-                    connectionStates.map { it[buffer.networkId] }
+                    registry.connectionStates.map { it[buffer.networkId] }
                         .filterIsInstance<IrcClientState.Ready>()
                         .first()
                 } != null
@@ -2314,6 +2370,15 @@ internal fun wantedNetworkIds(
         }
         .map { it.id }
         .toSet()
+
+/** Maps the IRC adapter's wire lifecycle onto the backend-neutral seam vocabulary. */
+internal fun IrcClientState.toConnectionState(): ConnectionState = when (this) {
+    IrcClientState.Disconnected -> ConnectionState.Disconnected
+    IrcClientState.Connecting -> ConnectionState.Connecting
+    IrcClientState.Registering -> ConnectionState.Authenticating
+    is IrcClientState.Ready -> ConnectionState.Ready(selfHandle = nick)
+    is IrcClientState.Failed -> ConnectionState.Failed(reason = reason, fatal = fatal)
+}
 
 /**
  * BOUNCER_CHILD ids to revive when their [rootId] transitions into Ready. A bound child tunnels
