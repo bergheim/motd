@@ -551,6 +551,9 @@ class ConnectionManagerImpl @Inject constructor(
 
     override fun sessionFor(networkId: Long): IrcClient? = clientFor(networkId)
 
+    override fun liveIdentityRules(networkId: Long): IrcIdentityRules? =
+        clientFor(networkId)?.isupport?.identityRules
+
     private fun Set<String>.hasWebPushCap(): Boolean =
         any { it == WebPushRegistrar.WEBPUSH_CAP || it.startsWith("${WebPushRegistrar.WEBPUSH_CAP}=") }
 

@@ -385,7 +385,7 @@ class ChatViewModel @Inject constructor(
         persistedIdentity,
     ) { current, connection, persisted ->
         if (current != null && connection is ConnectionState.Ready) {
-            connectionManager.clientFor(current.networkId)?.isupport?.identityRules
+            connectionManager.liveIdentityRules(current.networkId)
                 ?: persisted?.identityRules
                 ?: IrcIdentityRules()
         } else {
