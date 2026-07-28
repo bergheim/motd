@@ -277,7 +277,8 @@ class ChannelInfoViewModel @Inject constructor(
         val networkId = state.value.buffer?.networkId ?: return
         viewModelScope.launch { state.value.buffer?.let { connectionManager.requestMembers(it.id) } }
         val client = connectionManager.clientFor(networkId)
-        val normalized = client?.isupport?.normalize(nick) ?: state.value.identityRules.normalize(nick)
+        val normalized =
+            (connectionManager.liveIdentityRules(networkId) ?: state.value.identityRules).normalize(nick)
         nickDetailsJob?.cancel()
         nickDetailsJob = viewModelScope.launch {
             combine(

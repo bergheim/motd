@@ -90,7 +90,7 @@ class ChannelListViewModel @Inject constructor(
                 // Interim until clientFor is removed (docs/backend-neutral-xmpp-rollout.md)
                 val rawClientState = connectionManager.clientFor(networkId)?.state?.value
                 val clientState = rawClientState?.toConnectionState()
-                val rules = connectionManager.clientFor(networkId)?.isupport?.identityRules
+                val rules = connectionManager.liveIdentityRules(networkId)
                     ?: _state.value.identityRules
                 val conn = channelBrowserConnectionState(states[networkId], clientState)
                 val popularListAvailable = rawClientState?.let(::supportsPopularChannelList) == true

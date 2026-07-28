@@ -498,6 +498,9 @@ class ConnectionManagerImpl @Inject constructor(
 
     override fun sessionFor(networkId: Long): IrcClient? = clientFor(networkId)
 
+    override fun liveIdentityRules(networkId: Long): IrcIdentityRules? =
+        clientFor(networkId)?.isupport?.identityRules
+
     private fun IrcClientState.toConnectionState(): ConnectionState = when (this) {
         IrcClientState.Disconnected -> ConnectionState.Disconnected
         IrcClientState.Connecting -> ConnectionState.Connecting

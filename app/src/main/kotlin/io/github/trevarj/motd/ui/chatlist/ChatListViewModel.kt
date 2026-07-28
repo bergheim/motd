@@ -116,7 +116,7 @@ class ChatListViewModel @Inject constructor(
                 queryPresence = scopedRows.asSequence()
                     .filter { it.type == BufferType.QUERY }
                     .mapNotNull { row ->
-                        val normalize = connectionManager.clientFor(row.networkId)?.isupport?.let { it::normalize }
+                        val normalize = connectionManager.liveIdentityRules(row.networkId)?.let { it::normalize }
                             ?: return@mapNotNull null
                         presence[PresenceKey(row.networkId, normalize(row.displayName))]?.let { row.bufferId to it }
                     }

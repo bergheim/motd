@@ -123,6 +123,14 @@ interface ConnectionManager {
     /** networkId -> reaction sendability; absent means reactions are unavailable right now. */
     val reactionCapabilities: StateFlow<Map<Long, ReactionCapability>> get() = EMPTY_REACTION_CAPABILITIES
 
+    /**
+     * Live negotiated identity rules for a network, null when no live session exists. Callers keep
+     * their persisted fallback so offline normalization behavior never changes
+     * (docs/backend-neutral-xmpp-rollout.md). The value type stays [IrcIdentityRules] until the
+     * canonical participant-identity model is neutralized.
+     */
+    fun liveIdentityRules(networkId: Long): IrcIdentityRules? = null
+
     /** Live client for a connected network, null otherwise. */
     fun clientFor(networkId: Long): IrcClient?
 
