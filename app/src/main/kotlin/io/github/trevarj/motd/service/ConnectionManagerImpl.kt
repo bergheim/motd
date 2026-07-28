@@ -49,6 +49,7 @@ import io.github.trevarj.motd.irc.client.preferredExtendedMonitor
 import io.github.trevarj.motd.attachment.sojuFileHostEndpoint
 import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.backend.ReactionCapability
+import io.github.trevarj.motd.ircbackend.IrcSessions
 import io.github.trevarj.motd.irc.event.IrcClientState
 import kotlinx.coroutines.flow.FlowCollector
 import io.github.trevarj.motd.irc.event.IrcEvent
@@ -394,7 +395,7 @@ class ConnectionManagerImpl @Inject constructor(
     // Lazy to break the WebPushRegistrar <-> ConnectionManager ctor cycle.
     private val webPushRegistrar: dagger.Lazy<WebPushRegistrar>,
     private val bufferStore: BufferStore = BufferStore(db),
-) : ConnectionManager {
+) : ConnectionManager, IrcSessions {
 
     private val networkDao get() = db.networkDao()
     private val bufferDao get() = db.bufferDao()
@@ -494,6 +495,8 @@ class ConnectionManagerImpl @Inject constructor(
 
     override fun clientFor(networkId: Long): IrcClient? =
         (registry.snapshot.value.actors[networkId]?.connection as? IrcClientConnection)?.client
+
+    override fun sessionFor(networkId: Long): IrcClient? = clientFor(networkId)
 
     private fun IrcClientState.toConnectionState(): ConnectionState = when (this) {
         IrcClientState.Disconnected -> ConnectionState.Disconnected

@@ -4,6 +4,7 @@ import io.github.trevarj.motd.data.prefs.PushKeys
 import io.github.trevarj.motd.data.prefs.PushPrefs
 import io.github.trevarj.motd.irc.client.IrcClient
 import io.github.trevarj.motd.backend.ConnectionState
+import io.github.trevarj.motd.ircbackend.IrcSessions
 import io.github.trevarj.motd.service.ConnectionManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -88,10 +89,16 @@ class WebPushRegistrarTest {
         override fun dismissCertPrompt(prompt: io.github.trevarj.motd.service.CertPrompt) = Unit
     }
 
+    /** Adapts a fake ConnectionManager's clientFor to the IrcSessions seam so fakes stay in sync. */
+    private fun fakeIrcSessions(connections: ConnectionManager): IrcSessions =
+        object : IrcSessions {
+            override fun sessionFor(networkId: Long) = connections.clientFor(networkId)
+        }
+
     @Test
     fun loadOrCreateKeys_generates_and_persists_once() = runTest {
         val prefs = FakePushPrefs()
-        val registrar = WebPushRegistrar(prefs, FakeConnectionManager(), FakePushHealthStore())
+        val registrar = WebPushRegistrar(prefs, fakeIrcSessions(FakeConnectionManager()), FakePushHealthStore())
 
         val first = registrar.loadOrCreateKeys()
         assertNotNull("keys persisted after first load", prefs.keys)
@@ -108,7 +115,7 @@ class WebPushRegistrarTest {
     fun onNewEndpoint_persists_endpoint_keyed_by_network_and_keys() = runTest {
         val prefs = FakePushPrefs()
         val health = FakePushHealthStore()
-        val registrar = WebPushRegistrar(prefs, FakeConnectionManager(), health)
+        val registrar = WebPushRegistrar(prefs, fakeIrcSessions(FakeConnectionManager()), health)
 
         val sent = registrar.onNewEndpoint(7L, "https://push.example/abc")
 
@@ -125,7 +132,7 @@ class WebPushRegistrarTest {
     @Test
     fun onUnregisteredNetwork_drops_only_that_network_and_keeps_keys() = runTest {
         val prefs = FakePushPrefs()
-        val registrar = WebPushRegistrar(prefs, FakeConnectionManager(), FakePushHealthStore())
+        val registrar = WebPushRegistrar(prefs, fakeIrcSessions(FakeConnectionManager()), FakePushHealthStore())
         registrar.onNewEndpoint(1L, "https://push.example/one")
         registrar.onNewEndpoint(2L, "https://push.example/two")
         val keysBefore = prefs.keys
@@ -140,7 +147,7 @@ class WebPushRegistrarTest {
     @Test
     fun reRegisterIfNeeded_returns_false_when_no_endpoint() = runTest {
         val prefs = FakePushPrefs()
-        val registrar = WebPushRegistrar(prefs, FakeConnectionManager(), FakePushHealthStore())
+        val registrar = WebPushRegistrar(prefs, fakeIrcSessions(FakeConnectionManager()), FakePushHealthStore())
         assertFalse(registrar.reRegisterIfNeeded(99L))
     }
 }

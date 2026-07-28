@@ -8,7 +8,7 @@ import io.github.trevarj.motd.irc.client.IrcCommandException
 import io.github.trevarj.motd.irc.client.IrcDisconnectedException
 import io.github.trevarj.motd.irc.client.IrcTimeoutException
 import io.github.trevarj.motd.irc.event.IrcClientState
-import io.github.trevarj.motd.service.ConnectionManager
+import io.github.trevarj.motd.ircbackend.IrcSessions
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
@@ -25,7 +25,7 @@ import kotlinx.coroutines.sync.withLock
  */
 class WebPushRegistrar @Inject constructor(
     private val pushPrefs: PushPrefs,
-    private val connectionManager: ConnectionManager,
+    private val ircSessions: IrcSessions,
     private val healthStore: PushHealthStore,
     private val networkDao: NetworkDao? = null,
 ) {
@@ -73,13 +73,13 @@ class WebPushRegistrar @Inject constructor(
         endpoint: String,
         keys: WebPushCrypto.KeyMaterial,
     ): Boolean = registrationLocks.getOrPut(networkId) { Mutex() }.withLock {
-        val client = connectionManager.clientFor(networkId)
+        val client = ircSessions.sessionFor(networkId)
         if (client == null) {
             healthStore.waitingForServer(networkId)
             return@withLock false
         }
         if (!client.hasCap(WEBPUSH_CAP)) {
-            if (connectionManager.clientFor(networkId) !== client) {
+            if (ircSessions.sessionFor(networkId) !== client) {
                 healthStore.failed(networkId, "NETWORK_DISCONNECTED")
                 return@withLock false
             }
@@ -119,7 +119,7 @@ class WebPushRegistrar @Inject constructor(
     suspend fun onUnregisteredNetwork(networkId: Long) {
         val endpoint = pushPrefs.endpointFor(networkId)
         if (endpoint != null) {
-            val client = connectionManager.clientFor(networkId)
+            val client = ircSessions.sessionFor(networkId)
             if (client != null && client.hasCap(WEBPUSH_CAP)) {
                 runCatching { client.webpushUnregister(endpoint) }
             }

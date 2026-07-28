@@ -12,6 +12,7 @@ import io.github.trevarj.motd.data.prefs.OnboardingPrefs
 import io.github.trevarj.motd.data.prefs.PresetEnrollmentPrefs
 import io.github.trevarj.motd.data.repo.NetworkRepository
 import io.github.trevarj.motd.backend.ConnectionState
+import io.github.trevarj.motd.ircbackend.IrcSessions
 import io.github.trevarj.motd.service.ConnectionManager
 import io.github.trevarj.motd.ui.settings.buildNetworkEntity
 import io.github.trevarj.motd.ui.settings.addnetwork.NetworkPresetId
@@ -36,6 +37,7 @@ private const val BOUNCER_CLIENT_WAIT_DELAY_MS = 250L
 class OnboardingViewModel @Inject constructor(
     private val networkRepository: NetworkRepository,
     private val connectionManager: ConnectionManager,
+    private val ircSessions: IrcSessions,
     private val presetEnrollmentPrefs: PresetEnrollmentPrefs,
     private val onboardingPrefs: OnboardingPrefs,
     private val bouncerKindPrefs: BouncerKindPrefs = NoopBouncerKindPrefs,
@@ -191,7 +193,7 @@ class OnboardingViewModel @Inject constructor(
             val client = awaitCurrentOnboardingResource(
                 expectedNetworkId = networkId,
                 currentNetworkId = { _state.value.networkId },
-                lookup = connectionManager::clientFor,
+                lookup = ircSessions::sessionFor,
                 maxAttempts = BOUNCER_CLIENT_WAIT_ATTEMPTS,
                 delayMs = BOUNCER_CLIENT_WAIT_DELAY_MS,
             ) ?: return@launch
@@ -229,7 +231,7 @@ class OnboardingViewModel @Inject constructor(
     /** Add a bouncer network via `bouncerAddNetwork`, then append it to the import list. */
     fun addBouncerNetwork(name: String, host: String) = viewModelScope.launch {
         val networkId = _state.value.networkId ?: return@launch
-        val client = connectionManager.clientFor(networkId) ?: return@launch
+        val client = ircSessions.sessionFor(networkId) ?: return@launch
         val attrs = mapOf("name" to name, "host" to host)
         val netId = runCatching { client.bouncerAddNetwork(attrs) }.getOrNull() ?: return@launch
         dispatch(OnboardingAction.BouncerAdded(BouncerNetworkRow(netId, name, selected = true)))
