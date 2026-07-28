@@ -87,7 +87,8 @@ class ChannelListViewModel @Inject constructor(
                 isRoot = network?.role == NetworkRole.BOUNCER_ROOT,
             )
             connectionManager.connectionStates.collect { states ->
-                // Interim until clientFor is removed (docs/backend-neutral-xmpp-rollout.md)
+                // Live-session freshness read via the IRC-owned accessor; replaced by a neutral
+                // room-discovery capability with the XMPP branch (docs/backend-neutral-xmpp-rollout.md).
                 val rawClientState = ircSessions.sessionFor(networkId)?.state?.value
                 val clientState = rawClientState?.toConnectionState()
                 val rules = connectionManager.liveIdentityRules(networkId)
@@ -282,7 +283,8 @@ class ChannelListViewModel @Inject constructor(
     }
 }
 
-// Interim until clientFor is removed (docs/backend-neutral-xmpp-rollout.md)
+// IRC-state mapper for the live-session freshness read above; goes away with the neutral
+// room-discovery capability (docs/backend-neutral-xmpp-rollout.md).
 private fun io.github.trevarj.motd.irc.event.IrcClientState.toConnectionState(): ConnectionState = when (this) {
     io.github.trevarj.motd.irc.event.IrcClientState.Disconnected -> ConnectionState.Disconnected
     io.github.trevarj.motd.irc.event.IrcClientState.Connecting -> ConnectionState.Connecting

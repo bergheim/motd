@@ -7,6 +7,7 @@ import io.github.trevarj.motd.data.repo.BufferRepository
 import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.data.repo.SearchRepository
 import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.ircbackend.IrcSessions
 import io.github.trevarj.motd.service.ConnectionManager
 import io.github.trevarj.motd.service.HistoryResyncController
 import io.github.trevarj.motd.service.HistorySyncStatus
@@ -41,14 +42,18 @@ class HistorySyncProbe(
     }
 }
 
-class ConnectionProbe(private val connections: ConnectionManager, private val milestones: E2eMilestoneRecorder) {
+class ConnectionProbe(
+    private val connections: ConnectionManager,
+    private val ircSessions: IrcSessions,
+    private val milestones: E2eMilestoneRecorder,
+) {
     suspend fun awaitReady(id: Long, requiredCaps: Set<String>, timeoutMs: Long = 30_000): IrcClientState.Ready =
         withTimeout(timeoutMs) {
             connections.connectionStates.first { states ->
                 when (val state = states[id]) {
                     is ConnectionState.Ready -> {
                         // Caps stay an IRC concern: read them from the live client, not the seam.
-                        val caps = (connections.clientFor(id)?.state?.value as? IrcClientState.Ready)?.caps.orEmpty()
+                        val caps = (ircSessions.sessionFor(id)?.state?.value as? IrcClientState.Ready)?.caps.orEmpty()
                         milestones.record("connection_ready", "network=$id caps=${caps.sorted().joinToString(",")}")
                         requiredCaps.all { cap -> caps.any { it == cap || it.startsWith("$cap=") } }
                     }
@@ -64,7 +69,7 @@ class ConnectionProbe(private val connections: ConnectionManager, private val mi
                     }
                 }
             }
-            connections.clientFor(id)!!.state.value as IrcClientState.Ready
+            ircSessions.sessionFor(id)!!.state.value as IrcClientState.Ready
         }
 
     suspend fun awaitDisconnected(id: Long, timeoutMs: Long = 15_000) {

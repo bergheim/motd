@@ -55,7 +55,6 @@ class OnboardingViewModelTest {
 
     private class FakeConnectionManager : ConnectionManager {
         override val connectionStates = MutableStateFlow<Map<Long, ConnectionState>>(emptyMap())
-        override fun clientFor(networkId: Long): IrcClient? = null
         fun connecting(id: Long) { connectionStates.value += id to ConnectionState.Connecting }
         fun ready(id: Long) { connectionStates.value += id to ConnectionState.Ready("motd") }
         override suspend fun startAll() = Unit

@@ -195,12 +195,12 @@ class ChannelInfoTopicMutationTest {
         collector.cancelAndJoin()
     }
 
-    /** Adapts the fake ConnectionManager's clientFor to the IrcSessions seam so fakes stay in sync. */
+    /** No live IRC session: these tests exercise only the neutral seam's topic/part contracts. */
     private fun viewModel(manager: ConnectionManager) = ChannelInfoViewModel(
         bufferRepository = FakeBufferRepository(),
         connectionManager = manager,
         ircSessions = object : IrcSessions {
-            override fun sessionFor(networkId: Long) = manager.clientFor(networkId)
+            override fun sessionFor(networkId: Long): IrcClient? = null
         },
         draftStore = ComposerDraftStore(database),
         settingsRepository = FakeSettingsRepository(),
@@ -231,7 +231,6 @@ class ChannelInfoTopicMutationTest {
         override val certPrompts = MutableStateFlow<List<CertPrompt>>(emptyList())
         val attempts = mutableListOf<Pair<Long, String>>()
 
-        override fun clientFor(networkId: Long): IrcClient? = null
         override suspend fun startAll() = Unit
         override suspend fun stopAll() = Unit
         override suspend fun connect(networkId: Long) = Unit

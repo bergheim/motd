@@ -73,7 +73,7 @@ class RequiredHeadlessE2eTest {
     private fun launchBootstrapped(requiredCaps: Set<String> = emptySet()): Pair<E2eBootstrap, BootstrappedNetwork> {
         val bootstrap = E2eBootstrap.fromApplication(InstrumentationRegistry.getInstrumentation().targetContext)
         val network = runBlocking { bootstrap.connectedSojuNetwork() }
-        val probe = ConnectionProbe(bootstrap.seams.connections(), milestones)
+        val probe = ConnectionProbe(bootstrap.seams.connections(), bootstrap.seams.ircSessions(), milestones)
         runBlocking {
             probe.awaitReady(network.rootId, emptySet())
             probe.awaitReady(network.childId, requiredCaps)
@@ -93,7 +93,7 @@ class RequiredHeadlessE2eTest {
             it.role == NetworkRole.BOUNCER_CHILD && it.parentId == root.id &&
                 it.name == "libera" && !it.bouncerNetId.isNullOrBlank()
         }
-        runBlocking { ConnectionProbe(bootstrap.seams.connections(), milestones).awaitReady(child.id, emptySet()) }
+        runBlocking { ConnectionProbe(bootstrap.seams.connections(), bootstrap.seams.ircSessions(), milestones).awaitReady(child.id, emptySet()) }
         assertTrue(runBlocking { bootstrap.seams.certTrust().isPinned(bootstrap.args.host, bootstrap.args.port, bootstrap.args.fingerprint) })
         compose.onAllNodesWithTag("cert_trust_dialog", useUnmergedTree = true).assertCountEquals(0)
         milestones.record("onboarding_imported", "root=${root.id} child=${child.id}")
@@ -125,7 +125,11 @@ class RequiredHeadlessE2eTest {
         runBlocking {
             bootstrap.seams.connections().disconnect(network.childId)
             bootstrap.seams.connections().connect(network.childId)
-            ConnectionProbe(bootstrap.seams.connections(), milestones).awaitReady(
+            ConnectionProbe(
+                bootstrap.seams.connections(),
+                bootstrap.seams.ircSessions(),
+                milestones,
+            ).awaitReady(
                 network.childId,
                 setOf(
                     "echo-message",
@@ -189,7 +193,7 @@ class RequiredHeadlessE2eTest {
         val (bootstrap, network) = launchBootstrapped(
             setOf("draft/chathistory", "draft/read-marker", "batch", "message-tags", "server-time"),
         )
-        val connectionProbe = ConnectionProbe(bootstrap.seams.connections(), milestones)
+        val connectionProbe = ConnectionProbe(bootstrap.seams.connections(), bootstrap.seams.ircSessions(), milestones)
         val bufferId = runBlocking {
             BufferProbe(bootstrap.seams.buffers(), milestones).awaitJoinedChannel(network.childId, bootstrap.args.channel)
         }

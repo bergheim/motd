@@ -18,6 +18,7 @@ import io.github.trevarj.motd.irc.client.IrcClient
 import io.github.trevarj.motd.irc.client.SequencedIrcEvent
 import io.github.trevarj.motd.irc.client.canSendClientTag
 import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.ircbackend.IrcSessions
 import io.github.trevarj.motd.service.ConnectionManager
 import io.github.trevarj.motd.ui.nav.ChatRoute
 import java.util.UUID
@@ -68,6 +69,7 @@ class AgentwireViewModel @Inject constructor(
     private val prefs: AgentwirePrefs,
     private val buffers: BufferRepository,
     private val connections: ConnectionManager,
+    private val ircSessions: IrcSessions,
 ) : ViewModel() {
     private val route = savedStateHandle.toRoute<ChatRoute>()
     private val instance = UUID.randomUUID().toString()
@@ -88,10 +90,9 @@ class AgentwireViewModel @Inject constructor(
             ) { enabled, buffer, states -> Triple(enabled, buffer, buffer?.let { states[it.networkId] }) }
                 .collect { (enabled, buffer, connection) ->
                     val topic = buffer?.topic?.let(::parseAgentwireTopic)
-                    val nextClient = buffer?.let { connections.clientFor(it.networkId) }
+                    val nextClient = buffer?.let { ircSessions.sessionFor(it.networkId) }
                     // Agentwire is an IRC-owned surface: its cap/ISUPPORT gating reads the live
-                    // client, while the neutral seam state drives when this recomputes.
-                    // Interim until clientFor is removed (docs/backend-neutral-xmpp-rollout.md)
+                    // session, while the neutral seam state drives when this recomputes.
                     val ready = (connection as? ConnectionState.Ready)?.let {
                         nextClient?.state?.value as? IrcClientState.Ready
                     }

@@ -1413,7 +1413,7 @@ class ChatViewModelTest {
     )
 
     /** Adapts a fake ConnectionManager's clientFor to the IrcSessions seam so fakes stay in sync. */
-    private fun fakeIrcSessions(connections: ConnectionManager): IrcSessions =
+    private fun fakeIrcSessions(connections: FakeConnectionManager): IrcSessions =
         object : IrcSessions {
             override fun sessionFor(networkId: Long): IrcClient? = connections.clientFor(networkId)
         }
@@ -1511,7 +1511,7 @@ class ChatViewModelTest {
             )
         }
 
-        override fun clientFor(networkId: Long): IrcClient? = currentClient
+        fun clientFor(networkId: Long): IrcClient? = currentClient
         // Mirrors ConnectionManagerImpl.historyAvailability's clientFor(...)?.historyAvailability
         // delegation so this fake stays behaviorally in sync with the real seam.
         override fun historyAvailability(networkId: Long): HistoryAvailability? =

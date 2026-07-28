@@ -67,7 +67,7 @@ class WebPushRegistrarTest {
     /** ConnectionManager fake with no live clients (register loop is a no-op). */
     private open class FakeConnectionManager : ConnectionManager {
         override val connectionStates: StateFlow<Map<Long, ConnectionState>> = MutableStateFlow(emptyMap())
-        override fun clientFor(networkId: Long): IrcClient? = null
+        fun clientFor(networkId: Long): IrcClient? = null
         override suspend fun startAll() = Unit
         override suspend fun stopAll() = Unit
         override suspend fun connect(networkId: Long) = Unit
@@ -90,7 +90,7 @@ class WebPushRegistrarTest {
     }
 
     /** Adapts a fake ConnectionManager's clientFor to the IrcSessions seam so fakes stay in sync. */
-    private fun fakeIrcSessions(connections: ConnectionManager): IrcSessions =
+    private fun fakeIrcSessions(connections: FakeConnectionManager): IrcSessions =
         object : IrcSessions {
             override fun sessionFor(networkId: Long) = connections.clientFor(networkId)
         }
