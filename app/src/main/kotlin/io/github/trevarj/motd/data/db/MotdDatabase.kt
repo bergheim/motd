@@ -33,7 +33,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         MemberEntity::class,
         DccTransferEntity::class,
     ],
-    version = 23,
+    version = 24,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -708,6 +708,18 @@ val MIGRATION_21_22 = object : Migration(21, 22) {
 val MIGRATION_22_23 = object : Migration(22, 23) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL("UPDATE history_gaps SET recoverable = 1 WHERE recoverable = 0")
+    }
+}
+
+/**
+ * v23 -> v24: add the backend-neutral protocol discriminator on `networks`
+ * (docs/backend-neutral-xmpp-rollout.md). Additive and non-destructive; every pre-v24 row is IRC
+ * by definition, so existing rows take the "irc" default and the value set stays open for future
+ * backends. The version tracks whatever main holds at freeze time, never a fixed number.
+ */
+val MIGRATION_23_24 = object : Migration(23, 24) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE networks ADD COLUMN protocol TEXT NOT NULL DEFAULT 'irc'")
     }
 }
 
