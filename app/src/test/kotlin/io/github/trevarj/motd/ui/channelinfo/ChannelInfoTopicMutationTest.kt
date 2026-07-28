@@ -18,6 +18,7 @@ import io.github.trevarj.motd.data.prefs.ThemeMode
 import io.github.trevarj.motd.data.repo.BufferRepository
 import io.github.trevarj.motd.irc.client.IrcClient
 import io.github.trevarj.motd.backend.ConnectionState
+import io.github.trevarj.motd.ircbackend.IrcSessions
 import io.github.trevarj.motd.service.CertPrompt
 import io.github.trevarj.motd.service.ConnectionManager
 import io.github.trevarj.motd.service.DeliveryMode
@@ -194,9 +195,13 @@ class ChannelInfoTopicMutationTest {
         collector.cancelAndJoin()
     }
 
+    /** Adapts the fake ConnectionManager's clientFor to the IrcSessions seam so fakes stay in sync. */
     private fun viewModel(manager: ConnectionManager) = ChannelInfoViewModel(
         bufferRepository = FakeBufferRepository(),
         connectionManager = manager,
+        ircSessions = object : IrcSessions {
+            override fun sessionFor(networkId: Long) = manager.clientFor(networkId)
+        },
         draftStore = ComposerDraftStore(database),
         settingsRepository = FakeSettingsRepository(),
         userDao = database.userDao(),

@@ -11,6 +11,7 @@ import io.github.trevarj.motd.data.repo.NetworkRepository
 import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.irc.client.ChannelListing
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
+import io.github.trevarj.motd.ircbackend.IrcSessions
 import io.github.trevarj.motd.service.ConnectionManager
 import io.github.trevarj.motd.ui.nav.ChannelListRoute
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -62,6 +63,7 @@ class ChannelListViewModel @Inject constructor(
     private val networkRepository: NetworkRepository,
     private val bufferRepository: BufferRepository,
     private val connectionManager: ConnectionManager,
+    private val ircSessions: IrcSessions,
 ) : ViewModel() {
 
     private val networkId: Long = savedStateHandle.toRoute<ChannelListRoute>().networkId
@@ -86,7 +88,7 @@ class ChannelListViewModel @Inject constructor(
             )
             connectionManager.connectionStates.collect { states ->
                 // Interim until clientFor is removed (docs/backend-neutral-xmpp-rollout.md)
-                val rawClientState = connectionManager.clientFor(networkId)?.state?.value
+                val rawClientState = ircSessions.sessionFor(networkId)?.state?.value
                 val clientState = rawClientState?.toConnectionState()
                 val rules = connectionManager.liveIdentityRules(networkId)
                     ?: _state.value.identityRules
@@ -197,10 +199,10 @@ class ChannelListViewModel @Inject constructor(
         _state.value = s.copy(loading = true, error = null)
         fetchJob = viewModelScope.launch {
             val client = withTimeoutOrNull(CLIENT_WAIT_TIMEOUT_MS) {
-                var current = connectionManager.clientFor(networkId)
+                var current = ircSessions.sessionFor(networkId)
                 while (current == null) {
                     delay(CLIENT_WAIT_POLL_MS)
-                    current = connectionManager.clientFor(networkId)
+                    current = ircSessions.sessionFor(networkId)
                 }
                 current
             }

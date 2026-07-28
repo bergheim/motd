@@ -18,6 +18,7 @@ import io.github.trevarj.motd.data.repo.NoopNetworkIgnoreRepository
 import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.irc.proto.IrcMessage
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
+import io.github.trevarj.motd.ircbackend.IrcSessions
 import io.github.trevarj.motd.service.ConnectionManager
 import io.github.trevarj.motd.service.RosterLoadState
 import io.github.trevarj.motd.ui.chat.ComposerDraftStore
@@ -96,6 +97,7 @@ internal fun rosterPresentation(cachedCount: Int, state: RosterLoadState): Roste
 class ChannelInfoViewModel @Inject constructor(
     private val bufferRepository: BufferRepository,
     private val connectionManager: ConnectionManager,
+    private val ircSessions: IrcSessions,
     private val draftStore: ComposerDraftStore,
     private val settingsRepository: SettingsRepository,
     private val userDao: UserDao,
@@ -235,7 +237,7 @@ class ChannelInfoViewModel @Inject constructor(
     // Resolve prefix order from the live client's ISUPPORT when connected; fallback otherwise.
     private fun prefixOrderForBuffer(buffer: BufferEntity?): String {
         val networkId = buffer?.networkId ?: return DEFAULT_PREFIX_ORDER
-        val client = connectionManager.clientFor(networkId) ?: return DEFAULT_PREFIX_ORDER
+        val client = ircSessions.sessionFor(networkId) ?: return DEFAULT_PREFIX_ORDER
         return prefixOrderFrom(client.isupport.prefixModes)
     }
 
@@ -334,7 +336,7 @@ class ChannelInfoViewModel @Inject constructor(
         _nickSheet.value = NickSheetState(nick = nick)
         val networkId = state.value.buffer?.networkId ?: return
         viewModelScope.launch { state.value.buffer?.let { connectionManager.requestMembers(it.id) } }
-        val client = connectionManager.clientFor(networkId)
+        val client = ircSessions.sessionFor(networkId)
         val normalized =
             (connectionManager.liveIdentityRules(networkId) ?: state.value.identityRules).normalize(nick)
         nickDetailsJob?.cancel()
@@ -376,7 +378,7 @@ class ChannelInfoViewModel @Inject constructor(
     fun setMemberMode(nick: String, mode: Char, grant: Boolean) = viewModelScope.launch {
         val buffer = state.value.buffer ?: return@launch
         val flag = (if (grant) "+" else "-") + mode
-        connectionManager.clientFor(buffer.networkId)
+        ircSessions.sessionFor(buffer.networkId)
             ?.send(IrcMessage(command = "MODE", params = listOf(buffer.ircTarget, flag, nick)))
     }
 
@@ -388,13 +390,13 @@ class ChannelInfoViewModel @Inject constructor(
         } else {
             listOf(buffer.ircTarget, nick, reason)
         }
-        connectionManager.clientFor(buffer.networkId)?.send(IrcMessage(command = "KICK", params = params))
+        ircSessions.sessionFor(buffer.networkId)?.send(IrcMessage(command = "KICK", params = params))
     }
 
     /** MODE <channel> +b <banMask(nick)>. */
     fun ban(nick: String) = viewModelScope.launch {
         val buffer = state.value.buffer ?: return@launch
-        connectionManager.clientFor(buffer.networkId)
+        ircSessions.sessionFor(buffer.networkId)
             ?.send(IrcMessage(command = "MODE", params = listOf(buffer.ircTarget, "+b", banMask(nick))))
     }
 
@@ -402,14 +404,14 @@ class ChannelInfoViewModel @Inject constructor(
         val buffer = state.value.buffer ?: return@launch
         val trimmed = mask.trim().takeIf(String::isNotBlank) ?: return@launch
         val flag = if (grant) "+b" else "-b"
-        connectionManager.clientFor(buffer.networkId)
+        ircSessions.sessionFor(buffer.networkId)
             ?.send(IrcMessage(command = "MODE", params = listOf(buffer.ircTarget, flag, trimmed)))
     }
 
     fun invite(nick: String) = viewModelScope.launch {
         val buffer = state.value.buffer ?: return@launch
         val trimmed = nick.trim().takeIf(String::isNotBlank) ?: return@launch
-        connectionManager.clientFor(buffer.networkId)
+        ircSessions.sessionFor(buffer.networkId)
             ?.send(IrcMessage(command = "INVITE", params = listOf(trimmed, buffer.ircTarget)))
     }
 
@@ -418,7 +420,7 @@ class ChannelInfoViewModel @Inject constructor(
         val trimmedModes = modes.trim().takeIf(String::isNotBlank) ?: return@launch
         val params = listOf(buffer.ircTarget, trimmedModes) +
             args.split(' ').map(String::trim).filter(String::isNotBlank)
-        connectionManager.clientFor(buffer.networkId)?.send(IrcMessage(command = "MODE", params = params))
+        ircSessions.sessionFor(buffer.networkId)?.send(IrcMessage(command = "MODE", params = params))
     }
 
     /** Reset a previous local result before opening the editor again. */
@@ -460,7 +462,7 @@ class ChannelInfoViewModel @Inject constructor(
      */
     private fun viewerCanModerate(buffer: BufferEntity?, members: List<MemberEntity>, prefixOrder: String): Boolean {
         if (buffer?.type != BufferType.CHANNEL) return false
-        val client = connectionManager.clientFor(buffer.networkId) ?: return false
+        val client = ircSessions.sessionFor(buffer.networkId) ?: return false
         val myNick = (connectionManager.connectionStates.value[buffer.networkId] as? ConnectionState.Ready)?.selfHandle
             ?: return false
         val normalize: (String) -> String = { client.isupport.normalize(it) }
