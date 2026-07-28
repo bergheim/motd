@@ -1,6 +1,7 @@
 package io.github.trevarj.motd.ui.channellist
 
 import io.github.trevarj.motd.irc.client.ChannelListing
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 import org.junit.Assert.assertEquals
@@ -80,13 +81,13 @@ class ChannelListModelsTest {
 
     @Test
     fun `live ready client wins while manager snapshot is absent or stale`() {
-        val ready = IrcClientState.Ready("me", emptySet(), mapOf("ELIST" to "U"))
+        val ready = ConnectionState.Ready("me")
 
         assertEquals(ready, channelBrowserConnectionState(null, ready))
-        assertEquals(ready, channelBrowserConnectionState(IrcClientState.Disconnected, ready))
+        assertEquals(ready, channelBrowserConnectionState(ConnectionState.Disconnected, ready))
         assertEquals(
-            IrcClientState.Disconnected,
-            channelBrowserConnectionState(ready, IrcClientState.Disconnected),
+            ConnectionState.Disconnected,
+            channelBrowserConnectionState(ready, ConnectionState.Disconnected),
         )
     }
 
@@ -94,11 +95,11 @@ class ChannelListModelsTest {
     fun `browser does not present offline state before initialization`() {
         assertEquals(
             ChannelBrowserAvailability.INITIALIZING,
-            channelBrowserAvailability(false, false, IrcClientState.Disconnected),
+            channelBrowserAvailability(false, false, ConnectionState.Disconnected),
         )
         assertEquals(
             ChannelBrowserAvailability.READY,
-            channelBrowserAvailability(true, false, IrcClientState.Ready("me", emptySet(), emptyMap())),
+            channelBrowserAvailability(true, false, ConnectionState.Ready("me")),
         )
     }
 

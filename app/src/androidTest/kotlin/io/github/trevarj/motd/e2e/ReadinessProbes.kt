@@ -3,6 +3,7 @@ package io.github.trevarj.motd.e2e
 import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.db.MessageEntity
 import io.github.trevarj.motd.data.repo.BufferRepository
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.data.repo.SearchRepository
 import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.service.ConnectionManager
@@ -15,11 +16,13 @@ class ConnectionProbe(private val connections: ConnectionManager, private val mi
         withTimeout(timeoutMs) {
             connections.connectionStates.first { states ->
                 when (val state = states[id]) {
-                    is IrcClientState.Ready -> {
-                        milestones.record("connection_ready", "network=$id caps=${state.caps.sorted().joinToString(",")}")
-                        requiredCaps.all { cap -> state.caps.any { it == cap || it.startsWith("$cap=") } }
+                    is ConnectionState.Ready -> {
+                        // Caps stay an IRC concern: read them from the live client, not the seam.
+                        val caps = (connections.clientFor(id)?.state?.value as? IrcClientState.Ready)?.caps.orEmpty()
+                        milestones.record("connection_ready", "network=$id caps=${caps.sorted().joinToString(",")}")
+                        requiredCaps.all { cap -> caps.any { it == cap || it.startsWith("$cap=") } }
                     }
-                    is IrcClientState.Failed -> {
+                    is ConnectionState.Failed -> {
                         milestones.record("connection_failed", "network=$id fatal=${state.fatal}")
                         if (state.fatal) error("fatal connection state")
                         false
@@ -31,7 +34,7 @@ class ConnectionProbe(private val connections: ConnectionManager, private val mi
                     }
                 }
             }
-            connections.connectionStates.value[id] as IrcClientState.Ready
+            connections.clientFor(id)!!.state.value as IrcClientState.Ready
         }
 }
 

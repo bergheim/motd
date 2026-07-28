@@ -1,7 +1,8 @@
 package io.github.trevarj.motd.service
 
+import io.github.trevarj.motd.backend.ConnectionState
+import io.github.trevarj.motd.backend.ReactionCapability
 import io.github.trevarj.motd.irc.client.IrcClient
-import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.irc.event.IrcEvent
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 import io.github.trevarj.motd.data.db.TimelineAnchor
@@ -83,6 +84,9 @@ internal fun rosterStateAfterExplicitRefresh(completed: Boolean): RosterLoadStat
 private val EMPTY_ROSTER_STATES: StateFlow<Map<Long, RosterLoadState>> = MutableStateFlow(emptyMap())
 private val EMPTY_PRESENCE_STATES: StateFlow<Map<PresenceKey, PresenceState>> = MutableStateFlow(emptyMap())
 private val EMPTY_LAG_STATES: StateFlow<Map<Long, Long?>> = MutableStateFlow(emptyMap())
+private val EMPTY_SERVER_PUSH: StateFlow<Boolean> = MutableStateFlow(false)
+private val EMPTY_ATTACHMENT_ENDPOINTS: StateFlow<Map<Long, String>> = MutableStateFlow(emptyMap())
+private val EMPTY_REACTION_CAPABILITIES: StateFlow<Map<Long, ReactionCapability>> = MutableStateFlow(emptyMap())
 
 /**
  * A pending TOFU cert-trust decision surfaced to the UI (plans/12). Published when a TLS handshake
@@ -102,13 +106,22 @@ data class CertPrompt(
 )
 
 interface ConnectionManager {
-    /** Connection state per network row id. */
-    val connectionStates: StateFlow<Map<Long, IrcClientState>>
+    /** Connection state per network row id, in the backend-neutral lifecycle vocabulary. */
+    val connectionStates: StateFlow<Map<Long, ConnectionState>>
     val rosterStates: StateFlow<Map<Long, RosterLoadState>> get() = EMPTY_ROSTER_STATES
     val presenceStates: StateFlow<Map<PresenceKey, PresenceState>> get() = EMPTY_PRESENCE_STATES
     /** Latest PING/PONG round-trip latency (ms) per network id; null = unknown/disconnected (#34). */
     val lagStates: StateFlow<Map<Long, Long?>> get() = EMPTY_LAG_STATES
     val channelJoinOutcomes: Flow<ChannelJoinOutcome> get() = emptyFlow()
+
+    /** True while any connected network accepts server-side push registration. */
+    val serverPushAvailable: StateFlow<Boolean> get() = EMPTY_SERVER_PUSH
+
+    /** networkId -> attachment upload endpoint, present only while the network offers one. */
+    val attachmentUploadEndpoints: StateFlow<Map<Long, String>> get() = EMPTY_ATTACHMENT_ENDPOINTS
+
+    /** networkId -> reaction sendability; absent means reactions are unavailable right now. */
+    val reactionCapabilities: StateFlow<Map<Long, ReactionCapability>> get() = EMPTY_REACTION_CAPABILITIES
 
     /** Live client for a connected network, null otherwise. */
     fun clientFor(networkId: Long): IrcClient?

@@ -4,7 +4,7 @@ import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.db.ChatListRow
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -40,13 +40,13 @@ class DrawerModelsTest {
     fun `absent state maps to Disconnected and nick null`() {
         val rows = buildDrawerRows(listOf(net(1)), emptyList(), emptyMap())
         assertEquals(1, rows.size)
-        assertEquals(IrcClientState.Disconnected, rows[0].state)
+        assertEquals(ConnectionState.Disconnected, rows[0].state)
         assertNull(rows[0].nick)
     }
 
     @Test
     fun `ready state exposes nick`() {
-        val states = mapOf(1L to IrcClientState.Ready("neo", emptySet(), emptyMap()))
+        val states = mapOf(1L to ConnectionState.Ready("neo"))
         val rows = buildDrawerRows(listOf(net(1)), emptyList(), states)
         assertEquals("neo", rows[0].nick)
     }

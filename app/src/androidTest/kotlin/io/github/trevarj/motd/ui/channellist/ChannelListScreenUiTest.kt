@@ -4,7 +4,7 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performTextInput
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.ui.theme.MotdTheme
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -23,7 +23,7 @@ class ChannelListScreenUiTest {
                     state = ChannelListUiState(
                         networkId = 2,
                         initialized = true,
-                        connState = IrcClientState.Ready("trev", emptySet(), emptyMap()),
+                        connState = ConnectionState.Ready("trev"),
                     ),
                     onBack = {},
                     onQueryChange = {},

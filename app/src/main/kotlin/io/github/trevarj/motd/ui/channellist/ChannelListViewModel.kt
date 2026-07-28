@@ -9,7 +9,7 @@ import io.github.trevarj.motd.data.db.NetworkRole
 import io.github.trevarj.motd.data.repo.BufferRepository
 import io.github.trevarj.motd.data.repo.NetworkRepository
 import io.github.trevarj.motd.irc.client.ChannelListing
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 import io.github.trevarj.motd.service.ConnectionManager
 import io.github.trevarj.motd.ui.nav.ChannelListRoute
@@ -32,13 +32,15 @@ import javax.inject.Inject
 data class ChannelListUiState(
     val networkId: Long = 0,
     val networkName: String = "",
-    val connState: IrcClientState = IrcClientState.Disconnected,
+    val connState: ConnectionState = ConnectionState.Disconnected,
     val initialized: Boolean = false,
     val query: String = "",
     val listings: List<ChannelListing> = emptyList(),
     val loading: Boolean = false,
     val loaded: Boolean = false,
     val isRoot: Boolean = false,
+    /** Whether ISUPPORT ELIST 'U' lets a blank LIST be bounded server-side (interim IRC read). */
+    val popularListAvailable: Boolean = false,
     val error: String? = null,
     val identityRules: IrcIdentityRules = IrcIdentityRules(),
     /** Raw names sent in this Ready session, awaiting authoritative Room self-JOIN. */
@@ -51,7 +53,7 @@ data class ChannelListUiState(
     val joinedChannels: Set<String> = emptySet(),
     val joinError: String? = null,
 ) {
-    val isReady: Boolean get() = connState is IrcClientState.Ready
+    val isReady: Boolean get() = connState is ConnectionState.Ready
     val availability: ChannelBrowserAvailability
         get() = channelBrowserAvailability(initialized, isRoot, connState)
 }
@@ -85,17 +87,20 @@ class ChannelListViewModel @Inject constructor(
                 isRoot = network?.role == NetworkRole.BOUNCER_ROOT,
             )
             connectionManager.connectionStates.collect { states ->
-                val clientState = connectionManager.clientFor(networkId)?.state?.value
+                // Interim until clientFor is removed (docs/backend-neutral-xmpp-rollout.md)
+                val rawClientState = connectionManager.clientFor(networkId)?.state?.value
+                val clientState = rawClientState?.toConnectionState()
                 val rules = connectionManager.clientFor(networkId)?.isupport?.identityRules
                     ?: _state.value.identityRules
                 val conn = channelBrowserConnectionState(states[networkId], clientState)
+                val popularListAvailable = rawClientState?.let(::supportsPopularChannelList) == true
                 val current = _state.value
                 val normalizedJoined = normalizeChannelNames(current.persistedJoinedChannels, rules)
                 val pendingChannelNames = reconcilePendingChannelNames(
                     current.pendingChannelNames,
                     normalizedJoined,
                     rules,
-                    conn is IrcClientState.Ready,
+                    conn is ConnectionState.Ready,
                 )
                 _state.value = current.copy(
                     connState = conn,
@@ -107,11 +112,12 @@ class ChannelListViewModel @Inject constructor(
                         pendingChannelNames,
                         rules,
                     ),
+                    popularListAvailable = popularListAvailable,
                 )
                 // A local result cap does not bound the server response. Only auto-fetch when
                 // ELIST U guarantees the broad request is filtered before transmission.
-                if (conn is IrcClientState.Ready &&
-                    supportsPopularChannelList(conn) &&
+                if (conn is ConnectionState.Ready &&
+                    popularListAvailable &&
                     !_state.value.loaded &&
                     !_state.value.isRoot
                 ) {
@@ -127,7 +133,7 @@ class ChannelListViewModel @Inject constructor(
                     current.pendingChannelNames,
                     normalizedJoined,
                     current.identityRules,
-                    current.connState is IrcClientState.Ready,
+                    current.connState is ConnectionState.Ready,
                 )
                 _state.value = current.copy(
                     persistedJoinedChannels = joined,
@@ -150,7 +156,7 @@ class ChannelListViewModel @Inject constructor(
                     current.pendingChannelNames,
                     rejection.channel,
                     current.identityRules,
-                    current.connState is IrcClientState.Ready,
+                    current.connState is ConnectionState.Ready,
                 ) ?: return@collect
                 _state.value = current.copy(
                     pendingChannelNames = pendingChannelNames,
@@ -177,7 +183,7 @@ class ChannelListViewModel @Inject constructor(
             current.copy(query = requestedQuery).also { _state.value = it }
         }
         if (s.isRoot || !s.isReady) return
-        if (requestedQuery.isBlank() && !supportsPopularChannelList(s.connState)) {
+        if (requestedQuery.isBlank() && !s.popularListAvailable) {
             // Never turn a blank refresh into a full-network LIST on servers without ELIST U.
             _state.value = s.copy(
                 listings = emptyList(),
@@ -285,4 +291,13 @@ class ChannelListViewModel @Inject constructor(
         const val CLIENT_WAIT_TIMEOUT_MS = 2_000L
         const val CLIENT_WAIT_POLL_MS = 50L
     }
+}
+
+// Interim until clientFor is removed (docs/backend-neutral-xmpp-rollout.md)
+private fun io.github.trevarj.motd.irc.event.IrcClientState.toConnectionState(): ConnectionState = when (this) {
+    io.github.trevarj.motd.irc.event.IrcClientState.Disconnected -> ConnectionState.Disconnected
+    io.github.trevarj.motd.irc.event.IrcClientState.Connecting -> ConnectionState.Connecting
+    io.github.trevarj.motd.irc.event.IrcClientState.Registering -> ConnectionState.Authenticating
+    is io.github.trevarj.motd.irc.event.IrcClientState.Ready -> ConnectionState.Ready(nick)
+    is io.github.trevarj.motd.irc.event.IrcClientState.Failed -> ConnectionState.Failed(reason, fatal)
 }

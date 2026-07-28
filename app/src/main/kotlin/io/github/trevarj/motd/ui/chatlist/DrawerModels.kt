@@ -3,7 +3,7 @@ package io.github.trevarj.motd.ui.chatlist
 import io.github.trevarj.motd.data.db.ChatListRow
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 
 /**
  * Pure models for the server drawer (plans/16 §3.3). Unit-tested against the same [ChatListRow]
@@ -16,8 +16,8 @@ data class DrawerRow(
     val name: String,
     val role: NetworkRole,
     val depth: Int,
-    val state: IrcClientState, // IrcClientState.Disconnected when absent from the map
-    val nick: String?, // (state as? Ready)?.nick
+    val state: ConnectionState, // ConnectionState.Disconnected when absent from the map
+    val nick: String?, // (state as? Ready)?.selfHandle
     val unread: Int, // sum of unreadCount over the network's non-muted rows
     val mentions: Int, // sum of mentionCount over the network's non-muted rows
 )
@@ -37,8 +37,8 @@ private fun rollupFor(rows: List<ChatListRow>, networkId: Long): Rollup {
     return Rollup(unread, mentions)
 }
 
-private fun stateFor(states: Map<Long, IrcClientState>, id: Long): IrcClientState =
-    states[id] ?: IrcClientState.Disconnected
+private fun stateFor(states: Map<Long, ConnectionState>, id: Long): ConnectionState =
+    states[id] ?: ConnectionState.Disconnected
 
 /**
  * Build drawer rows in DB order (`networks` already ordered), each BOUNCER_ROOT immediately
@@ -48,7 +48,7 @@ private fun stateFor(states: Map<Long, IrcClientState>, id: Long): IrcClientStat
 fun buildDrawerRows(
     networks: List<NetworkEntity>,
     rows: List<ChatListRow>,
-    states: Map<Long, IrcClientState>,
+    states: Map<Long, ConnectionState>,
 ): List<DrawerRow> {
     val childrenByParent = networks
         .filter { it.role == NetworkRole.BOUNCER_CHILD && it.parentId != null }
@@ -63,7 +63,7 @@ fun buildDrawerRows(
             role = net.role,
             depth = depth,
             state = state,
-            nick = (state as? IrcClientState.Ready)?.nick,
+            nick = (state as? ConnectionState.Ready)?.selfHandle,
             unread = own.unread + extra.unread,
             mentions = own.mentions + extra.mentions,
         )

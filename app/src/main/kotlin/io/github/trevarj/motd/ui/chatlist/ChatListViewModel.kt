@@ -11,7 +11,7 @@ import io.github.trevarj.motd.data.prefs.SettingsRepository
 import io.github.trevarj.motd.data.prefs.OnboardingPrefs
 import io.github.trevarj.motd.data.repo.BufferRepository
 import io.github.trevarj.motd.data.repo.NetworkRepository
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.service.ConnectionManager
 import io.github.trevarj.motd.service.ChannelCloseCoordinator
 import io.github.trevarj.motd.service.PresenceKey
@@ -31,7 +31,7 @@ data class ChatListState(
     val rows: List<ChatListRow> = emptyList(),
     /** Scoped archived rows; all global badges and drawer rollups deliberately exclude these. */
     val archivedRows: List<ChatListRow> = emptyList(),
-    val connection: Map<Long, IrcClientState> = emptyMap(),
+    val connection: Map<Long, ConnectionState> = emptyMap(),
     val queryPresence: Map<Long, PresenceState> = emptyMap(),
     val networks: List<NetworkEntity> = emptyList(),
     val loading: Boolean = true,
@@ -55,7 +55,7 @@ data class ChatListState(
 
     /** Every network is absent from the map or Disconnected -> the "Go online" affordance shows. */
     val allOffline: Boolean
-        get() = networks.all { connection[it.id].let { s -> s == null || s is IrcClientState.Disconnected } }
+        get() = networks.all { connection[it.id].let { s -> s == null || s is ConnectionState.Disconnected } }
 }
 
 @HiltViewModel

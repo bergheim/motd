@@ -16,7 +16,7 @@ import io.github.trevarj.motd.ui.theme.spacingFor
 import io.github.trevarj.motd.irc.client.HistoryAvailability
 import io.github.trevarj.motd.irc.client.HistoryReferenceType
 import io.github.trevarj.motd.irc.client.IrcDisconnectedException
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.irc.proto.IrcCaseMapping
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 import kotlin.random.Random
@@ -602,7 +602,7 @@ class ChatModelsTest {
             ChatHistoryUiState.Incomplete(),
             chatHistoryUiState(
                 BufferType.CHANNEL,
-                IrcClientState.Ready("me", emptySet(), emptyMap()),
+                ConnectionState.Ready("me"),
                 ready,
                 ended,
                 historyComplete = false,
@@ -612,7 +612,7 @@ class ChatModelsTest {
             ChatHistoryUiState.ConfirmedStart,
             chatHistoryUiState(
                 BufferType.CHANNEL,
-                IrcClientState.Ready("me", emptySet(), emptyMap()),
+                ConnectionState.Ready("me"),
                 ready,
                 ended,
                 historyComplete = true,
@@ -626,7 +626,7 @@ class ChatModelsTest {
         val ready = HistoryAvailability.Ready(setOf(HistoryReferenceType.TIMESTAMP), pageLimit = 50)
 
         fun state(
-            connection: IrcClientState?,
+            connection: ConnectionState?,
             availability: HistoryAvailability,
             append: LoadState = idle,
             bufferType: BufferType = BufferType.CHANNEL,
@@ -640,28 +640,28 @@ class ChatModelsTest {
 
         assertEquals(
             ChatHistoryUiState.Hidden,
-            state(IrcClientState.Disconnected, ready, bufferType = BufferType.SERVER),
+            state(ConnectionState.Disconnected, ready, bufferType = BufferType.SERVER),
         )
         assertEquals(
             ChatHistoryUiState.Loading,
-            state(IrcClientState.Connecting, ready, append = LoadState.Loading),
+            state(ConnectionState.Connecting, ready, append = LoadState.Loading),
         )
         assertEquals(
             ChatHistoryUiState.Offline,
-            state(IrcClientState.Disconnected, HistoryAvailability.NegotiatingOrOffline, failed),
+            state(ConnectionState.Disconnected, HistoryAvailability.NegotiatingOrOffline, failed),
         )
         assertEquals(
             ChatHistoryUiState.Negotiating,
-            state(IrcClientState.Registering, HistoryAvailability.NegotiatingOrOffline, failed),
+            state(ConnectionState.Authenticating, HistoryAvailability.NegotiatingOrOffline, failed),
         )
         assertEquals(
             ChatHistoryUiState.Unsupported,
-            state(IrcClientState.Ready("me", emptySet(), emptyMap()), HistoryAvailability.Unsupported),
+            state(ConnectionState.Ready("me"), HistoryAvailability.Unsupported),
         )
         assertEquals(
             ChatHistoryUiState.Unsupported,
             state(
-                IrcClientState.Ready("me", emptySet(), emptyMap()),
+                ConnectionState.Ready("me"),
                 HistoryAvailability.Unsupported,
                 append = failed,
             ),
@@ -669,7 +669,7 @@ class ChatModelsTest {
         assertEquals(
             ChatHistoryUiState.Error,
             state(
-                IrcClientState.Ready("me", emptySet(), emptyMap()),
+                ConnectionState.Ready("me"),
                 ready,
                 append = failed,
             ),

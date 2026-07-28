@@ -149,7 +149,6 @@ import androidx.paging.LoadState
 import androidx.paging.compose.LazyPagingItems
 import androidx.paging.compose.collectAsLazyPagingItems
 import io.github.trevarj.motd.R
-import io.github.trevarj.motd.attachment.sojuFileHostEndpoint
 import io.github.trevarj.motd.audio.AudioAttachment
 import io.github.trevarj.motd.audio.AudioCacheStatus
 import io.github.trevarj.motd.audio.AudioMetadata
@@ -167,10 +166,9 @@ import io.github.trevarj.motd.data.prefs.FoolsMode
 import io.github.trevarj.motd.data.prefs.matchesConfiguredNick
 import io.github.trevarj.motd.data.visibility.MessageVisibilityPolicy
 import io.github.trevarj.motd.data.visibility.MessageVisibilitySpec
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.diagnostics.AutoFollowTrace
-import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.irc.client.HistoryAvailability
-import io.github.trevarj.motd.irc.client.canSendReactionTags
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 import io.github.trevarj.motd.service.HistoryResyncState
 import io.github.trevarj.motd.service.HistoryRefreshRange
@@ -373,7 +371,7 @@ fun ChatScreen(
     ChatContent(
         state = state,
         items = items,
-        composerEnabled = (!isServerBuffer || state.connState is IrcClientState.Ready) && !state.parted,
+        composerEnabled = (!isServerBuffer || state.connState is ConnectionState.Ready) && !state.parted,
         friends = settings.friends,
         fools = settings.fools,
         foolsMode = settings.foolsMode,
@@ -490,7 +488,7 @@ fun ChatScreen(
     // Nick sheet (plans/16 §5.8): actions render immediately; whois fills in when it lands.
     nickSheet?.let { sheet ->
         val norm = identityRules::normalize
-        val myNick = (state.connState as? IrcClientState.Ready)?.nick
+        val myNick = (state.connState as? ConnectionState.Ready)?.selfHandle
         val isSelf = myNick != null && norm(sheet.nick) == norm(myNick)
         NickActionSheet(
             nick = sheet.nick,
@@ -1604,7 +1602,7 @@ fun ChatContent(
                             TimelineHistorySyncIndicator(
                                 status = historySyncStatus,
                                 timelineEmpty = items.itemCount == 0,
-                                retryEnabled = state.connState is IrcClientState.Ready,
+                                retryEnabled = state.connState is ConnectionState.Ready,
                                 onRetry = { onRefreshHistory(HistoryRefreshRange.MISSING) },
                             )
                         },
@@ -1753,12 +1751,10 @@ fun ChatContent(
         open = attachmentSheetOpen,
         currentDraft = composerText.text,
         networkId = state.buffer?.networkId,
-        sojuFileHostAvailable = (state.connState as? IrcClientState.Ready)
-            ?.isupport
-            ?.let(::sojuFileHostEndpoint) != null,
+        sojuFileHostAvailable = state.attachmentUploadAvailable,
         startWithCurrentDraft = uploadCurrentDraftDirectly,
         directFileTransferAvailable = state.buffer?.type == BufferType.QUERY &&
-            state.connState is IrcClientState.Ready,
+            state.connState is ConnectionState.Ready,
         onDismiss = { attachmentSheetOpen = false; uploadCurrentDraftDirectly = false },
         onInsertUrl = {
             composerText = io.github.trevarj.motd.ui.components.insertAtCursor(composerText, it)
@@ -1837,11 +1833,11 @@ fun ChatContent(
             // pending message) instead of silently dropping it.
             onReact = { emoji -> hideThen { onReact(target, emoji) } },
             reactionEnabled = { emoji ->
-                val ready = state.connState as? IrcClientState.Ready
+                val capability = state.reactionCapability
                 val mine = target.msgid?.let { msgid ->
                     reactionChips(msgid).firstOrNull { it.emoji == emoji }?.mine
                 } == true
-                ready != null && canSendReactionTags(ready.caps, ready.isupport, remove = mine)
+                capability != null && (if (mine) capability.canRemoveOwn else capability.canAdd)
             },
             onCopy = {
                 hideThen {
@@ -2246,15 +2242,15 @@ internal fun chatSubtitleModel(
 ): ChatSubtitleModel? {
     when (val connection = state.connState) {
         null -> return null
-        IrcClientState.Connecting -> return ChatSubtitleModel.Text(context.getString(R.string.drawer_state_connecting))
-        IrcClientState.Registering -> return ChatSubtitleModel.Text(context.getString(R.string.drawer_state_registering))
-        IrcClientState.Disconnected -> return ChatSubtitleModel.Text(context.getString(R.string.drawer_state_disconnected))
-        is IrcClientState.Failed -> return if (connection.fatal) {
+        ConnectionState.Connecting -> return ChatSubtitleModel.Text(context.getString(R.string.drawer_state_connecting))
+        ConnectionState.Authenticating -> return ChatSubtitleModel.Text(context.getString(R.string.drawer_state_registering))
+        ConnectionState.Disconnected -> return ChatSubtitleModel.Text(context.getString(R.string.drawer_state_disconnected))
+        is ConnectionState.Failed -> return if (connection.fatal) {
             ChatSubtitleModel.Text(connection.reason)
         } else {
             ChatSubtitleModel.Text(context.getString(R.string.drawer_state_connecting))
         }
-        is IrcClientState.Ready -> Unit
+        is ConnectionState.Ready -> Unit
     }
     if (state.typingNicks.isNotEmpty()) {
         return ChatSubtitleModel.Text(typingText(context, state.typingNicks))

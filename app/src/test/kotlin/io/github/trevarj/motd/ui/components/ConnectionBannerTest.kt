@@ -1,6 +1,6 @@
 package io.github.trevarj.motd.ui.components
 
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -11,7 +11,7 @@ class ConnectionBannerTest {
 
     @Test
     fun connectingStatusIsTransientAndUsesGraceWindow() {
-        val status = bannerStatus(mapOf(1L to IrcClientState.Connecting)) { "Libera" }
+        val status = bannerStatus(mapOf(1L to ConnectionState.Connecting)) { "Libera" }
 
         assertEquals("Connecting to Libera…", status?.text)
         assertTrue(status?.transient == true)
@@ -20,8 +20,8 @@ class ConnectionBannerTest {
 
     @Test
     fun fatalFailureIsImmediateWhileRetryFailureIsTransient() {
-        val fatal = bannerStatus(mapOf(1L to IrcClientState.Failed("bad cert", fatal = true))) { "Libera" }
-        val retry = bannerStatus(mapOf(1L to IrcClientState.Failed("timeout", fatal = false))) { "Libera" }
+        val fatal = bannerStatus(mapOf(1L to ConnectionState.Failed("bad cert", fatal = true))) { "Libera" }
+        val retry = bannerStatus(mapOf(1L to ConnectionState.Failed("timeout", fatal = false))) { "Libera" }
 
         assertFalse(fatal?.transient == true)
         assertTrue(retry?.transient == true)
@@ -31,7 +31,7 @@ class ConnectionBannerTest {
     fun readyStateClearsBannerAfterFailureOrConnecting() {
         assertNull(
             bannerStatus(
-                mapOf(1L to IrcClientState.Ready("neo", emptySet(), emptyMap())),
+                mapOf(1L to ConnectionState.Ready("neo")),
             ) { "Libera" },
         )
     }
@@ -39,10 +39,10 @@ class ConnectionBannerTest {
     @Test
     fun dismissedStatusStaysHiddenUntilConnectionStatusChanges() {
         val accountRequired = bannerStatus(
-            mapOf(1L to IrcClientState.Failed("ACCOUNT_REQUIRED", fatal = true)),
+            mapOf(1L to ConnectionState.Failed("ACCOUNT_REQUIRED", fatal = true)),
         ) { "Libera" }
         val reconnecting = bannerStatus(
-            mapOf(1L to IrcClientState.Connecting),
+            mapOf(1L to ConnectionState.Connecting),
         ) { "Libera" }
 
         assertNull(
@@ -60,7 +60,7 @@ class ConnectionBannerTest {
 
     @Test
     fun transientStatusWaitsForGraceBeforeAppearing() {
-        val connecting = bannerStatus(mapOf(1L to IrcClientState.Connecting)) { "Libera" }
+        val connecting = bannerStatus(mapOf(1L to ConnectionState.Connecting)) { "Libera" }
 
         assertNull(visibleBannerStatus(connecting, dismissedStatusKey = null, transientGraceElapsed = false))
         assertEquals(

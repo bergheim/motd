@@ -7,7 +7,7 @@ import io.github.trevarj.motd.data.db.BufferEntity
 import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.db.MessageEntity
 import io.github.trevarj.motd.data.db.MessageKind
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import kotlinx.coroutines.flow.flowOf
 import io.github.trevarj.motd.data.prefs.DEFAULT_FONT_SCALE_PERCENT
 
@@ -73,7 +73,7 @@ fun ChatContentPreviewBody(
             memberCount = 3,
             typingNicks = listOf("alice"),
             replyTo = null,
-            connState = IrcClientState.Ready("me", emptySet(), emptyMap()),
+            connState = ConnectionState.Ready("me"),
         ),
         items = items,
         composerEnabled = true,

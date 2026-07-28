@@ -15,7 +15,7 @@ import io.github.trevarj.motd.data.db.MessageDao
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
 import io.github.trevarj.motd.data.repo.NetworkRepository
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.service.ConnectionManager
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,7 +27,7 @@ import kotlinx.coroutines.launch
 
 data class BouncerNetworksUiState(
     val root: NetworkEntity? = null,
-    val rootState: IrcClientState = IrcClientState.Disconnected,
+    val rootState: ConnectionState = ConnectionState.Disconnected,
     val rows: List<BouncerNetRow> = emptyList(),
     val capabilities: BouncerServCapabilities = BouncerServCapabilities(),
     val transcript: List<BouncerTranscriptEntry> = emptyList(),
@@ -81,10 +81,10 @@ class BouncerNetworksViewModel @Inject constructor(
         }
         viewModelScope.launch {
             connectionManager.connectionStates.collect { states ->
-                val connectionState = states[rootNetworkId] ?: IrcClientState.Disconnected
-                val wasReady = _state.value.rootState is IrcClientState.Ready
+                val connectionState = states[rootNetworkId] ?: ConnectionState.Disconnected
+                val wasReady = _state.value.rootState is ConnectionState.Ready
                 _state.value = _state.value.copy(rootState = connectionState)
-                if (connectionState is IrcClientState.Ready && !wasReady) {
+                if (connectionState is ConnectionState.Ready && !wasReady) {
                     refreshInline(showLoading = true)
                     probeInline()
                 }
@@ -269,7 +269,7 @@ class BouncerNetworksViewModel @Inject constructor(
     }
 
     private suspend fun probeInline() {
-        if (_state.value.probing || _state.value.rootState !is IrcClientState.Ready) return
+        if (_state.value.probing || _state.value.rootState !is ConnectionState.Ready) return
         _state.value = _state.value.copy(probing = true)
         val capabilities = bouncerServ.probe(rootNetworkId)
         _state.value = _state.value.copy(

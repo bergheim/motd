@@ -122,7 +122,7 @@ import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.db.ChatListRow
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.ui.components.ConnectionBanner
 import io.github.trevarj.motd.ui.components.AudioMiniPlayer
 import io.github.trevarj.motd.ui.components.AudioPlaybackViewModel
@@ -1441,7 +1441,7 @@ private fun ChatListContentPreview() {
                         unreadCount = 2, mentionCount = 0,
                     ),
                 ),
-                connection = mapOf(1L to IrcClientState.Connecting),
+                connection = mapOf(1L to ConnectionState.Connecting),
                 networks = listOf(
                     NetworkEntity(
                         id = 1, name = "Libera", role = NetworkRole.DIRECT,

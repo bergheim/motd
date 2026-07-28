@@ -64,7 +64,7 @@ import io.github.trevarj.motd.R
 import io.github.trevarj.motd.bouncer.BouncerKind
 import io.github.trevarj.motd.bouncer.SojuLoginForm
 import io.github.trevarj.motd.bouncer.ZncLoginForm
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.ui.settings.BouncerLoginFields
 import io.github.trevarj.motd.ui.settings.NetworkForm
 import io.github.trevarj.motd.ui.settings.PasswordField
@@ -425,15 +425,17 @@ private fun ConnectPage(
         StateIndicator(state.connState)
         state.stateLog.forEach { s ->
             // Annotate a Failed entry with its own reason so a diagnosis is possible even mid-loop.
-            val label = if (s is IrcClientState.Failed) {
-                "Failed: ${s.reason}"
-            } else {
-                s::class.simpleName.orEmpty()
+            // Authenticating is rendered as "Registering": this diagnostic log predates the
+            // backend-neutral ConnectionState rename and keeps its original IRC-flow wording.
+            val label = when {
+                s is ConnectionState.Failed -> "Failed: ${s.reason}"
+                s is ConnectionState.Authenticating -> "Registering"
+                else -> s::class.simpleName.orEmpty()
             }
             Text(
                 "• $label",
                 style = MaterialTheme.typography.bodySmall,
-                color = if (s is IrcClientState.Failed) {
+                color = if (s is ConnectionState.Failed) {
                     MaterialTheme.colorScheme.error
                 } else {
                     MaterialTheme.colorScheme.onSurfaceVariant
@@ -442,7 +444,7 @@ private fun ConnectPage(
         }
         // The connection retries, so `connState` may already be back to Connecting after a failure;
         // surface the latest captured failure reason (reducer's `error`) so it stays visible (#43).
-        val failureReason = (state.connState as? IrcClientState.Failed)?.reason ?: state.error
+        val failureReason = (state.connState as? ConnectionState.Failed)?.reason ?: state.error
         if (failureReason != null) {
             Text(
                 failureReason,
@@ -459,7 +461,7 @@ private fun ConnectPage(
 }
 
 @Composable
-private fun StateIndicator(connState: IrcClientState?) {
+private fun StateIndicator(connState: ConnectionState?) {
     Row(
         // Stable handle for the connect-step status line (label varies: Connecting…/Connected as …).
         modifier = Modifier.testTag("onboarding_state_indicator"),
@@ -468,9 +470,9 @@ private fun StateIndicator(connState: IrcClientState?) {
     ) {
         AnimatedContent(targetState = connState, label = "connState") { cs ->
             when (cs) {
-                is IrcClientState.Ready ->
+                is ConnectionState.Ready ->
                     Icon(Icons.Filled.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                is IrcClientState.Failed ->
+                is ConnectionState.Failed ->
                     Icon(Icons.Filled.Close, contentDescription = null, tint = MaterialTheme.colorScheme.error)
                 null -> CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                 else -> CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
@@ -478,10 +480,10 @@ private fun StateIndicator(connState: IrcClientState?) {
         }
         AnimatedContent(
             targetState = when (connState) {
-                is IrcClientState.Ready -> "Connected as ${connState.nick}"
-                is IrcClientState.Failed -> "Failed"
-                IrcClientState.Registering -> "Registering…"
-                IrcClientState.Connecting -> "Connecting…"
+                is ConnectionState.Ready -> "Connected as ${connState.selfHandle}"
+                is ConnectionState.Failed -> "Failed"
+                ConnectionState.Authenticating -> "Registering…"
+                ConnectionState.Connecting -> "Connecting…"
                 else -> "Starting…"
             },
             transitionSpec = {
@@ -608,8 +610,8 @@ private fun OnboardingConnectPreview() {
                 state = OnboardingState(
                     step = OnboardingStep.CONNECT,
                     choice = ConnectionChoice.BOUNCER,
-                    connState = IrcClientState.Ready("me", emptySet(), emptyMap()),
-                    stateLog = listOf(IrcClientState.Connecting, IrcClientState.Registering),
+                    connState = ConnectionState.Ready("me"),
+                    stateLog = listOf(ConnectionState.Connecting, ConnectionState.Authenticating),
                     bouncerListLoaded = true,
                     bouncerNetworks = listOf(
                         BouncerNetworkRow("1", "Libera", selected = true),

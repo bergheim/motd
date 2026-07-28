@@ -49,9 +49,10 @@ import io.github.trevarj.motd.audio.AudioMetadata
 import io.github.trevarj.motd.audio.AudioMetadataRepository
 import io.github.trevarj.motd.audio.AudioPlaybackController
 import io.github.trevarj.motd.audio.AudioPlaybackState
+import io.github.trevarj.motd.backend.ConnectionState
+import io.github.trevarj.motd.backend.ReactionCapability
 import io.github.trevarj.motd.irc.client.IrcClient
 import io.github.trevarj.motd.irc.client.IrcClientConfig
-import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 import io.github.trevarj.motd.irc.proto.IrcMessage
 import io.github.trevarj.motd.irc.transport.IrcTransport
@@ -155,7 +156,7 @@ class ChatViewModelTest {
 
     @Test
     fun `message submission sends reply metadata and stops typing`() = runTest {
-        val manager = FakeConnectionManager(network.id, IrcClientState.Ready("me", emptySet(), emptyMap()))
+        val manager = FakeConnectionManager(network.id, ConnectionState.Ready("me"))
         val vm = viewModel(channel, manager)
         vm.state.first { it.buffer != null }
         val parent = message(channel.id, "parent", msgid = "parent-1", sender = "alice", id = 88)
@@ -564,9 +565,9 @@ class ChatViewModelTest {
         vm.onPause()
         vm.onResume()
         advanceUntilIdle()
-        manager.connectionStates.value = mapOf(network.id to IrcClientState.Disconnected)
+        manager.connectionStates.value = mapOf(network.id to ConnectionState.Disconnected)
         advanceUntilIdle()
-        manager.connectionStates.value = mapOf(network.id to IrcClientState.Ready("me", emptySet(), emptyMap()))
+        manager.connectionStates.value = mapOf(network.id to ConnectionState.Ready("me"))
         advanceUntilIdle()
 
         assertEquals(listOf(query.id, query.id, query.id), history.reconciledBuffers)
@@ -623,8 +624,9 @@ class ChatViewModelTest {
         }
         val manager = FakeConnectionManager(
             networkId = network.id,
-            state = IrcClientState.Ready("me", setOf("message-tags"), emptyMap()),
+            state = ConnectionState.Ready("me"),
             client = testClient(),
+            reactionCapability = ReactionCapability(canAdd = true, canRemoveOwn = true),
         )
         val vm = viewModel(channel, manager, history, messages)
         vm.state.first { it.buffer != null }
@@ -655,8 +657,9 @@ class ChatViewModelTest {
         }
         val manager = FakeConnectionManager(
             networkId = network.id,
-            state = IrcClientState.Ready("me", setOf("message-tags"), emptyMap()),
+            state = ConnectionState.Ready("me"),
             client = testClient(),
+            reactionCapability = ReactionCapability(canAdd = true, canRemoveOwn = true),
         )
         val vm = viewModel(channel, manager, history, messages)
         vm.state.first { it.buffer != null }
@@ -690,8 +693,9 @@ class ChatViewModelTest {
         }
         val manager = FakeConnectionManager(
             networkId = network.id,
-            state = IrcClientState.Ready("me", setOf("message-tags"), emptyMap()),
+            state = ConnectionState.Ready("me"),
             client = testClient(),
+            reactionCapability = ReactionCapability(canAdd = true, canRemoveOwn = true),
         )
         val vm = viewModel(channel, manager, history, messages)
         vm.state.first { it.buffer != null }
@@ -726,7 +730,8 @@ class ChatViewModelTest {
             channel,
             FakeConnectionManager(
                 networkId = network.id,
-                state = IrcClientState.Ready("me", setOf("message-tags"), emptyMap()),
+                state = ConnectionState.Ready("me"),
+                reactionCapability = ReactionCapability(canAdd = true, canRemoveOwn = true),
             ),
         )
         unconfirmed.state.first { it.buffer != null }
@@ -741,8 +746,9 @@ class ChatViewModelTest {
             channel,
             FakeConnectionManager(
                 networkId = network.id,
-                state = IrcClientState.Ready("me", setOf("message-tags"), emptyMap()),
+                state = ConnectionState.Ready("me"),
                 reactionError = true,
+                reactionCapability = ReactionCapability(canAdd = true, canRemoveOwn = true),
             ),
         )
         sendFailure.state.first { it.buffer != null }
@@ -861,7 +867,7 @@ class ChatViewModelTest {
         }
         val vm = viewModel(
             channel,
-            FakeConnectionManager(network.id, state = IrcClientState.Disconnected),
+            FakeConnectionManager(network.id, state = ConnectionState.Disconnected),
             messages = messages,
         )
         vm.setVisibleMsgids(listOf("target"))
@@ -1101,7 +1107,7 @@ class ChatViewModelTest {
 
     private class FakeConnectionManager(
         networkId: Long,
-        state: IrcClientState = IrcClientState.Ready("me", emptySet(), emptyMap()),
+        state: ConnectionState = ConnectionState.Ready("me"),
         private val client: IrcClient? = null,
         private val retryAccepted: Boolean = true,
         private val sendAccepted: Boolean = true,
@@ -1109,12 +1115,15 @@ class ChatViewModelTest {
         private val reactionError: Boolean = false,
         private val sendRejection: io.github.trevarj.motd.service.SendRejectionReason? = null,
         private val retryRejection: io.github.trevarj.motd.service.SendRejectionReason? = null,
+        reactionCapability: ReactionCapability? = null,
     ) : ConnectionManager {
         override val connectionStates = MutableStateFlow(mapOf(networkId to state))
         override val presenceStates: StateFlow<Map<PresenceKey, PresenceState>> =
             MutableStateFlow(emptyMap())
         override val rosterStates: StateFlow<Map<Long, RosterLoadState>> = MutableStateFlow(emptyMap())
         override val certPrompts = MutableStateFlow<List<CertPrompt>>(emptyList())
+        override val reactionCapabilities: StateFlow<Map<Long, ReactionCapability>> =
+            MutableStateFlow(reactionCapability?.let { mapOf(networkId to it) } ?: emptyMap())
         val messages = mutableListOf<SentMessage>()
         val reactions = mutableListOf<SentReaction>()
         val typing = mutableListOf<Pair<Long, String>>()

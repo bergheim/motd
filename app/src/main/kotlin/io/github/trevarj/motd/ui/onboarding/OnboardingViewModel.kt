@@ -11,7 +11,7 @@ import io.github.trevarj.motd.data.prefs.NoopBouncerKindPrefs
 import io.github.trevarj.motd.data.prefs.OnboardingPrefs
 import io.github.trevarj.motd.data.prefs.PresetEnrollmentPrefs
 import io.github.trevarj.motd.data.repo.NetworkRepository
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.service.ConnectionManager
 import io.github.trevarj.motd.ui.settings.buildNetworkEntity
 import io.github.trevarj.motd.ui.settings.addnetwork.NetworkPresetId
@@ -151,12 +151,12 @@ class OnboardingViewModel @Inject constructor(
 
             connectionManager.connect(networkId)
 
-            // Mirror this network's live IrcClientState into the wizard state log.
+            // Mirror this network's live ConnectionState into the wizard state log.
             connectionManager.connectionStates.collect { states ->
                 val cs = states[networkId] ?: return@collect
                 if (cs != _state.value.connState) {
                     dispatch(OnboardingAction.ConnStateChanged(cs))
-                    if (cs is IrcClientState.Ready && s.isSoju && !_state.value.bouncerListLoaded) {
+                    if (cs is ConnectionState.Ready && s.isSoju && !_state.value.bouncerListLoaded) {
                         loadBouncerNetworks(networkId)
                     }
                 }
