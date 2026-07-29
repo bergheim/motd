@@ -42,8 +42,11 @@ class CompositeConnectionManager @Inject constructor(
     private suspend fun sessionsForBuffer(bufferId: Long): ConnectionManager? =
         db.bufferDao().rawById(bufferId)?.let { sessionsForNetwork(it.networkId) }
 
+    // byCanonicalId, not byId: canonical coalescing deletes losing rows and records a redirect, and
+    // UI actions can still hold a losing id. The IRC manager resolves redirects itself, so a plain
+    // lookup here would reject retries and invitations before they ever reached their backend.
     private suspend fun sessionsForEvent(eventId: Long): ConnectionManager? =
-        db.messageDao().byId(eventId)?.let { sessionsForBuffer(it.bufferId) }
+        db.messageDao().byCanonicalId(eventId)?.let { sessionsForBuffer(it.bufferId) }
 
     override val connectionStates: StateFlow<Map<Long, ConnectionState>> by lazy {
         CombinedStateFlow(sessionList.map { it.connectionStates }, ::union)
