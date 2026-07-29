@@ -31,8 +31,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         UserEntity::class,
         MemberEntity::class,
         DccTransferEntity::class,
+        XmppAccountEntity::class,
     ],
-    version = 22,
+    version = 23,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -52,6 +53,7 @@ abstract class MotdDatabase : RoomDatabase() {
     abstract fun historyCursorDao(): HistoryCursorDao
     abstract fun connectionGenerationDao(): ConnectionGenerationDao
     abstract fun appStateDao(): AppStateDao
+    abstract fun xmppAccountDao(): XmppAccountDao
 }
 
 /**
@@ -670,6 +672,28 @@ val MIGRATION_20_21 = object : Migration(20, 21) {
 val MIGRATION_21_22 = object : Migration(21, 22) {
     override fun migrate(db: SupportSQLiteDatabase) {
         db.execSQL("ALTER TABLE networks ADD COLUMN protocol TEXT NOT NULL DEFAULT 'irc'")
+    }
+}
+
+/**
+ * v22 -> v23: add the `xmpp_accounts` satellite table (docs/backend-neutral-xmpp-rollout.md):
+ * XMPP account detail lives in its own per-protocol table keyed by the network row, never as
+ * nullable columns on shared `networks`. Additive and non-destructive; IRC rows simply have no row
+ * here. The version tracks whatever the parent branch holds — upstream took 20 -> 21 and the
+ * discriminator took 21 -> 22, so this is 22 -> 23.
+ */
+val MIGRATION_22_23 = object : Migration(22, 23) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS `xmpp_accounts` (
+                `networkId` INTEGER NOT NULL,
+                `jid` TEXT NOT NULL,
+                `password` TEXT NOT NULL,
+                `resource` TEXT,
+                PRIMARY KEY(`networkId`),
+                FOREIGN KEY(`networkId`) REFERENCES `networks`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+            )""",
+        )
     }
 }
 
