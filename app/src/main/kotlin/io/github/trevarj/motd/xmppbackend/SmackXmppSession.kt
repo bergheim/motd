@@ -9,6 +9,7 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.logging.Level
 import java.util.logging.Logger
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.net.ssl.HostnameVerifier
 import javax.net.ssl.SSLSession
@@ -494,22 +495,30 @@ internal class SmackXmppSession(private val account: XmppAccountEntity) : XmppSe
 
 /**
  * Real [XmppSessionFactory] (docs/backend-neutral-xmpp-rollout.md "PR 2"). Registers Smack's
- * Android providers/DNS resolver once per process on first injection — required for Smack to work
- * on Android, no-op-safe under Robolectric — carried over from the prototype's manager-level init,
- * relocated here so [XmppConnectionManager] stays Smack-agnostic.
+ * Android providers/DNS resolver once per process — required for Smack to work on Android,
+ * no-op-safe under Robolectric — carried over from the prototype's manager-level init, relocated
+ * here so [XmppConnectionManager] stays Smack-agnostic.
+ *
+ * That registration parses provider descriptors and is far too slow for a constructor: Dagger
+ * builds this factory while resolving the backend registry, which a lifecycle broadcast can
+ * trigger from any thread, and doing it eagerly once stalled the foreground service at startup.
+ * It runs lazily on first [create] instead, off the caller's critical path.
  *
  * Not `internal`: [XmppBackendModule]'s `@Binds` function takes this as a parameter type, and a
  * public Dagger binding cannot expose an internal type (Kotlin visibility rule) — same reason
  * [SmackXmppSession] itself stays unexposed by never appearing in a public signature.
  */
 class SmackXmppSessionFactory @Inject constructor(
-    @ApplicationContext context: Context,
+    @ApplicationContext private val context: Context,
 ) : XmppSessionFactory {
-    init {
-        runCatching { AndroidSmackInitializer.initialize(context) }
-    }
+    private val smackInitialized = AtomicBoolean(false)
 
-    override fun create(account: XmppAccountEntity): XmppSession = SmackXmppSession(account)
+    override fun create(account: XmppAccountEntity): XmppSession {
+        if (smackInitialized.compareAndSet(false, true)) {
+            runCatching { AndroidSmackInitializer.initialize(context) }
+        }
+        return SmackXmppSession(account)
+    }
 }
 
 /**
