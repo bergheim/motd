@@ -49,6 +49,8 @@ import io.github.trevarj.motd.audio.AudioMetadataRepository
 import io.github.trevarj.motd.audio.AudioPlaybackController
 import io.github.trevarj.motd.audio.AudioPlaybackState
 import io.github.trevarj.motd.backend.ConnectionState
+import io.github.trevarj.motd.backend.ProtocolCommands
+import io.github.trevarj.motd.backend.RawLineOutcome
 import io.github.trevarj.motd.backend.ReactionCapability
 import io.github.trevarj.motd.irc.client.HistoryAvailability
 import io.github.trevarj.motd.irc.client.IrcClient
@@ -66,6 +68,7 @@ import io.github.trevarj.motd.service.HistoryResyncCoordinator
 import io.github.trevarj.motd.service.HistoryResyncController
 import io.github.trevarj.motd.service.HistoryResyncState
 import io.github.trevarj.motd.service.HistorySyncStatus
+import io.github.trevarj.motd.service.IrcProtocolCommands
 import io.github.trevarj.motd.service.PresenceKey
 import io.github.trevarj.motd.service.PresenceState
 import io.github.trevarj.motd.service.RosterLoadState
@@ -493,16 +496,170 @@ class ChatViewModelTest {
             displayName = "test",
             type = BufferType.SERVER,
         ).let { it.copy(id = db.bufferDao().insert(it)) }
-        val manager = FakeConnectionManager(network.id)
+        val commands = FakeProtocolCommands(rawLineOutcome = RawLineOutcome.INVALID)
+        val manager = FakeConnectionManager(network.id, protocolCommandsOverride = commands)
         val vm = viewModel(server, manager)
         vm.state.first { it.buffer != null }
+        vm.saveDraft("/")
 
-        vm.submit("/", {}, {})
+        val job = vm.submit("/", {}, {})
+        job.join()
         advanceUntilIdle()
 
         assertEquals(ChatUiEvent.InvalidCommand, vm.uiEvents.value.single().value)
         assertTrue(manager.sentLines.isEmpty())
+        assertEquals(listOf(""), commands.rawLineCalls)
     }
+
+    @Test
+    fun `server buffer valid raw command sends through protocol commands and clears the draft`() = runTest {
+        val server = BufferEntity(
+            networkId = network.id,
+            name = "*",
+            displayName = "test",
+            type = BufferType.SERVER,
+        ).let { it.copy(id = db.bufferDao().insert(it)) }
+        val commands = FakeProtocolCommands(rawLineOutcome = RawLineOutcome.SENT)
+        val manager = FakeConnectionManager(network.id, protocolCommandsOverride = commands)
+        val vm = viewModel(server, manager)
+        vm.state.first { it.buffer != null }
+        vm.saveDraft("/motd")
+
+        val job = vm.submit("/motd", {}, {})
+        job.join()
+        advanceUntilIdle()
+
+        assertEquals(listOf("motd"), commands.rawLineCalls)
+        assertTrue(vm.uiEvents.value.isEmpty())
+        assertNull(db.composerDraftDao().byRoom(server.id))
+    }
+
+    @Test
+    fun `unrecognized slash command in a channel sends a raw line through protocol commands`() = runTest {
+        val commands = FakeProtocolCommands(rawLineOutcome = RawLineOutcome.SENT)
+        val manager = FakeConnectionManager(network.id, protocolCommandsOverride = commands)
+        val vm = viewModel(channel, manager)
+        vm.state.first { it.buffer != null }
+
+        vm.submit("/names #room", {}, {})
+        advanceUntilIdle()
+
+        assertEquals(listOf("names #room"), commands.rawLineCalls)
+        assertTrue(vm.uiEvents.value.isEmpty())
+    }
+
+    @Test
+    fun `nick topic and away commands route through protocol commands`() = runTest {
+        val commands = FakeProtocolCommands()
+        val manager = FakeConnectionManager(network.id, protocolCommandsOverride = commands)
+        val vm = viewModel(channel, manager)
+        vm.state.first { it.buffer != null }
+
+        vm.submit("/nick newnick", {}, {})
+        vm.submit("/topic new topic text", {}, {})
+        vm.submit("/away brb", {}, {})
+        vm.submit("/back", {}, {})
+        advanceUntilIdle()
+
+        assertEquals(listOf("newnick"), commands.selfHandleCalls)
+        assertEquals(listOf("#room" to "new topic text"), commands.topicCalls)
+        assertEquals(listOf("brb", null), commands.awayCalls)
+    }
+
+    @Test
+    fun `whois result folds into the nick sheet for the still-open nick`() = runTest {
+        val commands = FakeProtocolCommands(
+            whoisResultFor = { nick -> WhoisInfo(nick = nick, username = "${nick}user") },
+        )
+        val manager = FakeConnectionManager(network.id, protocolCommandsOverride = commands)
+        val vm = viewModel(channel, manager)
+        vm.state.first { it.buffer != null }
+
+        vm.openNickSheet("alice")
+        advanceUntilIdle()
+
+        assertEquals("alice", vm.nickSheet.value?.nick)
+        assertEquals("aliceuser", vm.nickSheet.value?.whois?.username)
+        assertEquals(listOf("alice"), commands.lookupCalls)
+    }
+
+    @Test
+    fun `stale whois response is discarded once the nick sheet moves on`() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val commands = FakeProtocolCommands(
+            whoisResultFor = { nick -> WhoisInfo(nick = nick, username = "${nick}user") },
+            lookupGate = gate,
+        )
+        val manager = FakeConnectionManager(network.id, protocolCommandsOverride = commands)
+        val vm = viewModel(channel, manager)
+        vm.state.first { it.buffer != null }
+
+        vm.openNickSheet("alice")
+        runCurrent()
+        // The sheet moves on to a different nick before alice's (gated) lookup resolves.
+        vm.openNickSheet("bob")
+        runCurrent()
+        gate.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals(listOf("alice", "bob"), commands.lookupCalls)
+        assertEquals("bob", vm.nickSheet.value?.nick)
+        assertEquals("bobuser", vm.nickSheet.value?.whois?.username)
+    }
+
+    @Test
+    fun `canModerate reflects member flag order from protocol commands`() = runTest {
+        val commands = FakeProtocolCommands(order = "~&@%+")
+        val manager = FakeConnectionManager(network.id, protocolCommandsOverride = commands)
+        val buffers = FakeBufferRepository(channel, members = listOf(MemberEntity(channel.id, "me", "@")))
+        val vm = viewModel(channel, manager, buffers = buffers)
+        vm.state.first { it.buffer != null }
+        manager.memberLoadStates.value = mapOf(channel.id to RosterLoadState.LOADED)
+        vm.ensureMembersObserved()
+        vm.state.first { it.memberCount == 1 }
+
+        assertTrue(vm.canModerate())
+    }
+
+    @Test
+    fun `canModerate is false below the moderation threshold`() = runTest {
+        // '+' (voice) is below the op threshold ("~&@" in DEFAULT_PREFIX_ORDER / the fake's order).
+        val commands = FakeProtocolCommands(order = "~&@%+")
+        val manager = FakeConnectionManager(network.id, protocolCommandsOverride = commands)
+        val buffers = FakeBufferRepository(channel, members = listOf(MemberEntity(channel.id, "me", "+")))
+        val vm = viewModel(channel, manager, buffers = buffers)
+        vm.state.first { it.buffer != null }
+        manager.memberLoadStates.value = mapOf(channel.id to RosterLoadState.LOADED)
+        vm.ensureMembersObserved()
+        vm.state.first { it.memberCount == 1 }
+
+        assertFalse(vm.canModerate())
+    }
+
+    @Test
+    fun `composer and moderation commands stay inert without crashing when the backend has no live session`() =
+        runTest {
+            // No client and no protocolCommandsOverride: FakeConnectionManager.protocolCommands
+            // returns null, mirroring a network with no live session.
+            val manager = FakeConnectionManager(network.id)
+            val vm = viewModel(channel, manager)
+            vm.state.first { it.buffer != null }
+
+            vm.submit("/nick newnick", {}, {})
+            vm.submit("/topic new topic", {}, {})
+            vm.submit("/away brb", {}, {})
+            vm.submit("/names #room", {}, {})
+            vm.setMemberMode("alice", 'o', grant = true)
+            vm.kick("alice", null)
+            vm.ban("alice")
+            vm.openNickSheet("alice")
+            advanceUntilIdle()
+
+            assertTrue(vm.uiEvents.value.isEmpty())
+            assertTrue(manager.sentLines.isEmpty())
+            assertEquals("alice", vm.nickSheet.value?.nick)
+            assertNull(vm.nickSheet.value?.whois)
+        }
 
     @Test
     fun `visible ready chat does not launch redundant history reconciliation`() = runTest {
@@ -1387,7 +1544,6 @@ class ChatViewModelTest {
             dccTransferDao = db.dccTransferDao(),
             dccTransferController = FakeDccTransferController(),
             connectionManager = manager,
-            ircSessions = fakeIrcSessions(manager),
             typingTracker = FakeTypingTracker(),
             foregroundBufferTracker = foreground,
             linkPreviewRepository = object : LinkPreviewRepository {
@@ -1463,6 +1619,11 @@ class ChatViewModelTest {
         private val retryRejection: io.github.trevarj.motd.service.SendRejectionReason? = null,
         historyPending: Set<Long> = emptySet(),
         reactionCapability: ReactionCapability? = null,
+        // Explicit test double for capability-level assertions (invocation capture, controllable
+        // WHOIS/order/outcome). Null falls back to a real IrcProtocolCommands over [client], the same
+        // wiring ConnectionManagerImpl uses, so wire-level tests (real IrcClient + transport) keep
+        // exercising genuine parse/serialize logic.
+        private val protocolCommandsOverride: ProtocolCommands? = null,
     ) : ConnectionManager {
         private var currentClient: IrcClient? = client
         override val connectionStates = MutableStateFlow(mapOf(networkId to state))
@@ -1475,7 +1636,7 @@ class ChatViewModelTest {
         )
         override val presenceStates: StateFlow<Map<PresenceKey, PresenceState>> =
             MutableStateFlow(emptyMap())
-        override val memberLoadStates: StateFlow<Map<Long, RosterLoadState>> = MutableStateFlow(emptyMap())
+        override val memberLoadStates = MutableStateFlow<Map<Long, RosterLoadState>>(emptyMap())
         override val certPrompts = MutableStateFlow<List<CertPrompt>>(emptyList())
         override val reactionCapabilities: StateFlow<Map<Long, ReactionCapability>> =
             MutableStateFlow(reactionCapability?.let { mapOf(networkId to it) } ?: emptyMap())
@@ -1486,6 +1647,7 @@ class ChatViewModelTest {
         val readMarkers = mutableListOf<Pair<Long, TimelineAnchor>>()
         val messageStarted = CompletableDeferred<Unit>()
         val typingSent = CompletableDeferred<Unit>()
+        private val commandsScope = CoroutineScope(Dispatchers.Unconfined)
 
         fun replaceClient(client: IrcClient?) {
             currentClient = client
@@ -1516,6 +1678,10 @@ class ChatViewModelTest {
         // delegation so this fake stays behaviorally in sync with the real seam.
         override fun historyAvailability(networkId: Long): HistoryAvailability? =
             currentClient?.historyAvailability
+        // Mirrors ConnectionManagerImpl.protocolCommands's clientFor(...)?.let { IrcProtocolCommands }
+        // delegation, unless a test supplies its own fake capability.
+        override fun protocolCommands(networkId: Long): ProtocolCommands? =
+            protocolCommandsOverride ?: currentClient?.let { IrcProtocolCommands(it, commandsScope) }
         override suspend fun startAll() = Unit
         override suspend fun stopAll() = Unit
         override suspend fun connect(networkId: Long) = Unit
@@ -1568,6 +1734,69 @@ class ChatViewModelTest {
         override suspend fun dismissInvite(messageId: Long) = Unit
     }
 
+    /** Capturing [ProtocolCommands] fake: records every invocation, returns controllable results. */
+    private class FakeProtocolCommands(
+        private val whoisResultFor: (String) -> WhoisInfo? = { null },
+        private val rawLineOutcome: RawLineOutcome = RawLineOutcome.SENT,
+        private val order: String? = null,
+        private val accepted: Boolean = true,
+        // Suspends lookupParticipant until completed, so tests can control exactly when a stale WHOIS
+        // response would land relative to the sheet moving on to a different nick.
+        private val lookupGate: CompletableDeferred<Unit>? = null,
+    ) : ProtocolCommands {
+        val selfHandleCalls = mutableListOf<String>()
+        val topicCalls = mutableListOf<Pair<String, String>>()
+        val awayCalls = mutableListOf<String?>()
+        val rawLineCalls = mutableListOf<String>()
+        val lookupCalls = mutableListOf<String>()
+        val kickCalls = mutableListOf<Triple<String, String, String?>>()
+        val memberFlagCalls = mutableListOf<Triple<String, String, String>>()
+        val banCalls = mutableListOf<Pair<String, String>>()
+
+        override suspend fun setSelfHandle(handle: String): Boolean {
+            selfHandleCalls += handle
+            return accepted
+        }
+
+        override suspend fun setTopic(target: String, topic: String): Boolean {
+            topicCalls += target to topic
+            return accepted
+        }
+
+        override suspend fun setAway(message: String?): Boolean {
+            awayCalls += message
+            return accepted
+        }
+
+        override suspend fun sendRawLine(line: String): RawLineOutcome {
+            rawLineCalls += line
+            return rawLineOutcome
+        }
+
+        override suspend fun lookupParticipant(target: String): WhoisInfo? {
+            lookupCalls += target
+            lookupGate?.await()
+            return whoisResultFor(target)
+        }
+
+        override suspend fun kick(target: String, member: String, reason: String?): Boolean {
+            kickCalls += Triple(target, member, reason)
+            return accepted
+        }
+
+        override suspend fun setMemberFlag(target: String, member: String, flag: String): Boolean {
+            memberFlagCalls += Triple(target, member, flag)
+            return accepted
+        }
+
+        override suspend fun banMember(target: String, member: String): Boolean {
+            banCalls += target to member
+            return accepted
+        }
+
+        override fun memberFlagOrder(): String? = order
+    }
+
     private class FakeHistoryResyncController(
         private val onReconcile: suspend (Int) -> Unit = {},
     ) : HistoryResyncController {
@@ -1602,6 +1831,7 @@ class ChatViewModelTest {
     private class FakeBufferRepository(
         private val current: BufferEntity,
         private val routeId: Long = current.id,
+        private val members: List<MemberEntity> = emptyList(),
     ) : BufferRepository {
         private val buffer = MutableStateFlow(current)
         val layoutWrites = mutableListOf<Pair<Long, LayoutDensity?>>()
@@ -1610,7 +1840,8 @@ class ChatViewModelTest {
         override fun observeChatList(): Flow<List<ChatListRow>> = flowOf(emptyList())
         override fun observeBuffer(id: Long): Flow<BufferEntity?> =
             buffer.takeIf { id == routeId || id == current.id } ?: flowOf(null)
-        override fun observeMembers(bufferId: Long): Flow<List<MemberEntity>> = flowOf(emptyList())
+        override fun observeMembers(bufferId: Long): Flow<List<MemberEntity>> =
+            flowOf(members.filter { it.bufferId == bufferId })
         override suspend fun setPinned(id: Long, pinned: Boolean) = Unit
         override suspend fun setMuted(id: Long, muted: Boolean) = Unit
         override suspend fun setLayoutDensityOverride(id: Long, layout: LayoutDensity?): Boolean {

@@ -1,6 +1,7 @@
 package io.github.trevarj.motd.service
 
 import io.github.trevarj.motd.backend.ConnectionState
+import io.github.trevarj.motd.backend.ProtocolCommands
 import io.github.trevarj.motd.backend.ReactionCapability
 import io.github.trevarj.motd.irc.client.HistoryAvailability
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
@@ -126,6 +127,14 @@ interface ConnectionManager {
      * until the neutral history boundary lands (docs/backend-neutral-xmpp-rollout.md).
      */
     fun historyAvailability(networkId: Long): HistoryAvailability? = null
+
+    /**
+     * Optional per-network capability for protocol-defined chat commands, participant lookup, and
+     * moderation (docs/backend-neutral-xmpp-rollout.md "Remove the client escape hatch"). Null when
+     * there is no live session for the network, or the backend has no such capability at all. See
+     * [ProtocolCommands] for the exact operations and their behavior contract.
+     */
+    fun protocolCommands(networkId: Long): ProtocolCommands? = null
 
     /** Start/stop the whole subsystem (invoked by service / delivery-mode changes). */
     suspend fun startAll()

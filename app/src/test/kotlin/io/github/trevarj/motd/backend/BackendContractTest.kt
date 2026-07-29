@@ -353,6 +353,7 @@ class BackendContractTest {
         assertEquals(emptyMap<Long, ReactionCapability>(), bare.reactionCapabilities.value)
         assertNull(bare.liveIdentityRules(networkId))
         assertNull(bare.historyAvailability(networkId))
+        assertNull(bare.protocolCommands(networkId))
         assertTrue(bare.channelJoinOutcomes.toList().isEmpty())
     }
 

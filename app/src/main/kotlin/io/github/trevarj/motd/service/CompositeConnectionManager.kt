@@ -3,6 +3,7 @@ package io.github.trevarj.motd.service
 import io.github.trevarj.motd.backend.BackendRegistry
 import io.github.trevarj.motd.backend.ChatBackend
 import io.github.trevarj.motd.backend.ConnectionState
+import io.github.trevarj.motd.backend.ProtocolCommands
 import io.github.trevarj.motd.backend.ProtocolId
 import io.github.trevarj.motd.backend.ReactionCapability
 import io.github.trevarj.motd.data.db.MotdDatabase
@@ -77,6 +78,9 @@ class CompositeConnectionManager @Inject constructor(
 
     override fun historyAvailability(networkId: Long): HistoryAvailability? =
         sessionList.firstNotNullOfOrNull { it.historyAvailability(networkId) }
+
+    override fun protocolCommands(networkId: Long): ProtocolCommands? =
+        sessionList.firstNotNullOfOrNull { it.protocolCommands(networkId) }
 
     override suspend fun startAll() = sessionList.forEach { it.startAll() }
     override suspend fun stopAll() = sessionList.forEach { it.stopAll() }

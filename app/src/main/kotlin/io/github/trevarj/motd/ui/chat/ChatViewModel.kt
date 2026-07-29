@@ -45,11 +45,10 @@ import io.github.trevarj.motd.data.visibility.MessageVisibilitySpec
 import io.github.trevarj.motd.dcc.DccTransferController
 import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.backend.ReactionCapability
+import io.github.trevarj.motd.backend.RawLineOutcome
 import io.github.trevarj.motd.diagnostics.AutoFollowTrace
-import io.github.trevarj.motd.irc.proto.IrcMessage
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 import io.github.trevarj.motd.irc.client.HistoryAvailability
-import io.github.trevarj.motd.ircbackend.IrcSessions
 import io.github.trevarj.motd.service.ConnectionManager
 import io.github.trevarj.motd.service.RosterLoadState
 import io.github.trevarj.motd.service.PresenceKey
@@ -184,7 +183,6 @@ class ChatViewModel @Inject constructor(
     private val dccTransferDao: DccTransferDao,
     private val dccTransferController: DccTransferController,
     private val connectionManager: ConnectionManager,
-    private val ircSessions: IrcSessions,
     private val typingTracker: TypingTracker,
     private val foregroundBufferTracker: ForegroundBufferTracker,
     private val linkPreviewRepository: LinkPreviewRepository,
@@ -897,17 +895,15 @@ class ChatViewModel @Inject constructor(
                 onOpenBuffer(connectionManager.ensureQueryBuffer(nid, cmd.nick))
             }
             is ChatCommand.Nick -> networkId?.let { nid ->
-                ircSessions.sessionFor(nid)?.send(IrcMessage(command = "NICK", params = listOf(cmd.nick)))
+                connectionManager.protocolCommands(nid)?.setSelfHandle(cmd.nick)
             }
             is ChatCommand.Topic -> networkId?.let { nid ->
                 val channel = state.value.buffer?.ircTarget ?: return@launch
-                ircSessions.sessionFor(nid)
-                    ?.send(IrcMessage(command = "TOPIC", params = listOf(channel, cmd.topic)))
+                connectionManager.protocolCommands(nid)?.setTopic(channel, cmd.topic)
             }
             // `/away [msg]` — confirmations (305/306) land in the SERVER buffer via §5.6.3.
             is ChatCommand.Away -> networkId?.let { nid ->
-                ircSessions.sessionFor(nid)
-                    ?.send(IrcMessage(command = "AWAY", params = listOfNotNull(cmd.message)))
+                connectionManager.protocolCommands(nid)?.setAway(cmd.message)
             }
             is ChatCommand.Whois -> openNickSheet(cmd.nick)
             is ChatCommand.ChannelList -> networkId?.let(onOpenChannelList)
@@ -915,27 +911,30 @@ class ChatViewModel @Inject constructor(
             is ChatCommand.Kick -> if (state.value.buffer?.type == BufferType.CHANNEL) kick(cmd.nick, cmd.reason)
             is ChatCommand.Ban -> if (state.value.buffer?.type == BufferType.CHANNEL) ban(cmd.nick)
             is ChatCommand.RawLine -> networkId?.let { nid ->
-                ircSessions.sessionFor(nid)?.send(IrcMessage.parse(cmd.line))
+                connectionManager.protocolCommands(nid)?.sendRawLine(cmd.line)
             }
         }
     }
 
-    /** Raw-send for the SERVER buffer: strip one leading `/`, parse, send. Parse failure snackbars. */
+    /**
+     * Raw-send for the SERVER buffer: strip one leading `/`, parse, send. Parse failure snackbars.
+     * Parsing now lives behind [io.github.trevarj.motd.backend.ProtocolCommands.sendRawLine], reached
+     * only via a live [connectionManager] session, so a network with no live session leaves the
+     * composer inert (no send, no snackbar) rather than validating offline.
+     */
     private suspend fun submitRawLine(networkId: Long?, raw: String) {
         val trimmed = raw.trim()
         if (trimmed.isEmpty()) return
         val nid = networkId ?: return
         val line = if (trimmed.startsWith("/")) trimmed.substring(1) else trimmed
-        val msg = runCatching { IrcMessage.parse(line) }.getOrNull()
-        if (msg == null || msg.command.isBlank()) {
-            uiEventQueue.enqueue(ChatUiEvent.InvalidCommand)
-            return
-        }
-        val client = ircSessions.sessionFor(nid) ?: return
+        val commands = connectionManager.protocolCommands(nid) ?: return
         val submission = prepareDraftSubmission(raw) ?: return
         try {
-            client.send(msg)
-            clearDraftSubmission(submission)
+            when (commands.sendRawLine(line)) {
+                RawLineOutcome.SENT -> clearDraftSubmission(submission)
+                RawLineOutcome.INVALID -> uiEventQueue.enqueue(ChatUiEvent.InvalidCommand)
+                RawLineOutcome.UNSUPPORTED -> Unit
+            }
         } finally {
             releaseDraftSubmission(submission.snapshot)
         }
@@ -948,11 +947,11 @@ class ChatViewModel @Inject constructor(
     private var nickDetailsJob: Job? = null
 
     /**
-     * Open the nick sheet for [nick]. WHOX is requested when available so query peers can populate
-     * the same cached identity path as channel members. With `labeled-response` we also WHOIS via a
-     * labeled request, parse the richer numerics, and fold the details in when they land (30s label
-     * timeout, guarded); otherwise a plain WHOIS is sent and its numerics surface in the server
-     * buffer (§5.6.3). Actions render immediately regardless.
+     * Open the nick sheet for [nick]. The backend's [io.github.trevarj.motd.backend.ProtocolCommands]
+     * lookup handles whatever enrichment it supports (IRC: WHOX kicked off in the background so query
+     * peers can populate the same cached identity path as channel members, plus a labeled-response
+     * WHOIS folded in when it lands, or a plain WHOIS whose numerics surface in the server buffer
+     * instead of here — §5.6.3). Actions render immediately regardless.
      */
     fun openNickSheet(nick: String) {
         // Moderation visibility depends on our prefixes in the channel roster. Load it on this
@@ -960,7 +959,7 @@ class ChatViewModel @Inject constructor(
         ensureMembersObserved()
         _nickSheet.value = NickSheetState(nick = nick)
         val networkId = state.value.buffer?.networkId ?: return
-        val client = ircSessions.sessionFor(networkId)
+        val commands = connectionManager.protocolCommands(networkId)
         val normalizedNick = identityRules.value.normalize(nick)
         nickDetailsJob?.cancel()
         nickDetailsJob = viewModelScope.launch {
@@ -969,24 +968,13 @@ class ChatViewModel @Inject constructor(
                 if (current?.nick == nick) _nickSheet.value = current.copy(cached = cached)
             }
         }
-        if (client == null) return
-        if (client.isupport["WHOX"] != null) {
-            // WhoxRow events still flow through EventProcessor while the correlated request waits,
-            // so UserEntity and this sheet's userDao collector converge through the normal path.
-            viewModelScope.launch { runCatching { client.whox(nick) } }
-        }
-        val whoisMsg = IrcMessage(command = "WHOIS", params = listOf(nick))
-        if (client.hasCap("labeled-response")) {
-            viewModelScope.launch {
-                val lines = runCatching { client.sendLabeled(whoisMsg) }.getOrNull().orEmpty()
-                val info = parseWhois(lines)
-                // Only fold in if the sheet is still open for this nick.
-                if (info != null && _nickSheet.value?.nick == nick) {
-                    _nickSheet.value = _nickSheet.value?.copy(whois = info)
-                }
+        if (commands == null) return
+        viewModelScope.launch {
+            val info = commands.lookupParticipant(nick)
+            // Only fold in if the sheet is still open for this nick.
+            if (info != null && _nickSheet.value?.nick == nick) {
+                _nickSheet.value = _nickSheet.value?.copy(whois = info)
             }
-        } else {
-            viewModelScope.launch { client.send(whoisMsg) }
         }
     }
 
@@ -998,28 +986,26 @@ class ChatViewModel @Inject constructor(
 
     // --- moderation executors (plans/16 §5.8), CHANNEL buffers only ---
 
-    /** MODE <channel> +o/-o/+v/-v <nick>. */
+    /** Protocol-defined member flag (IRC: MODE <channel> +o/-o/+v/-v <nick>). */
     fun setMemberMode(nick: String, mode: Char, grant: Boolean) = viewModelScope.launch {
         val nid = state.value.buffer?.networkId ?: return@launch
         val channel = state.value.buffer?.ircTarget ?: return@launch
         val flag = (if (grant) "+" else "-") + mode
-        ircSessions.sessionFor(nid)?.send(IrcMessage(command = "MODE", params = listOf(channel, flag, nick)))
+        connectionManager.protocolCommands(nid)?.setMemberFlag(channel, nick, flag)
     }
 
-    /** KICK <channel> <nick> [:reason]. */
+    /** Kick <nick> from the current channel, with an optional reason. */
     fun kick(nick: String, reason: String?) = viewModelScope.launch {
         val nid = state.value.buffer?.networkId ?: return@launch
         val channel = state.value.buffer?.ircTarget ?: return@launch
-        val params = if (reason.isNullOrBlank()) listOf(channel, nick) else listOf(channel, nick, reason)
-        ircSessions.sessionFor(nid)?.send(IrcMessage(command = "KICK", params = params))
+        connectionManager.protocolCommands(nid)?.kick(channel, nick, reason)
     }
 
-    /** MODE <channel> +b <banMask(nick)>. */
+    /** Ban <nick> from the current channel (IRC: MODE <channel> +b <banMask(nick)>). */
     fun ban(nick: String) = viewModelScope.launch {
         val nid = state.value.buffer?.networkId ?: return@launch
         val channel = state.value.buffer?.ircTarget ?: return@launch
-        ircSessions.sessionFor(nid)
-            ?.send(IrcMessage(command = "MODE", params = listOf(channel, "+b", io.github.trevarj.motd.ui.channelinfo.banMask(nick))))
+        connectionManager.protocolCommands(nid)?.banMember(channel, nick)
     }
 
     /** Toggle [nick]'s friend/fool membership (reuses SettingsRepository semantics). */
@@ -1049,7 +1035,8 @@ class ChatViewModel @Inject constructor(
 
     /**
      * True when the viewer holds op in the current CHANNEL buffer (drives moderation visibility,
-     * Confirmed #7). Own prefixes come from the members list; prefix order from ISUPPORT.
+     * Confirmed #7). Own prefixes come from the members list; flag precedence from the backend's
+     * [io.github.trevarj.motd.backend.ProtocolCommands.memberFlagOrder].
      */
     fun canModerate(): Boolean {
         val buffer = state.value.buffer ?: return false
@@ -1057,8 +1044,7 @@ class ChatViewModel @Inject constructor(
         val myNick = (connState.value as? ConnectionState.Ready)?.selfHandle ?: return false
         val normalize = nickNormalizer()
         val me = _members.value.firstOrNull { normalize(it.nick) == normalize(myNick) } ?: return false
-        val order = buffer.networkId.let { ircSessions.sessionFor(it) }
-            ?.let { io.github.trevarj.motd.ui.channelinfo.prefixOrderFrom(it.isupport.prefixModes) }
+        val order = connectionManager.protocolCommands(buffer.networkId)?.memberFlagOrder()
             ?: io.github.trevarj.motd.ui.channelinfo.DEFAULT_PREFIX_ORDER
         return io.github.trevarj.motd.ui.channelinfo.canModerate(me.prefixes, order)
     }

@@ -85,16 +85,6 @@ class ImportBoundaryTest {
             "IRC hostmask ignore semantics; subsumed by neutral participant identity later.",
         ),
         Exemption(
-            "ui/chat/ChatViewModel.kt",
-            "IRC command/WHOIS surfaces embedded in shared UI, reached only via the IRC-owned " +
-                "IrcSessions accessor; neutral capabilities arrive with the XMPP feedback loop.",
-        ),
-        Exemption(
-            "ui/chat/Whois.kt",
-            "IRC command/WHOIS surfaces embedded in shared UI, reached only via the IRC-owned " +
-                "IrcSessions accessor; neutral capabilities arrive with the XMPP feedback loop.",
-        ),
-        Exemption(
             "ui/channelinfo/ChannelInfoViewModel.kt",
             "IRC command/WHOIS surfaces embedded in shared UI, reached only via the IRC-owned " +
                 "IrcSessions accessor; neutral capabilities arrive with the XMPP feedback loop.",

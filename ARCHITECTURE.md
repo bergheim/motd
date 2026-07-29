@@ -56,12 +56,16 @@ flowchart TD
 - UI observes repositories and ViewModel state. Connection actions go through
   the backend-neutral `ConnectionManager` seam (neutral `ConnectionState` with
   per-session generations, purpose contracts for identity, history
-  availability, push, reactions, and attachment endpoints). IRC feature
-  surfaces (DCC, bouncer, avatars, channel moderation/browsing, server admin,
-  webpush registration, composer slash commands) use the IRC-owned
-  `IrcSessions` accessor; general chat, notification, history, and connection
-  code must not. Notification and sound presentation consume canonical
-  `MessageEntity` rows, never wire events. `ImportBoundaryTest` enforces the
+  availability, push, reactions, attachment endpoints, and the optional
+  `ProtocolCommands` capability for nick/topic/away, raw protocol commands,
+  participant lookup, and moderation). Shared chat UI (`ChatViewModel`) reaches
+  those operations only through `ConnectionManager.protocolCommands`, never a
+  protocol client handle. Remaining IRC-only feature surfaces (DCC, bouncer,
+  avatars, channel info/browsing and its own moderation UI, server admin,
+  webpush registration) use the IRC-owned `IrcSessions` accessor; general
+  chat, notification, history, and connection code must not. Notification and
+  sound presentation consume canonical `MessageEntity` rows, never wire
+  events. `ImportBoundaryTest` enforces the
   wire-type boundary with an audited exemption table.
 - TLS policy, Android KeyChain integration, proxy selection, and embedded
   obfuscation are injected at the `:app` boundary so `:irc` stays pure JVM.
