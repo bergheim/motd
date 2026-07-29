@@ -49,6 +49,7 @@ import io.github.trevarj.motd.irc.client.preferredExtendedMonitor
 import io.github.trevarj.motd.attachment.sojuFileHostEndpoint
 import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.backend.ReactionCapability
+import io.github.trevarj.motd.ircbackend.IrcChatBackend
 import io.github.trevarj.motd.ircbackend.IrcSessions
 import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.irc.event.IrcEvent
@@ -498,6 +499,15 @@ class ConnectionManagerImpl @Inject constructor(
         graceMs = EMBEDDED_REALITY_BACKGROUND_GRACE_MS,
     )
 
+    /**
+     * The IRC manager's view of the network table: rows carrying the IRC discriminator only.
+     * Other backends' rows (docs/backend-neutral-xmpp-rollout.md) must never reach reconcile,
+     * wanted-set, or push logic here — their backends own them.
+     */
+    private fun observeIrcNetworks() = networkDao.observeAll().map { rows ->
+        rows.filter { it.protocol == IrcChatBackend.IRC_PROTOCOL.value }
+    }
+
     /** Adapter-internal session accessor; external surfaces go through [IrcSessions]. */
     internal fun clientFor(networkId: Long): IrcClient? =
         (registry.snapshot.value.actors[networkId]?.connection as? IrcClientConnection)?.client
@@ -531,9 +541,9 @@ class ConnectionManagerImpl @Inject constructor(
             // Seed actors from the current full set (reconcile applies autoConnect + sticky intent),
             // then keep reconciling on every DB change. The collector no longer pre-filters: reconcile
             // owns the wanted-set computation so manual connect/disconnect intents survive DB writes.
-            reconcile(networkDao.observeAll().first())
+            reconcile(observeIrcNetworks().first())
             val reconcileJob = scope.launch {
-                networkDao.observeAll().collect { all ->
+                observeIrcNetworks().collect { all ->
                     reconcile(all)
                 }
             }
@@ -542,7 +552,7 @@ class ConnectionManagerImpl @Inject constructor(
             val deliveryModeJob = scope.launch {
                 settings.settings.map { it.deliveryMode }.distinctUntilChanged().collect { mode ->
                     if (mode == DeliveryMode.UNIFIED_PUSH) {
-                        val all = networkDao.observeAll().first()
+                        val all = observeIrcNetworks().first()
                         if (appForeground && hasWantedEmbeddedReality(all)) {
                             startForegroundKeeper()
                         } else if (!appForeground) {
@@ -552,7 +562,7 @@ class ConnectionManagerImpl @Inject constructor(
                     } else {
                         backgroundRetention.cancel()
                         pushSuspendedIds.clear()
-                        reconcile(networkDao.observeAll().first())
+                        reconcile(observeIrcNetworks().first())
                     }
                 }
             }
@@ -601,7 +611,7 @@ class ConnectionManagerImpl @Inject constructor(
             )
         ) return
         if (backgroundRetention.isRetaining) return
-        val all = networkDao.observeAll().first()
+        val all = observeIrcNetworks().first()
         val wanted = wantedNetworkIds(all, userIntents, registry.connectionStates.value)
         val endpoints = pushPrefs.endpoints()
         val health = pushHealthStore.snapshot()
@@ -629,7 +639,7 @@ class ConnectionManagerImpl @Inject constructor(
         backgroundRetention.cancel()
         pushSuspendedIds.clear()
         startAll()
-        val all = networkDao.observeAll().first()
+        val all = observeIrcNetworks().first()
         reconcile(all)
         if (settings.settings.first().deliveryMode == DeliveryMode.UNIFIED_PUSH &&
             hasWantedEmbeddedReality(all)
@@ -646,7 +656,7 @@ class ConnectionManagerImpl @Inject constructor(
     internal fun onAppBackgrounded() {
         appForeground = false
         scope.launch {
-            val all = networkDao.observeAll().first()
+            val all = observeIrcNetworks().first()
             beginEmbeddedRealityBackgroundRetention(all)
             if (deviceIdle) maybeStopForPush()
         }
@@ -688,7 +698,7 @@ class ConnectionManagerImpl @Inject constructor(
      */
     private suspend fun releaseKeeperWhenPushCanOwnEverything() {
         if (appForeground || settings.settings.first().deliveryMode != DeliveryMode.UNIFIED_PUSH) return
-        val all = networkDao.observeAll().first()
+        val all = observeIrcNetworks().first()
         val wanted = wantedNetworkIds(all, userIntents, registry.connectionStates.value)
         val pushOwned = pushSuspendedNetworkIds(
             all,
@@ -772,7 +782,7 @@ class ConnectionManagerImpl @Inject constructor(
         // current socket; a healthy Ready connection is never unconditionally rebuilt. No-op until
         // started.
         if (!registry.snapshot.value.started) return
-        reconcile(networkDao.observeAll().first())
+        reconcile(observeIrcNetworks().first())
         registry.wakeNonReady()
         registry.probeReady()
     }
