@@ -47,16 +47,22 @@ private fun XmppSessionState.toConnectionState(generation: Long): ConnectionStat
  * either or reproducing the old prototype's IRC-shaped router. IRC (and any other non-"xmpp") rows
  * are never observed, spawned, or otherwise touched.
  *
- * Everything outside connect/reconnect/backoff and state reporting (sendMessage, typing, react,
- * buffers, markRead, history, cert prompts) is out of scope for this slice and returns the same
- * inert rejection/no-op [InertConnectionManager][io.github.trevarj.motd.backend.InertConnectionManager]
- * uses, pending later slices.
+ * Everything outside connect/reconnect/backoff, state reporting, and incoming-DM processing
+ * (sendMessage, typing, react, buffers, markRead, history, cert prompts) is out of scope for this
+ * slice and returns the same inert rejection/no-op
+ * [InertConnectionManager][io.github.trevarj.motd.backend.InertConnectionManager] uses, pending
+ * later slices.
+ *
+ * Every live session's [XmppSession.incomingMessages] is wired to [XmppProcessor] through the actor
+ * it runs on ([ensureActorLocked]); this manager never touches Room for timeline state itself
+ * (docs/backend-neutral-xmpp-rollout.md "Persistence and writer ownership").
  */
 @Singleton
 class XmppConnectionManager @Inject constructor(
     private val db: MotdDatabase,
     private val sessionFactory: XmppSessionFactory,
     @ApplicationScope private val scope: CoroutineScope,
+    private val processor: XmppProcessor = XmppProcessor(db),
 ) : ConnectionManager {
 
     private val actors = ConcurrentHashMap<Long, XmppAccountActor>()
@@ -166,6 +172,7 @@ class XmppConnectionManager @Inject constructor(
             scope = scope,
             nextGeneration = sessionSeq::incrementAndGet,
             onState = ::publishState,
+            onIncoming = processor::onIncomingDirectMessage,
         )
         actors[row.id] = actor
         actor.start()

@@ -23,8 +23,9 @@ import kotlinx.coroutines.withContext
  * sequence, a fatal failure parks the actor instead of retrying — without importing either.
  *
  * Concurrency contract: exactly one coroutine ([job], running [loop]) creates sessions and mutates
- * [connection]; [onState] is invoked only from that coroutine (plus, redundantly and harmlessly, by
- * [XmppSession]'s own state collector forwarding the same values).
+ * [connection]; [onState] and [onIncoming] are invoked only from that coroutine's children (plus,
+ * redundantly and harmlessly for [onState], by [XmppSession]'s own state collector forwarding the
+ * same values).
  */
 internal class XmppAccountActor(
     private val networkId: Long,
@@ -34,6 +35,10 @@ internal class XmppAccountActor(
     /** Assigns this attempt's session a fresh, manager-global monotonic generation number. */
     private val nextGeneration: () -> Long,
     private val onState: (networkId: Long, state: XmppSessionState, generation: Long) -> Unit,
+    /** Hands each live session's incoming DMs to [XmppProcessor] (docs/backend-neutral-xmpp-rollout.md
+     *  "PR 2" X4); defaults to a no-op so tests exercising only connection lifecycle need not wire it. */
+    private val onIncoming: suspend (networkId: Long, message: XmppIncomingMessage, generation: Long) -> Unit =
+        { _, _, _ -> },
     private val random: () -> Double = { Random.nextDouble() },
 ) {
     @Volatile var connection: XmppSession? = null
@@ -64,6 +69,11 @@ internal class XmppAccountActor(
             val session = sessionFactory.create(account)
             connection = session
             val collector = scope.launch { session.state.collect { onState(networkId, it, generation) } }
+            // Attached before connect() below (per incomingMessages' KDoc) so nothing arriving right
+            // after Ready races this subscription.
+            val messageCollector = scope.launch {
+                session.incomingMessages.collect { onIncoming(networkId, it, generation) }
+            }
             var reachedReady = false
 
             val terminal = try {
@@ -91,6 +101,7 @@ internal class XmppAccountActor(
                 // actually waiting/tearing down, per Kotlin's prompt-cancellation guarantee.
                 withContext(NonCancellable) {
                     collector.cancelAndJoin()
+                    messageCollector.cancelAndJoin()
                     runCatching { session.disconnect() }
                 }
                 connection = null
