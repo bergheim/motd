@@ -1,7 +1,13 @@
 # Architecture
 
 motd has two Gradle modules: `:app` is the Android application and `:irc` is a
-pure-JVM IRC engine with no Android dependencies.
+pure-JVM IRC engine with no Android dependencies. Inside `:app`, a
+backend-neutral seam separates shared MOTD behavior from the IRC adapter
+(docs/backend-neutral-xmpp-rollout.md): `backend/` holds the protocol-open
+contracts (`ProtocolId`, `BackendRegistry`, `ConnectionState`), the network row
+carries a persisted `protocol` discriminator, and IRC-only feature surfaces
+reach the live session through the IRC-owned `IrcSessions` accessor instead of
+a client escape hatch on the shared seam.
 
 ```mermaid
 flowchart TD
@@ -9,10 +15,12 @@ flowchart TD
         ui["Compose UI + ViewModels"]
         repo["repositories / preferences"]
         db["Room + FTS"]
-        proc["EventProcessor"]
+        reg["backend registry + neutral contracts"]
+        proc["EventProcessor (IRC processor)"]
         push["push delivery"]
         upload["previews / uploads"]
-        cm["ConnectionManager"]
+        cm["ConnectionManager (neutral seam)"]
+        ircs["IrcSessions (IRC-owned accessor)"]
         androidTransport["Android transport integration"]
     end
     subgraph irc[":irc (pure JVM)"]
@@ -22,12 +30,15 @@ flowchart TD
     end
 
     ui -->|state| repo
-    ui -->|connection and IRC actions| cm
+    ui -->|neutral connection actions| cm
+    ui -.->|IRC feature surfaces only| ircs
+    ui --> reg
     repo --> db
     client -->|IrcEvent| proc
-    proc -->|IRC-derived writes| db
+    proc -->|writes via shared canonical repositories| db
     push --> proc
     cm --> androidTransport
+    ircs --> client
     androidTransport --> client
     client --> proto
     client --> socket
@@ -36,11 +47,22 @@ flowchart TD
 
 ## Key invariants
 
-- `EventProcessor` is the only component that writes IRC-derived state to Room.
+- Each backend has exactly one processor that turns its wire events into
+  canonical facts, persisting only through the shared canonical repositories;
+  a network belongs to exactly one backend, so chat-derived state keeps a
+  single writer per network. `EventProcessor` is that processor for IRC.
   Feature-local persistence, such as preferences and upload history, remains
   behind its own repository or preference contract.
-- UI observes repositories and ViewModel state. Connection and protocol actions
-  go through `ConnectionManager` instead of constructing IRC clients in screens.
+- UI observes repositories and ViewModel state. Connection actions go through
+  the backend-neutral `ConnectionManager` seam (neutral `ConnectionState` with
+  per-session generations, purpose contracts for identity, history
+  availability, push, reactions, and attachment endpoints). IRC feature
+  surfaces (DCC, bouncer, avatars, channel moderation/browsing, server admin,
+  webpush registration, composer slash commands) use the IRC-owned
+  `IrcSessions` accessor; general chat, notification, history, and connection
+  code must not. Notification and sound presentation consume canonical
+  `MessageEntity` rows, never wire events. `ImportBoundaryTest` enforces the
+  wire-type boundary with an audited exemption table.
 - TLS policy, Android KeyChain integration, proxy selection, and embedded
   obfuscation are injected at the `:app` boundary so `:irc` stays pure JVM.
 - IRC TCP/TLS uses okio over `Socket`/`SSLSocket`. App-side WebSocket transport
