@@ -200,7 +200,50 @@ interface XmppSession {
     /** Re-publish the current occupant list for an already-joined room as a fresh
      *  [XmppMucOccupantEvent.Snapshot]. A no-op if [bareRoomJid] is not currently joined. */
     suspend fun refreshOccupants(bareRoomJid: String)
+
+    /**
+     * Send one chat message (docs/backend-neutral-xmpp-rollout.md, slice X6) to [to] — a contact's
+     * bare JID for a 1:1 message, or a joined room's bare JID for a MUC message. The implementation
+     * tells the two apart itself (by whether [to] is a room this session currently has joined, the
+     * same set [joinRoom]/[leaveRoom] maintain) — a caller never passes a buffer-type flag, since
+     * [XmppConnectionManager.sendMessage] already resolved the target from the buffer.
+     *
+     * [messageId] becomes the outgoing stanza's `id` attribute verbatim: the caller (a fresh label
+     * from [XmppProcessor.persistOutgoingSend]/[XmppProcessor.beginRetry]) uses it to correlate this
+     * send with its durable pending row — for a DM, only to log/diagnose, since a DM's own send is
+     * never echoed back in this baseline (no carbons yet); for a MUC, this is load-bearing: the room
+     * reflects the accepted message back to every occupant including the sender, and that reflection
+     * is expected to carry the same id back as [XmppIncomingMucMessage.stanzaId], which is exactly
+     * how [XmppConnectionManager] recognizes "this is the echo of my own pending send" and reconciles
+     * it (see that class's send pipeline).
+     *
+     * Unlike every other method on this interface, this one is NOT documented as swallowing
+     * failures: a transport/stanza-write exception (other than
+     * [kotlinx.coroutines.CancellationException], which always propagates) is allowed to propagate
+     * to the caller, which needs to know the wire write did not go out so it can fail the durable
+     * row immediately instead of leaving it pending with nothing left to resolve it.
+     */
+    suspend fun sendMessage(to: String, body: String, messageId: String)
+
+    /**
+     * Publish a XEP-0085 chat-state notification to [toBareJid] (docs/backend-neutral-xmpp-rollout.md,
+     * slice X6) — 1:1 only; MUC typing is out of this baseline's scope (see
+     * [XmppConnectionManager.sendTyping]'s QUERY-only guard, its only caller). Best-effort exactly
+     * like [joinRoom]/[refreshOccupants]: a transport failure (other than
+     * [kotlinx.coroutines.CancellationException]) is logged and swallowed rather than thrown — there
+     * is no durable row backing a typing ping, so there is nothing for a caller to retry or report.
+     */
+    suspend fun sendChatState(toBareJid: String, state: XmppChatState)
 }
+
+/**
+ * XEP-0085 chat-state vocabulary this baseline sends (docs/backend-neutral-xmpp-rollout.md, slice
+ * X6: "one-to-one typing where supported"). Deliberately narrower than the full five-state XEP:
+ * `inactive`/`gone` describe idle/departed semantics nothing upstream produces — the seam's own
+ * typing vocabulary (mirrored from `:irc`'s `+typing` client tag; see [XmppConnectionManager.sendTyping])
+ * is only "active"/"paused"/"done", which map onto exactly these three states.
+ */
+enum class XmppChatState { COMPOSING, PAUSED, ACTIVE }
 
 /** Builds one [XmppSession] attempt from a persisted XMPP account row. */
 fun interface XmppSessionFactory {

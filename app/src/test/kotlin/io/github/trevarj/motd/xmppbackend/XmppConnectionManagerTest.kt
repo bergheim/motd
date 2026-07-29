@@ -4,11 +4,17 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import io.github.trevarj.motd.backend.ConnectionState
+import io.github.trevarj.motd.data.db.BufferEntity
+import io.github.trevarj.motd.data.db.BufferType
+import io.github.trevarj.motd.data.db.EventAliasNamespace
 import io.github.trevarj.motd.data.db.MotdDatabase
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
 import io.github.trevarj.motd.data.db.XmppAccountEntity
+import io.github.trevarj.motd.service.ImmediateWireAcceptance
 import io.github.trevarj.motd.service.RosterLoadState
+import io.github.trevarj.motd.service.SendAcceptance
+import io.github.trevarj.motd.service.SendRejectionReason
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
@@ -23,6 +29,9 @@ import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -387,5 +396,244 @@ class XmppConnectionManagerTest {
         advanceUntilIdle()
 
         assertEquals(listOf("room@conference.example.org" to "phone"), s1.joinRoomCalls)
+    }
+
+    // -- durable pending sends and send acknowledgements, and 1:1 typing (slice X6;
+    // docs/backend-neutral-xmpp-rollout.md baseline). Exercised through the real pipeline:
+    // manager.sendMessage/retryMessage/sendTyping, a live FakeXmppSession, and the shared canonical
+    // tables — never a private XMPP write path. Mirrors `:irc` ConnectionManagerImpl's
+    // sendMessage/retryMessage/writeDurablePlan decision structure; see XmppConnectionManager's
+    // own KDoc on each method for the exact IRC idiom each mirrors. --
+
+    private val peerJid = "alice@example.org"
+
+    /** ensureQueryBuffer is not implemented yet (a separate, unstarted slice — see its stub's
+     *  comment), so tests insert the QUERY buffer directly, exactly like BackendContractTest's
+     *  createBuffer does for its fake backend. */
+    private suspend fun insertQueryBuffer(networkId: Long, jid: String = peerJid): Long =
+        db.bufferDao().insert(
+            BufferEntity(networkId = networkId, name = jid, displayName = jid, type = BufferType.QUERY),
+        )
+
+    @Test
+    fun sendMessage_dm_persistsPendingThenConfirmsAfterWireWrite() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+        connectReady(s1)
+        val bufferId = insertQueryBuffer(nid)
+
+        val acceptance = manager.sendMessage(bufferId, "hello there")
+        advanceUntilIdle()
+
+        val accepted = acceptance as SendAcceptance.Accepted
+        assertEquals(ImmediateWireAcceptance.ACCEPTED, accepted.immediateWireAcceptance)
+
+        val sent = s1.sentMessages.single()
+        assertEquals(peerJid, sent.to)
+        assertEquals("hello there", sent.body)
+
+        val row = db.canonicalTimelineDao().eventsForRoom(bufferId).single()
+        assertEquals(accepted.eventIds.single(), row.id)
+        assertTrue(row.isSelf)
+        assertEquals("hello there", row.text)
+        assertNull(row.pendingLabel) // DMs confirm on wire-write success; no echo cap to wait for.
+        assertFalse(row.failed)
+        assertNull(row.msgid) // never echoed back in this baseline (carbons deferred).
+    }
+
+    @Test
+    fun sendMessage_dm_noLiveSession_failsImmediately() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1)) // never connected: actors[nid] stays empty, mirroring IRC's client==null.
+        val bufferId = insertQueryBuffer(nid)
+
+        val acceptance = manager.sendMessage(bufferId, "hello there")
+        advanceUntilIdle()
+
+        val accepted = acceptance as SendAcceptance.Accepted
+        assertEquals(ImmediateWireAcceptance.DISCONNECTED, accepted.immediateWireAcceptance)
+        assertTrue(s1.sentMessages.isEmpty())
+
+        // Durably represented and immediately failed — mirrors IRC's writeDurablePlan
+        // (client == null || ready == null -> failPendingEvents), never a 30s wait for a session
+        // that was never going to answer.
+        val row = db.canonicalTimelineDao().eventsForRoom(bufferId).single()
+        assertTrue(row.failed)
+        assertNotNull(row.pendingLabel) // failPending sets failed=1 without clearing the label.
+        assertNull(row.msgid)
+    }
+
+    @Test
+    fun sendMessage_muc_staysPendingUntilReflectedEcho_thenEnrichesSameRow() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+        connectReady(s1)
+        manager.joinChannel(nid, roomJid)
+        advanceUntilIdle()
+        val buffer = requireNotNull(db.bufferDao().byName(nid, roomJid))
+
+        val acceptance = manager.sendMessage(buffer.id, "hi room")
+        // runCurrent, NOT advanceUntilIdle: the send just armed a live 30s watchdog job (see
+        // armSendTimeout), and advanceUntilIdle would fast-forward straight through it to prove
+        // this test's own point moot — runCurrent settles only what's already due, exactly like
+        // ConnectionRegistryTest's armEchoTimeout tests use around :irc's identical watchdog.
+        runCurrent()
+
+        val accepted = acceptance as SendAcceptance.Accepted
+        assertEquals(ImmediateWireAcceptance.ACCEPTED, accepted.immediateWireAcceptance)
+        val sent = s1.sentMessages.single()
+        assertEquals(roomJid, sent.to)
+
+        val pendingRow = db.canonicalTimelineDao().eventsForRoom(buffer.id).single()
+        assertNotNull(pendingRow.pendingLabel) // MUC does NOT confirm on write; waits for the echo.
+        assertNull(pendingRow.msgid)
+        assertFalse(pendingRow.failed)
+
+        // The room reflects the accepted message back to every occupant, including the sender
+        // ("me" — the bootstrapped account's bare-JID-localpart nick), with the same stanza id this
+        // session set on the outgoing send.
+        s1.emitMucMessage(roomJid, "me", "hi room", stanzaId = sent.messageId)
+        advanceUntilIdle()
+
+        val rows = db.canonicalTimelineDao().eventsForRoom(buffer.id)
+        val row = rows.single() // still exactly one row: the reflection enriches, never duplicates.
+        assertEquals(sent.messageId, row.msgid)
+        assertNull(row.pendingLabel)
+        assertFalse(row.failed)
+        assertTrue(row.isSelf)
+        assertEquals(
+            setOf(EventAliasNamespace.LABEL, EventAliasNamespace.MSGID),
+            db.canonicalTimelineDao().aliasesFor(row.id).map { it.namespace }.toSet(),
+        )
+    }
+
+    @Test
+    fun sendMessage_muc_failsAfterAcknowledgementTimeout_whenNoReflectionArrives() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+        connectReady(s1)
+        manager.joinChannel(nid, roomJid)
+        advanceUntilIdle()
+        val buffer = requireNotNull(db.bufferDao().byName(nid, roomJid))
+
+        manager.sendMessage(buffer.id, "hi room")
+        runCurrent() // settle the send itself without racing past its own still-armed watchdog.
+        assertFalse(db.canonicalTimelineDao().eventsForRoom(buffer.id).single().failed)
+
+        // The MUC send-acknowledgement watchdog (mirrors :irc ECHO_TIMEOUT_MS): fast-forward past
+        // its 30s delay and let it fire, since nothing else in this test keeps the queue non-idle.
+        advanceUntilIdle()
+
+        val row = db.canonicalTimelineDao().eventsForRoom(buffer.id).single()
+        assertTrue(row.failed)
+        assertNotNull(row.pendingLabel)
+        assertNull(row.msgid)
+    }
+
+    @Test
+    fun retryMessage_issuesNewLabel_andClearsOnRetriedEcho() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+        connectReady(s1)
+        manager.joinChannel(nid, roomJid)
+        advanceUntilIdle()
+        val buffer = requireNotNull(db.bufferDao().byName(nid, roomJid))
+
+        manager.sendMessage(buffer.id, "hi room")
+        advanceUntilIdle() // let the send's own 30s watchdog fire, producing a failed row to retry.
+        val failedRow = db.canonicalTimelineDao().eventsForRoom(buffer.id).single()
+        assertTrue(failedRow.failed)
+        val firstLabel = s1.sentMessages.single().messageId
+
+        val retryAcceptance = manager.retryMessage(failedRow.id)
+        // runCurrent, NOT advanceUntilIdle: the retry arms its OWN fresh 30s watchdog on the new
+        // label, which advanceUntilIdle would fire immediately — see the "stays pending" test above.
+        runCurrent()
+
+        val retryAccepted = retryAcceptance as SendAcceptance.Accepted
+        assertEquals(ImmediateWireAcceptance.ACCEPTED, retryAccepted.immediateWireAcceptance)
+        assertEquals(listOf(failedRow.id), retryAccepted.eventIds) // same canonical row, not a new one.
+
+        assertEquals(2, s1.sentMessages.size)
+        val secondLabel = s1.sentMessages[1].messageId
+        assertNotEquals(firstLabel, secondLabel)
+
+        val retriedRow = db.canonicalTimelineDao().eventsForRoom(buffer.id).single()
+        assertEquals(failedRow.id, retriedRow.id)
+        assertFalse(retriedRow.failed)
+        assertEquals(secondLabel, retriedRow.pendingLabel)
+
+        s1.emitMucMessage(roomJid, "me", "hi room", stanzaId = secondLabel)
+        advanceUntilIdle()
+
+        val finalRow = db.canonicalTimelineDao().eventsForRoom(buffer.id).single()
+        assertEquals(failedRow.id, finalRow.id)
+        assertNull(finalRow.pendingLabel)
+        assertFalse(finalRow.failed)
+        assertEquals(secondLabel, finalRow.msgid)
+    }
+
+    @Test
+    fun sendMessage_rejectsUnknownBuffer() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+        connectReady(s1)
+
+        val acceptance = manager.sendMessage(999_999L, "hello")
+        advanceUntilIdle()
+
+        assertEquals(SendAcceptance.Rejected(SendRejectionReason.BUFFER_NOT_FOUND), acceptance)
+        assertTrue(s1.sentMessages.isEmpty())
+    }
+
+    @Test
+    fun sendMessage_rejectsEmptyText() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+        connectReady(s1)
+        val bufferId = insertQueryBuffer(nid)
+
+        val acceptance = manager.sendMessage(bufferId, "")
+        advanceUntilIdle()
+
+        assertEquals(SendAcceptance.Rejected(SendRejectionReason.INVALID_CONTENT), acceptance)
+        assertTrue(db.canonicalTimelineDao().eventsForRoom(bufferId).isEmpty())
+    }
+
+    @Test
+    fun sendTyping_query_mapsActivePausedDoneToChatStates() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+        connectReady(s1)
+        val bufferId = insertQueryBuffer(nid)
+
+        manager.sendTyping(bufferId, "active")
+        manager.sendTyping(bufferId, "paused")
+        manager.sendTyping(bufferId, "done")
+        advanceUntilIdle()
+
+        assertEquals(
+            listOf(
+                peerJid to XmppChatState.COMPOSING,
+                peerJid to XmppChatState.PAUSED,
+                peerJid to XmppChatState.ACTIVE,
+            ),
+            s1.sentChatStates,
+        )
+    }
+
+    @Test
+    fun sendTyping_muc_isNoOp() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+        connectReady(s1)
+        manager.joinChannel(nid, roomJid)
+        advanceUntilIdle()
+        val buffer = requireNotNull(db.bufferDao().byName(nid, roomJid))
+
+        manager.sendTyping(buffer.id, "active")
+        advanceUntilIdle()
+
+        assertTrue(s1.sentChatStates.isEmpty())
     }
 }

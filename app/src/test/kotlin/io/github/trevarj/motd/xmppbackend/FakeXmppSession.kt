@@ -53,6 +53,21 @@ internal class FakeXmppSession : XmppSession {
     val leaveRoomCalls = mutableListOf<String>()
     val refreshOccupantsCalls = mutableListOf<String>()
 
+    /** One recorded [XmppSession.sendMessage] call (slice X6): [to] a bare JID or joined room, the
+     *  [body], and the [messageId] the caller asked to be set as the outgoing stanza id — a test
+     *  reads this back and feeds it to [emitMucMessage]'s `stanzaId` to simulate a MUC's delivery
+     *  echo of this exact send. */
+    data class SentMessage(val to: String, val body: String, val messageId: String)
+
+    val sentMessages = mutableListOf<SentMessage>()
+    val sentChatStates = mutableListOf<Pair<String, XmppChatState>>()
+
+    /** One-shot: when set, the next [sendMessage] call throws this instead of recording/succeeding,
+     *  then clears itself — simulates a transport failure on an otherwise-live session (e.g. a
+     *  write that races a server-initiated close), the counterpart to leaving [connectGate]
+     *  unresolved for "no session at all". */
+    var sendMessageFailure: Throwable? = null
+
     private var connectGate = CompletableDeferred<XmppSessionState>()
 
     override suspend fun connect() {
@@ -78,6 +93,18 @@ internal class FakeXmppSession : XmppSession {
 
     override suspend fun refreshOccupants(bareRoomJid: String) {
         refreshOccupantsCalls += bareRoomJid
+    }
+
+    override suspend fun sendMessage(to: String, body: String, messageId: String) {
+        sendMessageFailure?.let { failure ->
+            sendMessageFailure = null
+            throw failure
+        }
+        sentMessages += SentMessage(to, body, messageId)
+    }
+
+    override suspend fun sendChatState(toBareJid: String, state: XmppChatState) {
+        sentChatStates += toBareJid to state
     }
 
     /** Resolve the in-flight (or next) [connect] call with [outcome] (typically Ready or Failed). */
