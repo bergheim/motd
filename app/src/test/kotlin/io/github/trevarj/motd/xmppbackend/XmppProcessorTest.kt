@@ -31,6 +31,16 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
 /**
+ * Mirrors [XmppProcessor]'s private `scopedMsgid`/`MSGID_AUTHORITY_SEPARATOR` (review fix: a raw
+ * sender-supplied stanza id is scoped to its assigning authority before becoming a canonical
+ * event's `msgid`, so two different senders reusing a common id never collide) without depending
+ * on that implementation detail directly. The separator is built from [Int.toChar] rather than
+ * typed as a literal escape so this file stays plain, unambiguous source text.
+ */
+private fun scopedMsgid(stanzaId: String, vararg authority: String): String =
+    (authority.toList() + stanzaId).joinToString(0.toChar().toString())
+
+/**
  * XmppProcessor unit tests (docs/backend-neutral-xmpp-rollout.md "PR 2", slice X4). Every scenario is
  * driven the way production actually delivers a message — through a live [FakeXmppSession] plumbed by
  * [XmppConnectionManager]/[XmppAccountActor], the same bootstrap style as [XmppConnectionManagerTest]
@@ -125,7 +135,9 @@ class XmppProcessorTest {
         val row = rows.single()
         assertEquals("hello there", row.text)
         assertEquals("alice@example.org", row.sender)
-        assertEquals("stanza-1", row.msgid)
+        // msgid is scoped to its assigning authority (the sender's bare JID), not the raw stanza id
+        // verbatim — see scopedMsgid's KDoc on the production side.
+        assertEquals(scopedMsgid("stanza-1", "alice@example.org"), row.msgid)
         assertFalse(row.isSelf)
     }
 
@@ -150,11 +162,58 @@ class XmppProcessorTest {
         val buffer = requireNotNull(db.bufferDao().byName(networkId, "alice@example.org"))
         val rows = db.canonicalTimelineDao().eventsForRoom(buffer.id)
         val row = rows.single()
-        assertEquals("stanza-1", row.msgid)
+        assertEquals(scopedMsgid("stanza-1", "alice@example.org"), row.msgid)
         assertEquals(
             listOf(EventAliasNamespace.MSGID),
             db.canonicalTimelineDao().aliasesFor(row.id).map { it.namespace },
         )
+    }
+
+    /**
+     * The regression this review fix closes: a raw XMPP stanza id is sender-supplied and only
+     * unique within its own sender's stream (RFC 6120), unlike an IRC msgid. Before scoping the
+     * canonical `msgid` to its assigning authority, two different DM peers reusing a common id
+     * collided on the exact same `(networkId, MSGID, value)` alias —
+     * [io.github.trevarj.motd.data.sync.CanonicalTimelineStore.ingestInTransaction] resolves an
+     * MSGID match unconditionally, ahead of every weaker signal and with no bufferId check — so
+     * bob's message would silently coalesce into alice's already-inserted event and never appear
+     * in its own (bob's) buffer at all.
+     */
+    @Test
+    fun `two different DM senders reusing the same stanza id land as two distinct events`() = runTest {
+        val session = FakeXmppSession()
+        bootstrap(listOf(session))
+        val networkId = xmppNetwork("glvortex")
+        connectReady(networkId, session)
+
+        session.emit(
+            XmppIncomingMessage(
+                fromBareJid = "alice@example.org",
+                body = "hello from alice",
+                stanzaId = "1",
+                delayStampMillis = null,
+            ),
+        )
+        session.emit(
+            XmppIncomingMessage(
+                fromBareJid = "bob@example.org",
+                body = "hello from bob",
+                stanzaId = "1", // same raw stanza id alice's message above already used
+                delayStampMillis = null,
+            ),
+        )
+        advanceUntilIdle()
+
+        val aliceBuffer = requireNotNull(db.bufferDao().byName(networkId, "alice@example.org"))
+        val bobBuffer = requireNotNull(db.bufferDao().byName(networkId, "bob@example.org"))
+        assertNotEquals(aliceBuffer.id, bobBuffer.id)
+
+        val aliceRow = db.canonicalTimelineDao().eventsForRoom(aliceBuffer.id).single()
+        val bobRow = db.canonicalTimelineDao().eventsForRoom(bobBuffer.id).single()
+        assertEquals("hello from alice", aliceRow.text)
+        assertEquals("hello from bob", bobRow.text)
+        assertEquals(scopedMsgid("1", "alice@example.org"), aliceRow.msgid)
+        assertEquals(scopedMsgid("1", "bob@example.org"), bobRow.msgid)
     }
 
     @Test
@@ -314,11 +373,47 @@ class XmppProcessorTest {
         val row = rows.single { it.kind == MessageKind.PRIVMSG }
         assertEquals("hello room", row.text)
         assertEquals("alice", row.sender)
-        assertEquals("muc-stanza-1", row.msgid)
+        // msgid is scoped to its assigning authority (room + occupant), not the raw stanza id
+        // verbatim — see scopedMsgid's KDoc on the production side.
+        assertEquals(scopedMsgid("muc-stanza-1", roomJid, "alice"), row.msgid)
         assertFalse(row.isSelf)
         assertEquals(
             listOf(EventAliasNamespace.MSGID),
             db.canonicalTimelineDao().aliasesFor(row.id).map { it.namespace },
+        )
+    }
+
+    /**
+     * The MUC counterpart of "two different DM senders reusing the same stanza id" above: two
+     * occupants in the *same* room reusing a common raw stanza id must not collide either, even
+     * though (unlike two DM peers) they already share one canonical buffer. Before this fix, the
+     * second occupant's message silently merged into the first occupant's already-inserted event —
+     * observably, only one row would exist instead of two, and the second occupant's text would
+     * never appear at all ([io.github.trevarj.motd.data.sync.CanonicalTimelineStore.enrich] keeps
+     * the existing row's content unless the incoming observation is server-tag authoritative).
+     */
+    @Test
+    fun `two MUC occupants reusing the same stanza id land as two distinct events`() = runTest {
+        val session = FakeXmppSession()
+        bootstrap(listOf(session))
+        val networkId = xmppNetwork("glvortex")
+        connectReady(networkId, session)
+        manager.joinChannel(networkId, roomJid)
+        advanceUntilIdle()
+        session.emitOccupantSnapshot(roomJid, listOf("me", "alice", "bob"))
+        advanceUntilIdle()
+
+        session.emitMucMessage(roomJid, "alice", "hi from alice", "1")
+        session.emitMucMessage(roomJid, "bob", "hi from bob", "1") // same raw stanza id as alice's
+        advanceUntilIdle()
+
+        val buffer = requireNotNull(db.bufferDao().byName(networkId, roomJid))
+        val rows = db.canonicalTimelineDao().eventsForRoom(buffer.id).filter { it.kind == MessageKind.PRIVMSG }
+        assertEquals(2, rows.size)
+        assertEquals(setOf("hi from alice", "hi from bob"), rows.map { it.text }.toSet())
+        assertEquals(
+            setOf(scopedMsgid("1", roomJid, "alice"), scopedMsgid("1", roomJid, "bob")),
+            rows.mapNotNull { it.msgid }.toSet(),
         )
     }
 
