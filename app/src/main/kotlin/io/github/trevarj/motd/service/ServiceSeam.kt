@@ -199,9 +199,15 @@ interface ConnectionManager {
     fun dismissCertPrompt(prompt: CertPrompt)
 }
 
-/** In-memory typing state. Written by EventProcessor (WP5), read by ChatViewModel (WP7). */
+/**
+ * In-memory typing state. Read by ChatViewModel; written by each backend's processor through the
+ * neutral write contract (pinned after Branch-2 feedback, docs/backend-neutral-xmpp-rollout.md).
+ */
 interface TypingTracker {
     fun typingNicks(bufferId: Long): StateFlow<List<String>>
+
+    /** Apply a typing state ("active" | "paused" | "done") for [actor] in [bufferId]. */
+    fun onTyping(bufferId: Long, actor: String, state: String)
 }
 
 /** Buffer currently visible in the foreground UI. Set by ChatViewModel (WP7), read by the

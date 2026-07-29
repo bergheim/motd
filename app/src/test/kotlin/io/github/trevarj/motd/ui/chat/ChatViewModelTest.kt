@@ -1308,6 +1308,7 @@ class ChatViewModelTest {
 
     private class FakeTypingTracker : TypingTracker {
         override fun typingNicks(bufferId: Long): StateFlow<List<String>> = MutableStateFlow(emptyList())
+        override fun onTyping(bufferId: Long, actor: String, state: String) = Unit
     }
 
     private class FakeForegroundBufferTracker : ForegroundBufferTracker {
