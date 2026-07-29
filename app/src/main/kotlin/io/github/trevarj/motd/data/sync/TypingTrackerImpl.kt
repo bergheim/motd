@@ -48,6 +48,9 @@ class TypingTrackerImpl @Inject constructor(
     override fun typingNicks(bufferId: Long): StateFlow<List<String>> =
         synchronized(lock) { flowFor(bufferId).asStateFlow() }
 
+    override fun onTyping(bufferId: Long, actor: String, state: String) =
+        onTyping(bufferId, actor, state, clock.nowMillis())
+
     /** Apply a typing state ("active" | "paused" | "done") for [nick] in [bufferId]. */
     fun onTyping(bufferId: Long, nick: String, state: String, now: Long = clock.nowMillis()) {
         synchronized(lock) {
