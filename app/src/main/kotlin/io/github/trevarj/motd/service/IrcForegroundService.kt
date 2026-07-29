@@ -9,7 +9,9 @@ import androidx.lifecycle.lifecycleScope
 import dagger.hilt.android.AndroidEntryPoint
 import io.github.trevarj.motd.backend.ConnectionState
 import javax.inject.Inject
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Foreground-service keeper for the connection subsystem (plans/05). Thin [LifecycleService]:
@@ -24,25 +26,28 @@ class IrcForegroundService : LifecycleService() {
 
     override fun onCreate() {
         super.onCreate()
-        // Reflect live connection state in the status notification.
+        // Reflect live connection state in the status notification. Read through the neutral seam:
+        // a downcast to the IRC manager silently yielded null once the registry-dispatching
+        // composite became the bound implementation, which stopped the status ever updating.
         lifecycleScope.launch {
-            (connectionManager as? ConnectionManagerImpl)?.connectionStates?.collect { states ->
-                updateStatus(states)
-            }
+            connectionManager.connectionStates.collect { states -> updateStatus(states) }
         }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
         if (intent?.action == ACTION_STOP) {
-            lifecycleScope.launch {
+            lifecycleScope.launch(Dispatchers.Default) {
                 connectionManager.stopAll()
-                stopSelf()
+                withContext(Dispatchers.Main) { stopSelf() }
             }
             return START_NOT_STICKY
         }
         startAsForeground()
-        lifecycleScope.launch { connectionManager.startAll() }
+        // Off the main thread: a lifecycle broadcast resolves every registered backend's session
+        // manager, and a backend's construction can do real work (protocol library initialization).
+        // Blocking the main thread here stalls the freshly-foregrounded service.
+        lifecycleScope.launch(Dispatchers.Default) { connectionManager.startAll() }
         return START_STICKY
     }
 
