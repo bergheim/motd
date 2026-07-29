@@ -6,6 +6,7 @@ import io.github.trevarj.motd.data.db.XmppAccountEntity
 import java.security.cert.CertificateParsingException
 import java.security.cert.X509Certificate
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.logging.Level
 import java.util.logging.Logger
 import javax.inject.Inject
@@ -22,14 +23,24 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import org.jivesoftware.smack.ConnectionConfiguration
 import org.jivesoftware.smack.ConnectionListener
+import org.jivesoftware.smack.MessageListener
 import org.jivesoftware.smack.ReconnectionManager
 import org.jivesoftware.smack.android.AndroidSmackInitializer
 import org.jivesoftware.smack.chat2.ChatManager
 import org.jivesoftware.smack.packet.Presence
+import org.jivesoftware.smack.roster.Roster
 import org.jivesoftware.smack.sasl.SASLErrorException
 import org.jivesoftware.smack.tcp.XMPPTCPConnection
 import org.jivesoftware.smack.tcp.XMPPTCPConnectionConfiguration
 import org.jivesoftware.smackx.delay.DelayInformationManager
+import org.jivesoftware.smackx.muc.MultiUserChat
+import org.jivesoftware.smackx.muc.MultiUserChatManager
+import org.jivesoftware.smackx.muc.ParticipantStatusListener
+import org.jivesoftware.smackx.muc.SubjectUpdatedListener
+import org.jivesoftware.smackx.muc.UserStatusListener
+import org.jxmpp.jid.EntityFullJid
+import org.jxmpp.jid.Jid
+import org.jxmpp.jid.impl.JidCreate
 import org.jxmpp.jid.parts.Resourcepart
 
 /** Verbatim credential-failure message, shown by the account UI (carried over from fork/xmpp-support). */
@@ -38,9 +49,10 @@ internal const val XMPP_AUTH_FAILURE_REASON = "Wrong address or password"
 /**
  * Smack-backed [XmppSession] (docs/backend-neutral-xmpp-rollout.md "PR 2"). Carries over the
  * fork/xmpp-support prototype's TLS/SASL connect mechanics, its [SanHostnameVerifier] fix for the
- * STARTTLS path, and its parsing-exception/clean-teardown reconnect-stability fixes. Reimplemented
- * against the new seam: state is published as this package's [XmppSessionState], never a wire type,
- * and every Smack import stays inside `xmppbackend/` (enforced by `ImportBoundaryTest`).
+ * STARTTLS path, its parsing-exception/clean-teardown reconnect-stability fixes, and (slice X5) its
+ * MUC join-listener-ordering fix and roster-load-at-login handling. Reimplemented against the new
+ * seam: state is published as this package's [XmppSessionState], never a wire type, and every Smack
+ * import stays inside `xmppbackend/` (enforced by `ImportBoundaryTest`).
  *
  * Only [XmppAccountEntity.jid]/[XmppAccountEntity.password]/[XmppAccountEntity.resource] are read.
  * Host/port are intentionally left unset so Smack resolves them via the standard XMPP SRV lookup
@@ -60,6 +72,38 @@ internal class SmackXmppSession(private val account: XmppAccountEntity) : XmppSe
     // emission past the buffer is an accepted v1 tradeoff (see [XmppSession.incomingMessages]).
     private val _incomingMessages = MutableSharedFlow<XmppIncomingMessage>(extraBufferCapacity = INCOMING_MESSAGE_BUFFER)
     override val incomingMessages: Flow<XmppIncomingMessage> = _incomingMessages.asSharedFlow()
+
+    // Same buffered-flow rationale as _incomingMessages above; all four are fed from Smack's
+    // synchronous MUC/roster listener callbacks (slice X5).
+    private val _incomingMucMessages =
+        MutableSharedFlow<XmppIncomingMucMessage>(extraBufferCapacity = INCOMING_MESSAGE_BUFFER)
+    override val incomingMucMessages: Flow<XmppIncomingMucMessage> = _incomingMucMessages.asSharedFlow()
+
+    private val _mucSubjects = MutableSharedFlow<XmppMucSubject>(extraBufferCapacity = MUC_EVENT_BUFFER)
+    override val mucSubjects: Flow<XmppMucSubject> = _mucSubjects.asSharedFlow()
+
+    private val _mucOccupants = MutableSharedFlow<XmppMucOccupantEvent>(extraBufferCapacity = MUC_EVENT_BUFFER)
+    override val mucOccupants: Flow<XmppMucOccupantEvent> = _mucOccupants.asSharedFlow()
+
+    // Roster loads at most once per session (see XmppSession.rosterLoad), so one slot is enough.
+    private val _rosterLoad = MutableSharedFlow<XmppRosterLoad>(extraBufferCapacity = 1)
+    override val rosterLoad: Flow<XmppRosterLoad> = _rosterLoad.asSharedFlow()
+
+    /**
+     * Listener refs registered per joined room, keyed by the canonical (Smack-normalized) room bare
+     * JID, so [leaveRoom]/a rejoin removes exactly what [joinRoom] added — carried over from the
+     * fork/xmpp-support prototype's `roomListeners` map. Accessed only from suspend functions
+     * dispatched on [Dispatchers.IO] without further caller-side serialization, exactly like the
+     * prototype; [ConcurrentHashMap] is defensive rather than load-bearing.
+     */
+    private data class RoomListeners(
+        val messageListener: MessageListener,
+        val subjectUpdatedListener: SubjectUpdatedListener,
+        val participantStatusListener: ParticipantStatusListener,
+        val userStatusListener: UserStatusListener,
+    )
+
+    private val roomListeners = ConcurrentHashMap<String, RoomListeners>()
 
     /**
      * Per-session XMPP resource. Two devices signed into one account must NOT present an identical
@@ -112,6 +156,7 @@ internal class SmackXmppSession(private val account: XmppAccountEntity) : XmppSe
                 _state.value = XmppSessionState.Authenticating
                 connection.login()
                 _state.value = XmppSessionState.Ready(connection.user.asBareJid().toString())
+                loadRoster() // never throws; a roster hiccup must not fail an otherwise-good login.
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (auth: SASLErrorException) {
@@ -162,6 +207,179 @@ internal class SmackXmppSession(private val account: XmppAccountEntity) : XmppSe
         }
     }
 
+    /**
+     * Load the roster once, right after [connect] reaches Ready, and publish its one-shot outcome on
+     * [rosterLoad] (never on [state]: a roster hiccup is not a connection failure). Smack requests
+     * the roster as part of login by default (`Roster.isRosterLoadedAtLogin`), so [Roster.isLoaded]
+     * is normally already true here; `reloadAndWait()` is a defensive fallback for the case where it
+     * is not (carried over from the fork/xmpp-support prototype). Never throws.
+     */
+    private fun loadRoster() {
+        try {
+            val roster = Roster.getInstanceFor(connection)
+            if (!roster.isLoaded) roster.reloadAndWait()
+            val contacts = roster.entries.map { XmppRosterContact(it.jid.asBareJid().toString(), it.name) }
+            _rosterLoad.tryEmit(XmppRosterLoad.Loaded(contacts))
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (e: Exception) {
+            LOGGER.log(Level.WARNING, "XMPP roster load failed", e)
+            _rosterLoad.tryEmit(XmppRosterLoad.Failed(e.message ?: "roster load failed"))
+        }
+    }
+
+    /**
+     * Smack caches one [MultiUserChat] instance per room JID (`getMultiUserChat` returns the same
+     * instance on every call for a given room) — dropping any listeners left over from an earlier
+     * join on this same instance, so a rejoin never double-delivers every room event. Carried over
+     * from the fork/xmpp-support prototype's `joinMuc`/`removeRoomListeners` pairing.
+     */
+    override suspend fun joinRoom(bareRoomJid: String, nick: String) {
+        withContext(Dispatchers.IO) {
+            var joinedMuc: MultiUserChat? = null
+            var canonicalRoomJid: String? = null
+            try {
+                val roomJid = JidCreate.entityBareFrom(bareRoomJid)
+                val jidString = roomJid.toString()
+                canonicalRoomJid = jidString
+                val muc = MultiUserChatManager.getInstanceFor(connection).getMultiUserChat(roomJid)
+                joinedMuc = muc
+                removeRoomListeners(muc, jidString)
+
+                val messageListener = MessageListener { message ->
+                    val occupantNick = (message.from as? EntityFullJid)?.resourceOrEmpty?.toString()
+                    val body = message.body
+                    if (!occupantNick.isNullOrEmpty() && body != null) {
+                        _incomingMucMessages.tryEmit(
+                            XmppIncomingMucMessage(
+                                roomBareJid = jidString,
+                                occupantNick = occupantNick,
+                                body = body,
+                                stanzaId = message.stanzaId,
+                                delayStampMillis = DelayInformationManager.getDelayTimestamp(message)?.time,
+                                // muc.nickname reflects our CURRENT in-room nick (live, tracks a
+                                // server-forced rename on nickname conflict), not just the nick this
+                                // joinRoom call requested — see XmppIncomingMucMessage.isSelf.
+                                isSelf = occupantNick == muc.nickname?.toString(),
+                            ),
+                        )
+                    }
+                }
+                val subjectUpdatedListener = SubjectUpdatedListener { subject, from ->
+                    _mucSubjects.tryEmit(XmppMucSubject(jidString, subject, from?.resourceOrEmpty?.toString()))
+                }
+                val participantStatusListener = object : ParticipantStatusListener {
+                    override fun joined(participant: EntityFullJid) {
+                        _mucOccupants.tryEmit(
+                            XmppMucOccupantEvent.Joined(jidString, participant.resourceOrEmpty.toString()),
+                        )
+                    }
+
+                    override fun left(participant: EntityFullJid) {
+                        _mucOccupants.tryEmit(
+                            XmppMucOccupantEvent.Left(jidString, participant.resourceOrEmpty.toString()),
+                        )
+                    }
+
+                    override fun kicked(participant: EntityFullJid, actor: Jid?, reason: String?) {
+                        // A kick of another occupant is just a departure from this baseline's model.
+                        _mucOccupants.tryEmit(
+                            XmppMucOccupantEvent.Left(jidString, participant.resourceOrEmpty.toString()),
+                        )
+                    }
+                }
+                // Our own kick/ban/room-destroyed handling is out of this baseline's scope (no
+                // UserStatusListener callback is overridden); the listener is still registered so
+                // removeRoomListeners has a stable, always-non-null ref to remove on leave/rejoin.
+                val userStatusListener = object : UserStatusListener {}
+
+                // Message/subject listeners must be attached before join() — both can fire mid-join.
+                // Occupant listeners are attached AFTER a successful join so Smack's own replay of
+                // every pre-existing member during join is never reported as a fresh Joined (carried
+                // over fix from the fork/xmpp-support prototype; see XmppMucOccupantEvent's KDoc).
+                muc.addMessageListener(messageListener)
+                muc.addSubjectUpdatedListener(subjectUpdatedListener)
+                roomListeners[jidString] = RoomListeners(
+                    messageListener,
+                    subjectUpdatedListener,
+                    participantStatusListener,
+                    userStatusListener,
+                )
+
+                // A gateway (e.g. a Biboumi-style IRC bridge) may cold-connect to the far network
+                // before it can even reflect our presence, which routinely exceeds Smack's default
+                // ~5s reply timeout; allow a long join window (carried over from the prototype).
+                val enter = muc.getEnterConfigurationBuilder(Resourcepart.from(nick))
+                    .timeoutAfter(MUC_JOIN_TIMEOUT_MS)
+                    .requestMaxStanzasHistory(MUC_JOIN_HISTORY_MAX)
+                    .build()
+                muc.join(enter)
+                muc.addParticipantStatusListener(participantStatusListener)
+                muc.addUserStatusListener(userStatusListener)
+                _mucOccupants.tryEmit(
+                    XmppMucOccupantEvent.Snapshot(jidString, muc.occupants.map { it.resourceOrEmpty.toString() }),
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (e: Exception) {
+                // Never logs bareRoomJid's original (un-parsed) form or any stanza content — only
+                // the already-canonical room JID, which carries no message/roster content.
+                LOGGER.log(Level.WARNING, "MUC join failed for ${canonicalRoomJid ?: "unparsed room JID"}", e)
+                val muc = joinedMuc
+                val jidString = canonicalRoomJid
+                if (muc != null && jidString != null) removeRoomListeners(muc, jidString)
+            }
+        }
+    }
+
+    override suspend fun leaveRoom(bareRoomJid: String) {
+        withContext(Dispatchers.IO) {
+            try {
+                val roomJid = JidCreate.entityBareFrom(bareRoomJid)
+                val muc = MultiUserChatManager.getInstanceFor(connection).getMultiUserChat(roomJid)
+                removeRoomListeners(muc, roomJid.toString())
+                muc.leave()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (e: Exception) {
+                // Safe to call even if never joined (XmppSession.leaveRoom contract) — MucNotJoinedException
+                // and friends are expected, not exceptional.
+                LOGGER.log(Level.FINE, "MUC leave was a no-op or failed for $bareRoomJid", e)
+            }
+        }
+    }
+
+    override suspend fun refreshOccupants(bareRoomJid: String) {
+        withContext(Dispatchers.IO) {
+            try {
+                val roomJid = JidCreate.entityBareFrom(bareRoomJid)
+                val muc = MultiUserChatManager.getInstanceFor(connection).getMultiUserChat(roomJid)
+                if (!muc.isJoined) return@withContext
+                _mucOccupants.tryEmit(
+                    XmppMucOccupantEvent.Snapshot(
+                        roomJid.toString(),
+                        muc.occupants.map { it.resourceOrEmpty.toString() },
+                    ),
+                )
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (e: Exception) {
+                LOGGER.log(Level.WARNING, "MUC occupant refresh failed for $bareRoomJid", e)
+            }
+        }
+    }
+
+    /** Carried over from the fork/xmpp-support prototype's `removeRoomListeners`: removing an
+     *  unregistered listener is a harmless no-op, so this is safe to call defensively. */
+    private fun removeRoomListeners(muc: MultiUserChat, roomJid: String) {
+        roomListeners.remove(roomJid)?.let { listeners ->
+            muc.removeMessageListener(listeners.messageListener)
+            muc.removeSubjectUpdatedListener(listeners.subjectUpdatedListener)
+            muc.removeParticipantStatusListener(listeners.participantStatusListener)
+            muc.removeUserStatusListener(listeners.userStatusListener)
+        }
+    }
+
     override suspend fun disconnect() {
         withContext(Dispatchers.IO) {
             runCatching { connection.disconnect(Presence(Presence.Type.unavailable)) }
@@ -174,6 +392,19 @@ internal class SmackXmppSession(private val account: XmppAccountEntity) : XmppSe
 
         /** Generous headroom for a burst of offline-storage redelivery; see [incomingMessages]. */
         const val INCOMING_MESSAGE_BUFFER = 64
+
+        /** Headroom for a burst of MUC subject/occupant events (e.g. a busy room's join snapshot
+         *  landing alongside a flurry of live joins); see [mucSubjects]/[mucOccupants]. */
+        const val MUC_EVENT_BUFFER = 64
+
+        /** A gateway cold-connecting to a far network can take tens of seconds before it can reflect
+         *  our MUC self-presence; wait well past Smack's ~5s default (carried over from the
+         *  fork/xmpp-support prototype's `GATEWAY_JOIN_TIMEOUT_MS`). */
+        const val MUC_JOIN_TIMEOUT_MS = 60_000L
+
+        /** Modest backlog on join: ignored by rooms with no history, recent context otherwise
+         *  (carried over from the prototype's `MUC_JOIN_HISTORY_MAX`). */
+        const val MUC_JOIN_HISTORY_MAX = 50
     }
 }
 

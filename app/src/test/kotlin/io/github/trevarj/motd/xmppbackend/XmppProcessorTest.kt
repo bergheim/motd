@@ -5,6 +5,7 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.db.EventAliasNamespace
+import io.github.trevarj.motd.data.db.MessageKind
 import io.github.trevarj.motd.data.db.MotdDatabase
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
@@ -254,5 +255,190 @@ class XmppProcessorTest {
         advanceUntilIdle()
         assertEquals(1, factory.created.size)
         assertNull(db.bufferDao().byName(ircId, "alice@example.org"))
+    }
+
+    // -- MUC baseline (slice X5): join/occupants/messages/subjects/leave, plus roster loading. --
+
+    private val roomJid = "room@conference.example.org"
+
+    @Test
+    fun `joining a MUC creates the CHANNEL buffer and lands the occupant snapshot`() = runTest {
+        val session = FakeXmppSession()
+        bootstrap(listOf(session))
+        val networkId = xmppNetwork("glvortex")
+        connectReady(networkId, session)
+
+        manager.joinChannel(networkId, roomJid)
+        advanceUntilIdle()
+        // nick = bare-JID localpart: the bootstrapped account configures no resource.
+        assertEquals(listOf(roomJid to "me"), session.joinRoomCalls)
+
+        session.emitOccupantSnapshot(roomJid, listOf("me", "alice", "bob"))
+        advanceUntilIdle()
+
+        val buffer = requireNotNull(db.bufferDao().byName(networkId, roomJid)) {
+            "expected a CHANNEL buffer for the joined room"
+        }
+        assertEquals(BufferType.CHANNEL, buffer.type)
+        assertEquals(roomJid, buffer.displayName)
+        assertTrue(buffer.joined)
+
+        val nicks = db.memberDao().allNow(buffer.id).map { it.nick }.toSet()
+        assertEquals(setOf("me", "alice", "bob"), nicks)
+    }
+
+    @Test
+    fun `a MUC message from another occupant lands once, deduped on stanza id`() = runTest {
+        val session = FakeXmppSession()
+        bootstrap(listOf(session))
+        val networkId = xmppNetwork("glvortex")
+        connectReady(networkId, session)
+        manager.joinChannel(networkId, roomJid)
+        advanceUntilIdle()
+        session.emitOccupantSnapshot(roomJid, listOf("me", "alice"))
+        advanceUntilIdle()
+
+        session.emitMucMessage(roomJid, "alice", "hello room", "muc-stanza-1")
+        advanceUntilIdle()
+        session.emitMucMessage(roomJid, "alice", "hello room", "muc-stanza-1") // redelivery
+        advanceUntilIdle()
+
+        val buffer = requireNotNull(db.bufferDao().byName(networkId, roomJid))
+        val rows = db.canonicalTimelineDao().eventsForRoom(buffer.id)
+        val row = rows.single { it.kind == MessageKind.PRIVMSG }
+        assertEquals("hello room", row.text)
+        assertEquals("alice", row.sender)
+        assertEquals("muc-stanza-1", row.msgid)
+        assertFalse(row.isSelf)
+        assertEquals(
+            listOf(EventAliasNamespace.MSGID),
+            db.canonicalTimelineDao().aliasesFor(row.id).map { it.namespace },
+        )
+    }
+
+    @Test
+    fun `own-occupant echo lands isSelf=true exactly once`() = runTest {
+        val session = FakeXmppSession()
+        bootstrap(listOf(session))
+        val networkId = xmppNetwork("glvortex")
+        connectReady(networkId, session)
+        manager.joinChannel(networkId, roomJid) // nick = "me" (bare-JID localpart)
+        advanceUntilIdle()
+        session.emitOccupantSnapshot(roomJid, listOf("me", "alice"))
+        advanceUntilIdle()
+
+        session.emitMucMessage(roomJid, "me", "hi, it's me", "muc-self-1")
+        advanceUntilIdle()
+
+        val buffer = requireNotNull(db.bufferDao().byName(networkId, roomJid))
+        val rows = db.canonicalTimelineDao().eventsForRoom(buffer.id)
+        val row = rows.single { it.kind == MessageKind.PRIVMSG }
+        assertTrue(row.isSelf)
+        assertEquals("hi, it's me", row.text)
+        assertEquals(1, rows.count { it.kind == MessageKind.PRIVMSG })
+    }
+
+    @Test
+    fun `a MUC subject change persists as the topic-kind event and updates the buffer topic`() = runTest {
+        val session = FakeXmppSession()
+        bootstrap(listOf(session))
+        val networkId = xmppNetwork("glvortex")
+        connectReady(networkId, session)
+        manager.joinChannel(networkId, roomJid)
+        advanceUntilIdle()
+        session.emitOccupantSnapshot(roomJid, listOf("me"))
+        advanceUntilIdle()
+
+        session.emitMucSubject(roomJid, "Welcome to the room", "alice")
+        advanceUntilIdle()
+
+        val buffer = requireNotNull(db.bufferDao().byName(networkId, roomJid))
+        assertEquals("Welcome to the room", buffer.topic)
+        assertEquals("alice", buffer.topicSetBy)
+
+        val topicRow = db.canonicalTimelineDao().eventsForRoom(buffer.id).single { it.kind == MessageKind.TOPIC }
+        assertEquals("topic: Welcome to the room", topicRow.text)
+        assertEquals("alice", topicRow.sender)
+    }
+
+    @Test
+    fun `leaving a room stops processing further events for it`() = runTest {
+        val session = FakeXmppSession()
+        bootstrap(listOf(session))
+        val networkId = xmppNetwork("glvortex")
+        connectReady(networkId, session)
+        manager.joinChannel(networkId, roomJid)
+        advanceUntilIdle()
+        session.emitOccupantSnapshot(roomJid, listOf("me", "alice"))
+        advanceUntilIdle()
+        session.emitMucMessage(roomJid, "alice", "before leaving", "before-1")
+        advanceUntilIdle()
+
+        val buffer = requireNotNull(db.bufferDao().byName(networkId, roomJid))
+        assertEquals(1, db.canonicalTimelineDao().eventsForRoom(buffer.id).size)
+        assertTrue(requireNotNull(db.bufferDao().observeById(buffer.id)).joined)
+
+        manager.partChannel(buffer.id)
+        advanceUntilIdle()
+        assertEquals(listOf(roomJid), session.leaveRoomCalls)
+
+        // FakeXmppSession mirrors a real session's post-leave contract: no listener remains
+        // registered for a left room, so these silently do nothing rather than landing new state.
+        session.emitMucMessage(roomJid, "alice", "after leaving", "after-1")
+        session.emitOccupantJoined(roomJid, "carol")
+        advanceUntilIdle()
+
+        assertEquals(1, db.canonicalTimelineDao().eventsForRoom(buffer.id).size)
+        assertFalse(requireNotNull(db.bufferDao().observeById(buffer.id)).joined)
+        assertTrue(db.memberDao().allNow(buffer.id).isEmpty())
+    }
+
+    @Test
+    fun `occupants refresh on requestMembers`() = runTest {
+        val session = FakeXmppSession()
+        bootstrap(listOf(session))
+        val networkId = xmppNetwork("glvortex")
+        connectReady(networkId, session)
+        manager.joinChannel(networkId, roomJid)
+        advanceUntilIdle()
+        session.emitOccupantSnapshot(roomJid, listOf("me", "alice"))
+        advanceUntilIdle()
+
+        val buffer = requireNotNull(db.bufferDao().byName(networkId, roomJid))
+        assertEquals(setOf("me", "alice"), db.memberDao().allNow(buffer.id).map { it.nick }.toSet())
+
+        manager.requestMembers(buffer.id)
+        advanceUntilIdle()
+        assertEquals(listOf(roomJid), session.refreshOccupantsCalls)
+
+        // Simulate the session's response: a fresh snapshot reflecting a roster change that
+        // happened between join and the refresh request.
+        session.emitOccupantSnapshot(roomJid, listOf("me", "alice", "carol"))
+        advanceUntilIdle()
+
+        assertEquals(setOf("me", "alice", "carol"), db.memberDao().allNow(buffer.id).map { it.nick }.toSet())
+    }
+
+    @Test
+    fun `a loaded roster upserts a UserEntity row per contact`() = runTest {
+        val session = FakeXmppSession()
+        bootstrap(listOf(session))
+        val networkId = xmppNetwork("glvortex")
+        connectReady(networkId, session)
+
+        session.emitRosterLoad(
+            XmppRosterLoad.Loaded(
+                listOf(
+                    XmppRosterContact("alice@example.org", "Alice"),
+                    XmppRosterContact("bob@example.org", null),
+                ),
+            ),
+        )
+        advanceUntilIdle()
+
+        val alice = requireNotNull(db.userDao().byNick(networkId, "alice@example.org"))
+        assertEquals("Alice", alice.realname)
+        val bob = requireNotNull(db.userDao().byNick(networkId, "bob@example.org"))
+        assertNull(bob.realname)
     }
 }
