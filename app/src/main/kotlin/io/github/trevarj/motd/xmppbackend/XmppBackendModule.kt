@@ -14,4 +14,7 @@ abstract class XmppBackendModule {
     @Binds
     @IntoSet
     abstract fun bindXmppChatBackend(impl: XmppChatBackend): ChatBackend
+
+    @Binds
+    abstract fun bindXmppSessionFactory(impl: SmackXmppSessionFactory): XmppSessionFactory
 }
