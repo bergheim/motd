@@ -2,6 +2,8 @@ package io.github.trevarj.motd.service
 
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 
 /**
  * StateFlow view mapping [source] on read, deduplicating equal mapped values per collector so a
@@ -16,15 +18,7 @@ internal class MappedStateFlow<T, R>(
     override val value: R get() = transform(source.value)
     override val replayCache: List<R> get() = listOf(value)
     override suspend fun collect(collector: FlowCollector<R>): Nothing {
-        var emitted = false
-        var last: R? = null
-        source.collect { upstream ->
-            val next = transform(upstream)
-            if (!emitted || next != last) {
-                emitted = true
-                last = next
-                collector.emit(next)
-            }
-        }
+        source.map(transform).distinctUntilChanged().collect(collector)
+        error("StateFlow never completes")
     }
 }

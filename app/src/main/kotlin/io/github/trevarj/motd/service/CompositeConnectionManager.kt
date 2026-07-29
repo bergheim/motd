@@ -46,25 +46,25 @@ class CompositeConnectionManager @Inject constructor(
         db.messageDao().byId(eventId)?.let { sessionsForBuffer(it.bufferId) }
 
     override val connectionStates: StateFlow<Map<Long, ConnectionState>> by lazy {
-        CombinedStateFlow(sessionList.map { it.connectionStates }) { maps -> union(maps) }
+        CombinedStateFlow(sessionList.map { it.connectionStates }, ::union)
     }
     override val memberLoadStates: StateFlow<Map<Long, RosterLoadState>> by lazy {
-        CombinedStateFlow(sessionList.map { it.memberLoadStates }) { maps -> union(maps) }
+        CombinedStateFlow(sessionList.map { it.memberLoadStates }, ::union)
     }
     override val presenceStates: StateFlow<Map<PresenceKey, PresenceState>> by lazy {
-        CombinedStateFlow(sessionList.map { it.presenceStates }) { maps -> union(maps) }
+        CombinedStateFlow(sessionList.map { it.presenceStates }, ::union)
     }
     override val lagStates: StateFlow<Map<Long, Long?>> by lazy {
-        CombinedStateFlow(sessionList.map { it.lagStates }) { maps -> union(maps) }
+        CombinedStateFlow(sessionList.map { it.lagStates }, ::union)
     }
     override val serverPushAvailable: StateFlow<Boolean> by lazy {
         CombinedStateFlow(sessionList.map { it.serverPushAvailable }) { flags -> flags.any { it } }
     }
     override val attachmentUploadEndpoints: StateFlow<Map<Long, String>> by lazy {
-        CombinedStateFlow(sessionList.map { it.attachmentUploadEndpoints }) { maps -> union(maps) }
+        CombinedStateFlow(sessionList.map { it.attachmentUploadEndpoints }, ::union)
     }
     override val reactionCapabilities: StateFlow<Map<Long, ReactionCapability>> by lazy {
-        CombinedStateFlow(sessionList.map { it.reactionCapabilities }) { maps -> union(maps) }
+        CombinedStateFlow(sessionList.map { it.reactionCapabilities }, ::union)
     }
     override val certPrompts: StateFlow<List<CertPrompt>> by lazy {
         CombinedStateFlow(sessionList.map { it.certPrompts }) { lists -> lists.flatten() }
@@ -159,5 +159,6 @@ class CompositeConnectionManager @Inject constructor(
     }
 
     private fun <K, V> union(maps: List<Map<K, V>>): Map<K, V> =
-        maps.fold(emptyMap()) { acc, map -> acc + map }
+        // One backend (today's only case) returns its map unchanged — no per-emission/-read copy.
+        if (maps.size == 1) maps[0] else maps.fold(emptyMap()) { acc, map -> acc + map }
 }
