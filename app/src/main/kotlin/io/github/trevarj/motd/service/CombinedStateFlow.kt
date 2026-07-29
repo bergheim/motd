@@ -1,5 +1,6 @@
 package io.github.trevarj.motd.service
 
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.StateFlow
@@ -20,6 +21,13 @@ internal class CombinedStateFlow<T, R>(
     override val replayCache: List<R> get() = listOf(value)
 
     override suspend fun collect(collector: FlowCollector<R>): Nothing {
+        // combine over an empty list completes immediately, which would turn a StateFlow that must
+        // never complete into a thrown error. With no backends the combined value can never change,
+        // so emit it once and stay open like any other StateFlow.
+        if (sources.isEmpty()) {
+            collector.emit(transform(emptyList()))
+            awaitCancellation()
+        }
         val upstream: Flow<R> = if (sources.size == 1) {
             sources.single().map { transform(listOf(it)) }
         } else {
