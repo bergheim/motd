@@ -13,18 +13,23 @@ import javax.net.ssl.HostnameVerifier
 import javax.net.ssl.SSLSession
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import org.jivesoftware.smack.ConnectionConfiguration
 import org.jivesoftware.smack.ConnectionListener
 import org.jivesoftware.smack.ReconnectionManager
 import org.jivesoftware.smack.android.AndroidSmackInitializer
+import org.jivesoftware.smack.chat2.ChatManager
 import org.jivesoftware.smack.packet.Presence
 import org.jivesoftware.smack.sasl.SASLErrorException
 import org.jivesoftware.smack.tcp.XMPPTCPConnection
 import org.jivesoftware.smack.tcp.XMPPTCPConnectionConfiguration
+import org.jivesoftware.smackx.delay.DelayInformationManager
 import org.jxmpp.jid.parts.Resourcepart
 
 /** Verbatim credential-failure message, shown by the account UI (carried over from fork/xmpp-support). */
@@ -49,6 +54,12 @@ internal const val XMPP_AUTH_FAILURE_REASON = "Wrong address or password"
 internal class SmackXmppSession(private val account: XmppAccountEntity) : XmppSession {
     private val _state = MutableStateFlow<XmppSessionState>(XmppSessionState.Disconnected)
     override val state: StateFlow<XmppSessionState> = _state.asStateFlow()
+
+    // Buffered rather than rendezvous: Smack's chat listener callback (registerIncomingMessageListener)
+    // is a plain synchronous callback and cannot suspend to wait for a slow collector. A dropped
+    // emission past the buffer is an accepted v1 tradeoff (see [XmppSession.incomingMessages]).
+    private val _incomingMessages = MutableSharedFlow<XmppIncomingMessage>(extraBufferCapacity = INCOMING_MESSAGE_BUFFER)
+    override val incomingMessages: Flow<XmppIncomingMessage> = _incomingMessages.asSharedFlow()
 
     /**
      * Per-session XMPP resource. Two devices signed into one account must NOT present an identical
@@ -95,6 +106,7 @@ internal class SmackXmppSession(private val account: XmppAccountEntity) : XmppSe
             // prototype, same invariant as :irc's actor-owned reconnect).
             ReconnectionManager.getInstanceFor(connection).disableAutomaticReconnection()
             registerConnectionListener() // BEFORE connect/login — spec invariant, per the prototype.
+            registerIncomingMessageListener() // Same ordering invariant: attach before stanzas can flow.
             try {
                 connection.connect()
                 _state.value = XmppSessionState.Authenticating
@@ -128,6 +140,28 @@ internal class SmackXmppSession(private val account: XmppAccountEntity) : XmppSe
         })
     }
 
+    /**
+     * Bridge Smack's one-to-one chat callback onto [incomingMessages]. `ChatManager`'s listener
+     * already narrows delivery to 1:1 DM-shaped stanzas addressed to us (not MUC, not our own sends —
+     * carbons are not enabled in this slice, so there is no reflection to filter here); a stanza with
+     * no `<body/>` (e.g. a bare chat-state notification, XEP-0085) carries no message to persist and
+     * is dropped rather than landing as a blank row. Never logs stanza content (same privacy
+     * invariant as the parsing-exception callback above).
+     */
+    private fun registerIncomingMessageListener() {
+        ChatManager.getInstanceFor(connection).addIncomingListener { from, message, _ ->
+            val body = message.body ?: return@addIncomingListener
+            _incomingMessages.tryEmit(
+                XmppIncomingMessage(
+                    fromBareJid = from.toString(),
+                    body = body,
+                    stanzaId = message.stanzaId,
+                    delayStampMillis = DelayInformationManager.getDelayTimestamp(message)?.time,
+                ),
+            )
+        }
+    }
+
     override suspend fun disconnect() {
         withContext(Dispatchers.IO) {
             runCatching { connection.disconnect(Presence(Presence.Type.unavailable)) }
@@ -137,6 +171,9 @@ internal class SmackXmppSession(private val account: XmppAccountEntity) : XmppSe
 
     private companion object {
         val LOGGER: Logger = Logger.getLogger(SmackXmppSession::class.java.name)
+
+        /** Generous headroom for a burst of offline-storage redelivery; see [incomingMessages]. */
+        const val INCOMING_MESSAGE_BUFFER = 64
     }
 }
 

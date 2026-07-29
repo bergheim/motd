@@ -2,8 +2,11 @@ package io.github.trevarj.motd.xmppbackend
 
 import io.github.trevarj.motd.data.db.XmppAccountEntity
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
@@ -15,6 +18,11 @@ import kotlinx.coroutines.flow.asStateFlow
 internal class FakeXmppSession : XmppSession {
     private val _state = MutableStateFlow<XmppSessionState>(XmppSessionState.Disconnected)
     override val state: StateFlow<XmppSessionState> = _state.asStateFlow()
+
+    // Buffered like the real SmackXmppSession (see its incomingMessages KDoc): emit() is a plain,
+    // non-suspending call so tests can fire it without racing the actor's collector subscription.
+    private val _incomingMessages = MutableSharedFlow<XmppIncomingMessage>(extraBufferCapacity = 64)
+    override val incomingMessages: Flow<XmppIncomingMessage> = _incomingMessages.asSharedFlow()
 
     var connectCalls = 0
         private set
@@ -43,6 +51,13 @@ internal class FakeXmppSession : XmppSession {
      *  arriving after Ready (server close, socket error). */
     fun publish(state: XmppSessionState) {
         _state.value = state
+    }
+
+    /** Simulate a stanza arriving on this live session — the incoming-message counterpart to
+     *  [publish]. Buffered, so it is safe to call as soon as a test has driven this session to
+     *  Ready, without an extra `advanceUntilIdle()` first to make sure the collector is attached. */
+    fun emit(message: XmppIncomingMessage) {
+        check(_incomingMessages.tryEmit(message)) { "incomingMessages buffer full in test" }
     }
 }
 
