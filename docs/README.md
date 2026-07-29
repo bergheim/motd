@@ -20,6 +20,9 @@ exact `nix develop` commands for one activity.
 
 ## Feature and setup docs
 
+- [`backend-neutral-xmpp-rollout.md`](backend-neutral-xmpp-rollout.md) —
+  approved two-PR rollout for extracting IRC behind a neutral backend boundary
+  and implementing XMPP on top.
 - [`cloak.md`](cloak.md) — CLoak bouncer connection guide.
 - [`obfuscation.md`](obfuscation.md) — SOCKS5, Tor, and VLESS + REALITY
   transport behavior and validation.
