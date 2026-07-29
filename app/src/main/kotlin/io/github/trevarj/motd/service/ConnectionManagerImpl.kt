@@ -48,6 +48,7 @@ import io.github.trevarj.motd.irc.client.preferredNoImplicitNames
 import io.github.trevarj.motd.irc.client.preferredExtendedMonitor
 import io.github.trevarj.motd.attachment.sojuFileHostEndpoint
 import io.github.trevarj.motd.backend.ConnectionState
+import io.github.trevarj.motd.backend.ProtocolCommands
 import io.github.trevarj.motd.backend.ReactionCapability
 import io.github.trevarj.motd.ircbackend.IrcChatBackend
 import io.github.trevarj.motd.ircbackend.IrcSessions
@@ -519,6 +520,9 @@ class ConnectionManagerImpl @Inject constructor(
 
     override fun historyAvailability(networkId: Long): HistoryAvailability? =
         clientFor(networkId)?.historyAvailability
+
+    override fun protocolCommands(networkId: Long): ProtocolCommands? =
+        clientFor(networkId)?.let { IrcProtocolCommands(it, scope) }
 
     private fun Set<String>.hasWebPushCap(): Boolean =
         any { it == WebPushRegistrar.WEBPUSH_CAP || it.startsWith("${WebPushRegistrar.WEBPUSH_CAP}=") }
