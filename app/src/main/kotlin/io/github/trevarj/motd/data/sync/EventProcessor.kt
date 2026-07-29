@@ -483,10 +483,9 @@ class EventProcessor @Inject constructor(
             }
             if (origin == EventOrigin.LIVE && !sourceIsSelf && canonicalTimeline.claimSound(canonical.id)) {
                 try {
-                    chatSoundPlayer.onCanonicalIncoming(
+                    chatSoundPlayer.onIncoming(
                         canonical.bufferId,
                         type,
-                        e.copy(text = canonical.text),
                         canonical,
                     )
                 } catch (cancelled: CancellationException) {
@@ -514,16 +513,7 @@ class EventProcessor @Inject constructor(
                         type,
                         canonical.hasMention,
                         canonical.id,
-                        e.copy(
-                            ctx = e.ctx.copy(
-                                msgid = canonical.msgid,
-                                serverTime = canonical.serverTime,
-                                account = canonical.senderAccount,
-                            ),
-                            text = canonical.text,
-                            isSelf = sourceIsSelf,
-                            replyToMsgid = canonical.replyToMsgid,
-                        ),
+                        canonical,
                     )
                 }
             }
@@ -2726,14 +2716,14 @@ class EventProcessor @Inject constructor(
         type: BufferType,
         hasMention: Boolean,
         eventId: TimelineEventId,
-        e: IrcEvent.ChatMessage,
+        message: MessageEntity,
     ) {
-        if (e.isSelf) return
+        if (message.isSelf) return
         // Never raise a notification for a SERVER buffer: a motd line containing the user's nick
         // must not fire a mention (plans/16 §5.6.5).
         if (type == BufferType.SERVER) return
         if (type != BufferType.QUERY && !hasMention) return
-        notifier.onCanonicalIncoming(networkId, bufferId, type, hasMention, eventId, e)
+        notifier.onCanonicalIncoming(networkId, bufferId, type, hasMention, eventId, message)
     }
 
     /**
@@ -2844,17 +2834,17 @@ interface MessageNotifier {
     // off the main thread). The events collector runs on Dispatchers.Main, so a blocking read here
     // (runBlocking { suspend Room query }) deadlocks/crashes the main thread — same class of bug as
     // the findSelfEchoCandidate fix. Callers are already in suspend context.
-    suspend fun onIncoming(networkId: Long, bufferId: Long, type: BufferType, hasMention: Boolean, message: IrcEvent.ChatMessage)
-
-    /** Canonical-id-aware notification hook. Legacy/test implementations inherit the old hook. */
+    //
+    // Carries the neutral canonical row, not an IRC wire type (plans/backend-neutral-xmpp-rollout
+    // §Shared MOTD behavior): notification presentation must not depend on protocol-specific types.
     suspend fun onCanonicalIncoming(
         networkId: Long,
         bufferId: Long,
         type: BufferType,
         hasMention: Boolean,
         eventId: TimelineEventId,
-        message: IrcEvent.ChatMessage,
-    ) = onIncoming(networkId, bufferId, type, hasMention, message)
+        message: MessageEntity,
+    )
 
     /** A local or synchronized marker advanced through this exact timeline tuple. */
     suspend fun onRead(bufferId: Long, anchor: io.github.trevarj.motd.data.db.TimelineAnchor) = Unit
@@ -2873,6 +2863,6 @@ interface MessageNotifier {
 
     /** No-op notifier for tests / headless contexts. */
     object Noop : MessageNotifier {
-        override suspend fun onIncoming(networkId: Long, bufferId: Long, type: BufferType, hasMention: Boolean, message: IrcEvent.ChatMessage) = Unit
+        override suspend fun onCanonicalIncoming(networkId: Long, bufferId: Long, type: BufferType, hasMention: Boolean, eventId: TimelineEventId, message: MessageEntity) = Unit
     }
 }

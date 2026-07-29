@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import io.github.trevarj.motd.data.db.BufferType
+import io.github.trevarj.motd.data.db.MessageEntity
 import io.github.trevarj.motd.data.db.MotdDatabase
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
@@ -464,21 +465,13 @@ class EventProcessorStateMachineFuzzTest {
     private class RecordingNotifier : MessageNotifier {
         val eventIds = mutableListOf<Long>()
 
-        override suspend fun onIncoming(
-            networkId: Long,
-            bufferId: Long,
-            type: BufferType,
-            hasMention: Boolean,
-            message: IrcEvent.ChatMessage,
-        ) = Unit
-
         override suspend fun onCanonicalIncoming(
             networkId: Long,
             bufferId: Long,
             type: BufferType,
             hasMention: Boolean,
             eventId: Long,
-            message: IrcEvent.ChatMessage,
+            message: MessageEntity,
         ) {
             eventIds += eventId
         }
@@ -490,9 +483,9 @@ class EventProcessorStateMachineFuzzTest {
         override suspend fun onIncoming(
             bufferId: Long,
             type: BufferType,
-            message: IrcEvent.ChatMessage,
+            message: MessageEntity,
         ) {
-            msgids += message.ctx.msgid
+            msgids += message.msgid
         }
 
         override suspend fun onOutgoingAccepted(bufferId: Long) = Unit

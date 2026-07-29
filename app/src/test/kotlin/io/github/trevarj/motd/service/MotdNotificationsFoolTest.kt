@@ -35,10 +35,10 @@ import org.robolectric.Shadows.shadowOf
 
 /**
  * Regression for the "adding a nick to fools crashes the app" report. The events collector runs on
- * Dispatchers.Main, and [MotdNotifications.onIncoming] used to read Room + the fools DataStore via
- * `runBlocking { suspend query }`, which blocks the main thread and crashes/deadlocks once a
- * freshly-added fool's message arrives (same class of bug as the findSelfEchoCandidate main-thread
- * fix). onIncoming is now a plain suspend call.
+ * Dispatchers.Main, and [MotdNotifications.onCanonicalIncoming] used to read Room + the fools
+ * DataStore via `runBlocking { suspend query }`, which blocks the main thread and crashes/deadlocks
+ * once a freshly-added fool's message arrives (same class of bug as the findSelfEchoCandidate
+ * main-thread fix). onCanonicalIncoming is now a plain suspend call.
  *
  * This exercises the real read path end to end from the main dispatcher: a fool's message must post
  * no notification (silenced), a normal sender's must post one — without blocking the main thread.
@@ -99,6 +99,25 @@ class MotdNotificationsFoolTest {
         replyToMsgid = null,
     )
 
+    /** Neutral canonical-row equivalent of [chat], for the notifier boundary's own carrier type. */
+    private fun entity(
+        nick: String,
+        text: String,
+        bufferId: Long = this.bufferId,
+        msgid: String? = null,
+        serverTime: Long = 1000,
+        account: String? = null,
+    ) = MessageEntity(
+        bufferId = bufferId,
+        msgid = msgid,
+        serverTime = serverTime,
+        sender = nick,
+        senderAccount = account,
+        kind = MessageKind.PRIVMSG,
+        text = text,
+        dedupKey = "test-dedup:$nick:$serverTime:$msgid",
+    )
+
     private fun postedCount(): Int =
         shadowOf(context.getSystemService(android.app.NotificationManager::class.java))
             .activeNotifications.size
@@ -110,15 +129,18 @@ class MotdNotificationsFoolTest {
 
     /**
      * The crash repro path: add a fool, then run the notification pipeline for that fool's message.
-     * onIncoming reads the fools DataStore + the buffer via suspend calls (no runBlocking on the
-     * main-thread events collector), so it completes cleanly and posts nothing (fools are silenced).
+     * onCanonicalIncoming reads the fools DataStore + the buffer via suspend calls (no runBlocking on
+     * the main-thread events collector), so it completes cleanly and posts nothing (fools silenced).
+     * eventId = 0L simulates a delivery with no canonical row yet resolvable (matching the old
+     * eventId-less onIncoming hook): the DB lookup by that id finds nothing and postIncoming falls
+     * back to the passed entity's own fields, exactly as it fell back to the wire message before.
      */
     @Test
     fun addedFool_incomingMessage_isSilenced_andDoesNotCrash() = runTest {
         repo.setFool("Troll", true)
-        notifications.onIncoming(
+        notifications.onCanonicalIncoming(
             networkId = 1, bufferId = bufferId, type = BufferType.QUERY,
-            hasMention = false, message = chat("troll", "hey"),
+            hasMention = false, eventId = 0L, message = entity("troll", "hey"),
         )
         assertEquals(0, postedCount())
     }
@@ -126,9 +148,9 @@ class MotdNotificationsFoolTest {
     /** Control: a non-fool DM still posts a notification through the same suspend read path. */
     @Test
     fun nonFool_incomingMessage_posts() = runTest {
-        notifications.onIncoming(
+        notifications.onCanonicalIncoming(
             networkId = 1, bufferId = bufferId, type = BufferType.QUERY,
-            hasMention = false, message = chat("troll", "hey"),
+            hasMention = false, eventId = 0L, message = entity("troll", "hey"),
         )
         assertEquals(1, postedCount())
         val posted = shadowOf(context.getSystemService(android.app.NotificationManager::class.java))
@@ -142,12 +164,13 @@ class MotdNotificationsFoolTest {
     fun rfc1459FoolEquivalenceSuppressesNotification() = runTest {
         repo.setFool("troll~", true)
 
-        notifications.onIncoming(
+        notifications.onCanonicalIncoming(
             networkId = networkId,
             bufferId = bufferId,
             type = BufferType.QUERY,
             hasMention = false,
-            message = chat("troll^", "folded fool"),
+            eventId = 0L,
+            message = entity("troll^", "folded fool"),
         )
 
         assertEquals(0, postedCount())
@@ -160,12 +183,13 @@ class MotdNotificationsFoolTest {
         )
         repo.setFool("troll~", true)
 
-        notifications.onIncoming(
+        notifications.onCanonicalIncoming(
             networkId = networkId,
             bufferId = bufferId,
             type = BufferType.QUERY,
             hasMention = false,
-            message = chat("troll^", "distinct sender"),
+            eventId = 0L,
+            message = entity("troll^", "distinct sender"),
         )
 
         assertEquals(1, postedCount())
@@ -174,22 +198,18 @@ class MotdNotificationsFoolTest {
     @Test
     fun canonicalAccountSuppressesNotificationAfterNickChange() = runTest {
         repo.setFool("stable-account", true)
-        val delivered = chat("new-nick", "same account after rename")
-        val eventId = db.messageDao().insertAll(
-            listOf(
-                MessageEntity(
-                    bufferId = bufferId,
-                    msgid = "account-continuity",
-                    serverTime = delivered.ctx.serverTime,
-                    sender = "new-nick",
-                    normalizedActor = "new-nick",
-                    senderAccount = "stable-account",
-                    kind = MessageKind.PRIVMSG,
-                    text = delivered.text,
-                    dedupKey = "account-continuity",
-                ),
-            ),
-        ).single()
+        val delivered = MessageEntity(
+            bufferId = bufferId,
+            msgid = "account-continuity",
+            serverTime = 1000,
+            sender = "new-nick",
+            normalizedActor = "new-nick",
+            senderAccount = "stable-account",
+            kind = MessageKind.PRIVMSG,
+            text = "same account after rename",
+            dedupKey = "account-continuity",
+        )
+        val eventId = db.messageDao().insertAll(listOf(delivered)).single()
 
         notifications.onCanonicalIncoming(
             networkId,
@@ -197,7 +217,7 @@ class MotdNotificationsFoolTest {
             BufferType.QUERY,
             false,
             eventId,
-            delivered,
+            delivered.copy(id = eventId),
         )
 
         assertEquals(0, postedCount())
@@ -214,39 +234,36 @@ class MotdNotificationsFoolTest {
             ),
         )
         val manager = shadowOf(context.getSystemService(android.app.NotificationManager::class.java))
-        notifications.onIncoming(
+        notifications.onCanonicalIncoming(
             networkId,
             loserId,
             BufferType.QUERY,
             false,
-            chat("other", "before merge"),
+            0L,
+            entity("other", "before merge", bufferId = loserId),
         )
         assertEquals(listOf(loserId.toInt()), manager.activeNotifications.map { it.id })
 
         BufferStore(db, notifications).mergeRooms(bufferId, loserId)
 
         assertEquals(0, manager.activeNotifications.size)
-        val afterMerge = chat("other", "after merge")
-        val eventId = db.messageDao().insertAll(
-            listOf(
-                MessageEntity(
-                    bufferId = bufferId,
-                    msgid = "after-merge",
-                    serverTime = afterMerge.ctx.serverTime,
-                    sender = "other",
-                    kind = MessageKind.PRIVMSG,
-                    text = afterMerge.text,
-                    dedupKey = "after-merge",
-                ),
-            ),
-        ).single()
+        val afterMerge = MessageEntity(
+            bufferId = bufferId,
+            msgid = "after-merge",
+            serverTime = 1000,
+            sender = "other",
+            kind = MessageKind.PRIVMSG,
+            text = "after merge",
+            dedupKey = "after-merge",
+        )
+        val eventId = db.messageDao().insertAll(listOf(afterMerge)).single()
         notifications.onCanonicalIncoming(
             networkId,
             bufferId,
             BufferType.QUERY,
             false,
             eventId,
-            afterMerge,
+            afterMerge.copy(id = eventId),
         )
         assertEquals(listOf(bufferId.toInt()), manager.activeNotifications.map { it.id })
 
@@ -259,13 +276,13 @@ class MotdNotificationsFoolTest {
 
     @Test
     fun canonicalNotificationReadResolvesCoalescedAndRetimedEventIdentity() = runTest {
-        val delivered = chat("troll", "retimed")
+        val delivered = entity("troll", "retimed", bufferId = bufferId, serverTime = 1000)
         val loserId = db.messageDao().insertAll(
             listOf(
                 MessageEntity(
                     bufferId = bufferId,
                     msgid = null,
-                    serverTime = delivered.ctx.serverTime,
+                    serverTime = delivered.serverTime,
                     sender = "troll",
                     kind = MessageKind.PRIVMSG,
                     text = delivered.text,
@@ -314,12 +331,13 @@ class MotdNotificationsFoolTest {
     @Test
     fun interruptedNotificationPresentationIsRebuiltFromCanonicalDatabaseState() = runTest {
         val failing = object : io.github.trevarj.motd.data.sync.MessageNotifier {
-            override suspend fun onIncoming(
+            override suspend fun onCanonicalIncoming(
                 networkId: Long,
                 bufferId: Long,
                 type: BufferType,
                 hasMention: Boolean,
-                message: IrcEvent.ChatMessage,
+                eventId: Long,
+                message: MessageEntity,
             ) {
                 error("simulated notifier failure")
             }
@@ -354,12 +372,13 @@ class MotdNotificationsFoolTest {
             ),
         )
 
-        notifications.onIncoming(
+        notifications.onCanonicalIncoming(
             networkId = networkId,
             bufferId = bufferId,
             type = BufferType.QUERY,
             hasMention = false,
-            message = chat("troll", "delayed while muted"),
+            eventId = 0L,
+            message = entity("troll", "delayed while muted"),
         )
 
         assertEquals(0, postedCount())
@@ -367,12 +386,12 @@ class MotdNotificationsFoolTest {
 
     @Test
     fun duplicateDelivery_addsBodyToMessagingStyleOnlyOnce() = runTest {
-        val message = chat("troll", "only once")
+        val message = entity("troll", "only once")
 
         repeat(2) {
-            notifications.onIncoming(
+            notifications.onCanonicalIncoming(
                 networkId = 1, bufferId = bufferId, type = BufferType.QUERY,
-                hasMention = false, message = message,
+                hasMention = false, eventId = 0L, message = message,
             )
         }
 
@@ -384,21 +403,23 @@ class MotdNotificationsFoolTest {
 
     @Test
     fun differentDurableMsgids_withSameFingerprint_remainDistinctNotifications() = runTest {
-        val message = chat("durable-identity-fixture", "legitimately repeated")
+        val message = entity("durable-identity-fixture", "legitimately repeated")
 
-        notifications.onIncoming(
+        notifications.onCanonicalIncoming(
             networkId = networkId,
             bufferId = bufferId,
             type = BufferType.QUERY,
             hasMention = false,
-            message = message.copy(ctx = message.ctx.copy(msgid = "durable-a")),
+            eventId = 0L,
+            message = message.copy(msgid = "durable-a"),
         )
-        notifications.onIncoming(
+        notifications.onCanonicalIncoming(
             networkId = networkId,
             bufferId = bufferId,
             type = BufferType.QUERY,
             hasMention = false,
-            message = message.copy(ctx = message.ctx.copy(msgid = "durable-b")),
+            eventId = 0L,
+            message = message.copy(msgid = "durable-b"),
         )
 
         val posted = shadowOf(context.getSystemService(android.app.NotificationManager::class.java))

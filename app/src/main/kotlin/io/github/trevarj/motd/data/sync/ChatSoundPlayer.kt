@@ -2,19 +2,15 @@ package io.github.trevarj.motd.data.sync
 
 import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.db.MessageEntity
-import io.github.trevarj.motd.irc.event.IrcEvent
 
-/** Low-latency foreground chat sonification, kept separate from Android notifications. */
+/**
+ * Low-latency foreground chat sonification, kept separate from Android notifications.
+ *
+ * Consumes the neutral canonical row only; no IRC wire type crosses this boundary (plans/backend-
+ * neutral-xmpp-rollout §Shared MOTD behavior).
+ */
 interface ChatSoundPlayer {
-    suspend fun onIncoming(bufferId: Long, type: BufferType, message: IrcEvent.ChatMessage)
-
-    /** Canonical identity-aware hook. Legacy/test implementations retain the event-only seam. */
-    suspend fun onCanonicalIncoming(
-        bufferId: Long,
-        type: BufferType,
-        message: IrcEvent.ChatMessage,
-        canonical: MessageEntity,
-    ) = onIncoming(bufferId, type, message)
+    suspend fun onIncoming(bufferId: Long, type: BufferType, message: MessageEntity)
 
     suspend fun onOutgoingAccepted(bufferId: Long)
 
@@ -22,7 +18,7 @@ interface ChatSoundPlayer {
         override suspend fun onIncoming(
             bufferId: Long,
             type: BufferType,
-            message: IrcEvent.ChatMessage,
+            message: MessageEntity,
         ) = Unit
 
         override suspend fun onOutgoingAccepted(bufferId: Long) = Unit
