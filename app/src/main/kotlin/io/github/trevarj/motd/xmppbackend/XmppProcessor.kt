@@ -194,8 +194,14 @@ class XmppProcessor @Inject constructor(
      * [XmppSession.joinRoom]. MUC occupant affiliation/role (IRC's member-prefix equivalent) is not
      * modeled by this baseline slice, so every [MemberEntity] here carries the default empty
      * `prefixes`.
+     *
+     * Returns the resolved buffer id so [XmppConnectionManager] can publish
+     * [io.github.trevarj.motd.service.ConnectionManager.memberLoadStates] (a buffer-id-keyed,
+     * manager-owned in-memory signal) without this processor ever touching that seam state itself —
+     * this class stays a pure Room writer, exactly the persistence/writer-ownership split
+     * [onLeftRoom] documents for the symmetric leave case.
      */
-    suspend fun onMucOccupantEvent(networkId: Long, event: XmppMucOccupantEvent) {
+    suspend fun onMucOccupantEvent(networkId: Long, event: XmppMucOccupantEvent): Long {
         val buffer = ensureMucBuffer(networkId, event.roomBareJid)
         when (event) {
             is XmppMucOccupantEvent.Snapshot -> {
@@ -205,6 +211,7 @@ class XmppProcessor @Inject constructor(
             is XmppMucOccupantEvent.Joined -> db.memberDao().upsert(MemberEntity(buffer.id, event.nick))
             is XmppMucOccupantEvent.Left -> db.memberDao().remove(buffer.id, event.nick)
         }
+        return buffer.id
     }
 
     /**
@@ -233,9 +240,14 @@ class XmppProcessor @Inject constructor(
      * matching what [onMucMessage]/[onIncomingDirectMessage] key their buffers by. An existing row's
      * `realname` is preserved when a later load supplies no name, mirroring
      * [io.github.trevarj.motd.data.sync.EventProcessor]'s fetch-existing-then-merge upsert idiom
-     * (`upsertUser`). [XmppRosterLoad.Failed] carries no contacts and persists nothing — the load
-     * outcome itself is published on [XmppConnectionManager.rosterStates], not through this
-     * processor (see that class's roster-state wiring).
+     * (`upsertUser`). [XmppRosterLoad.Failed] carries no contacts and persists nothing.
+     *
+     * This account-level load outcome is deliberately xmppbackend-internal: it drives only this
+     * [UserEntity] upsert and never reaches [io.github.trevarj.motd.service.ConnectionManager]. It
+     * must not be confused with [XmppMucOccupantEvent] member-list state, which is a genuinely
+     * different, per-buffer concept that *does* reach the seam (see [onMucOccupantEvent] and
+     * [XmppConnectionManager]'s `memberLoadStates` wiring) — conflating the two into one seam map was
+     * the bug Branch 1 fixed after this slice's first pass.
      */
     suspend fun onRosterLoad(networkId: Long, load: XmppRosterLoad) {
         if (load !is XmppRosterLoad.Loaded) return
@@ -250,9 +262,16 @@ class XmppProcessor @Inject constructor(
         }
     }
 
-    /** Find-or-create the CHANNEL buffer for a MUC room, named/displayed as its bare JID — same
-     *  "no friendly name wired yet" tradeoff [onIncomingDirectMessage] documents for a QUERY. */
-    private suspend fun ensureMucBuffer(networkId: Long, roomBareJid: String) = bufferStore.getOrCreate(
+    /**
+     * Find-or-create the CHANNEL buffer for a MUC room, named/displayed as its bare JID — same
+     * "no friendly name wired yet" tradeoff [onIncomingDirectMessage] documents for a QUERY.
+     *
+     * Not `private`: [XmppConnectionManager.joinChannel] also calls this directly to resolve the
+     * buffer id *before* the room is actually joined, so it can publish a `LOADING` member-load
+     * state immediately — the room-scoped Room write (find-or-create) still happens only here, in
+     * the processor, preserving the single-writer invariant even though the manager triggers it.
+     */
+    suspend fun ensureMucBuffer(networkId: Long, roomBareJid: String) = bufferStore.getOrCreate(
         networkId = networkId,
         normalizedName = roomBareJid,
         displayName = roomBareJid,
