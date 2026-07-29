@@ -308,6 +308,8 @@ class NetworkSettingsViewModel @Inject constructor(
             state.server
         }
         val auth = if (state.isZnc) state.zncLogin.toAuthForm() else state.auth
+        // The builder produces an IRC-shaped row; carry the existing discriminator so editing a
+        // row owned by another backend cannot silently hand it to the IRC backend.
         return buildNetworkEntity(
             server = server,
             auth = auth,
@@ -328,6 +330,7 @@ class NetworkSettingsViewModel @Inject constructor(
         ).copy(
             autoConnect = _state.value.autoConnect,
             initialAwayMessage = _state.value.initialAwayMessage.trim().ifBlank { null },
+            protocol = current.protocol,
         )
     }
 

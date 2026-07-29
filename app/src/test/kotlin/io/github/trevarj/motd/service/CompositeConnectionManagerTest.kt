@@ -9,6 +9,9 @@ import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.backend.ProtocolId
 import io.github.trevarj.motd.data.db.BufferEntity
 import io.github.trevarj.motd.data.db.BufferType
+import io.github.trevarj.motd.data.db.EventRedirectEntity
+import io.github.trevarj.motd.data.db.MessageEntity
+import io.github.trevarj.motd.data.db.MessageKind
 import io.github.trevarj.motd.data.db.MotdDatabase
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
@@ -42,6 +45,10 @@ class CompositeConnectionManagerTest {
             replyToEventId: TimelineEventId?,
         ): SendAcceptance {
             calls += "send:$bufferId"
+            return SendAcceptance.Accepted(emptyList())
+        }
+        override suspend fun retryMessage(eventId: TimelineEventId): SendAcceptance {
+            calls += "retry:$eventId"
             return SendAcceptance.Accepted(emptyList())
         }
         override suspend fun sendTyping(bufferId: Long, state: String) { calls += "typing:$bufferId" }
@@ -140,6 +147,35 @@ class CompositeConnectionManagerTest {
 
         assertEquals(listOf("startAll", "reconnectStale"), sessionsA.calls)
         assertEquals(listOf("startAll", "reconnectStale"), sessionsB.calls)
+    }
+
+    @Test
+    fun `event operations follow canonical redirects to the owning backend`() = runTest {
+        // Canonical coalescing deletes the losing row and records a redirect; UI actions can still
+        // hold the losing id. Resolving it by plain row id would reject the retry outright.
+        val winner = db.messageDao().insertAll(
+            listOf(
+                MessageEntity(
+                    id = 500,
+                    bufferId = bufferA,
+                    msgid = "winner",
+                    serverTime = 1,
+                    sender = "alice",
+                    kind = MessageKind.PRIVMSG,
+                    text = "hi",
+                    dedupKey = "winner",
+                ),
+            ),
+        ).single()
+        db.canonicalTimelineDao().upsertEventRedirect(
+            EventRedirectEntity(losingEventId = 501, canonicalEventId = winner),
+        )
+
+        val accepted = composite.retryMessage(501)
+
+        assertTrue(accepted is SendAcceptance.Accepted)
+        assertEquals(listOf("retry:501"), sessionsA.calls)
+        assertTrue(sessionsB.calls.isEmpty())
     }
 
     @Test
