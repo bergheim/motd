@@ -339,6 +339,19 @@ class XmppProcessor @Inject constructor(
      * convention and `setBy ?: ""` sender fallback — so shared UI (`MessageList`'s system-row
      * rendering, which treats [MessageKind.TOPIC] as a system kind and renders `text` verbatim) shows
      * an XMPP subject change exactly like an IRC topic change, with no protocol-aware branch.
+     *
+     * Only inserts the timeline row when [subject] actually differs from the buffer's *previously*
+     * persisted topic (review fix — P2 finding). A MUC server replays the room's current subject on
+     * every join/reconnect (XEP-0045), and Smack's `SubjectUpdatedListener` fires identically for
+     * that replay and for a genuine live change (see [XmppSession.mucSubjects]' KDoc — "both can fire
+     * mid-join"), so treating every emission as a fresh change accumulates one duplicate TOPIC row
+     * per reconnect. This mirrors `:irc` `EventProcessor.onTopicSnapshot`'s "persist the join-time
+     * topic state without adding a fake topic change" split, but folds both cases into one handler
+     * instead of needing XMPP's own snapshot-vs-change event: XMPP has no numeric-reply-style signal
+     * distinguishing them the way IRC's 331/332 (snapshot) differ from a live TOPIC command, so the
+     * previously-persisted value is the only reliable signal available. [db.bufferDao().setTopic] still
+     * runs unconditionally either way, so the buffer's own topic/topicSetBy columns stay authoritative
+     * even when the timeline insert is skipped.
      */
     suspend fun onMucSubject(
         networkId: Long,
@@ -346,7 +359,9 @@ class XmppProcessor @Inject constructor(
         connectionGeneration: Long?,
     ) {
         val buffer = ensureMucBuffer(networkId, subject.roomBareJid)
+        val unchanged = buffer.topic == subject.subject
         db.bufferDao().setTopic(buffer.id, subject.subject, subject.byNick)
+        if (unchanged) return
         val now = System.currentTimeMillis()
         val event = TimelineEventEntity(
             bufferId = buffer.id,

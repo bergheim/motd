@@ -127,6 +127,15 @@ sealed interface XmppRosterLoad {
 }
 
 /**
+ * Which wire stanza shape [XmppSession.sendMessage] must use for one send (review fix, P1 finding).
+ * Decided by the CALLER from the buffer's own type — [XmppConnectionManager.writeAndTrack] passes
+ * [GROUPCHAT] for a CHANNEL buffer and [CHAT] for a QUERY buffer — never inferred by the session
+ * from its own live join bookkeeping, which is empty on every fresh session and briefly stale mid
+ * reconnect. See [XmppSession.sendMessage]'s KDoc for the full rationale.
+ */
+enum class XmppSendKind { CHAT, GROUPCHAT }
+
+/**
  * Protocol seam over one XMPP connection attempt. Models the fork/xmpp-support prototype's
  * `XmppSession` abstraction (connect/login, per-room/message operations, teardown), reshaped to this
  * package's event/state vocabulary: transport/TLS/SASL lifecycle, the incoming-DM stream (slice X4),
@@ -211,10 +220,17 @@ interface XmppSession {
 
     /**
      * Send one chat message (docs/backend-neutral-xmpp-rollout.md, slice X6) to [to] — a contact's
-     * bare JID for a 1:1 message, or a joined room's bare JID for a MUC message. The implementation
-     * tells the two apart itself (by whether [to] is a room this session currently has joined, the
-     * same set [joinRoom]/[leaveRoom] maintain) — a caller never passes a buffer-type flag, since
-     * [XmppConnectionManager.sendMessage] already resolved the target from the buffer.
+     * bare JID for a 1:1 message, or a joined room's bare JID for a MUC message. [kind] says which
+     * stanza shape to use (review fix — P1: this used to be inferred from whether [to] was a room
+     * this *same session* currently has joined, via the implementation's own `roomListeners`/MUC
+     * bookkeeping. That bookkeeping is empty on every fresh session and briefly stale during a
+     * reconnect's rejoin, so a CHANNEL send in that window silently went out as a one-to-one `chat`
+     * stanza addressed at the room JID instead of failing loudly. The CALLER — [XmppConnectionManager],
+     * which already resolved the buffer and therefore its type — decides instead, so a CHANNEL buffer
+     * never produces a `chat` stanza: a send to a room this session has not actually joined now
+     * either succeeds as a real groupchat send or throws (Smack's `MucNotJoinedException` for a room
+     * with no live join), which the caller's existing wire-write catch already turns into a durable
+     * failure rather than a silent misrouting.
      *
      * [messageId] becomes the outgoing stanza's `id` attribute verbatim: the caller (a fresh label
      * from [XmppProcessor.persistOutgoingSend]/[XmppProcessor.beginRetry]) uses it to correlate this
@@ -231,7 +247,7 @@ interface XmppSession {
      * to the caller, which needs to know the wire write did not go out so it can fail the durable
      * row immediately instead of leaving it pending with nothing left to resolve it.
      */
-    suspend fun sendMessage(to: String, body: String, messageId: String)
+    suspend fun sendMessage(to: String, body: String, messageId: String, kind: XmppSendKind)
 
     /**
      * Publish a XEP-0085 chat-state notification to [toBareJid] (docs/backend-neutral-xmpp-rollout.md,

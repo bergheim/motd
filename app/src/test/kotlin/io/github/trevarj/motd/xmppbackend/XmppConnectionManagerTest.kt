@@ -16,11 +16,14 @@ import io.github.trevarj.motd.service.ImmediateWireAcceptance
 import io.github.trevarj.motd.service.RosterLoadState
 import io.github.trevarj.motd.service.SendAcceptance
 import io.github.trevarj.motd.service.SendRejectionReason
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asExecutor
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -543,6 +546,50 @@ class XmppConnectionManagerTest {
         assertNull(row.msgid)
     }
 
+    /**
+     * P1 review finding: [SmackXmppSession.sendMessage] used to decide "is this a room" purely from
+     * its own in-session `roomListeners` map, which is empty on every fresh session and briefly stale
+     * mid reconnect — so a CHANNEL send in that window silently went out as a one-to-one `chat`
+     * stanza addressed at the room JID instead of failing loudly. The manager now decides the wire
+     * shape itself from the buffer's own type and passes it explicitly, so a CHANNEL buffer can never
+     * produce a CHAT-kind send, independent of whether THIS live session has actually (re)joined the
+     * room yet. Before the fix this test could not even express the assertion: [FakeXmppSession]'s
+     * `sendMessage` had no `kind` parameter at all — the wire-shape decision lived entirely inside the
+     * (untested-at-this-level) real [SmackXmppSession].
+     */
+    @Test
+    fun sendMessage_toAChannelBuffer_alwaysSendsGroupchat_evenIfThisSessionHasNotActuallyJoinedYet() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+        connectReady(s1)
+        // A CHANNEL buffer whose durable joined=true predates this live session (e.g. a rejoin still
+        // in flight, or one that failed) -- this session's own join bookkeeping (s1.joinRoomCalls) is
+        // empty, the exact "rejoin has not finished or failed" window the P1 finding describes.
+        val bufferId = db.bufferDao().insert(
+            BufferEntity(networkId = nid, name = roomJid, displayName = roomJid, type = BufferType.CHANNEL, joined = true),
+        )
+        assertTrue(s1.joinRoomCalls.isEmpty())
+
+        manager.sendMessage(bufferId, "hi room")
+        runCurrent()
+
+        val sent = s1.sentMessages.single()
+        assertEquals(XmppSendKind.GROUPCHAT, sent.kind) // never CHAT for a CHANNEL buffer.
+    }
+
+    @Test
+    fun sendMessage_toAQueryBuffer_alwaysSendsChat() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+        connectReady(s1)
+        val bufferId = insertQueryBuffer(nid)
+
+        manager.sendMessage(bufferId, "hello there")
+        advanceUntilIdle()
+
+        assertEquals(XmppSendKind.CHAT, s1.sentMessages.single().kind)
+    }
+
     @Test
     fun retryMessage_issuesNewLabel_andClearsOnRetriedEcho() = runTest {
         val s1 = FakeXmppSession()
@@ -585,6 +632,65 @@ class XmppConnectionManagerTest {
         assertFalse(finalRow.failed)
         assertEquals(scopedMsgid(secondLabel, roomJid, "me"), finalRow.msgid)
     }
+
+    /**
+     * REFUTES a P2 review finding claiming [sendMessage]'s two separate `withContext(NonCancellable)`
+     * blocks (`processor.persistOutgoingSend`, then [writeAndTrack]'s own body) can be torn apart by
+     * a caller-scope cancellation landing between them, stranding a persisted row with no wire write
+     * and no timeout watchdog. Empirically false for this exact shape: [sendMessage] calls
+     * [writeAndTrack] directly, with no cancellable suspension point of its own in between the two
+     * `withContext(NonCancellable)` blocks, so there is nothing for an ambient cancellation to land
+     * on until *after* [writeAndTrack] has already fully run. This test reproduces the identical
+     * pattern in isolation — enter one `withContext(NonCancellable)`, cancel the enclosing job while
+     * still inside it, then immediately enter a second, separate one — and confirms empirically (on
+     * this project's actual kotlinx-coroutines-test) that the second block still runs to completion
+     * and that no [CancellationException] is ever observed inside this coroutine: cancellation is
+     * only ever noticed at an actual cancellable suspension point, and this shape has none between
+     * the two blocks. (`:irc`'s `ConnectionManagerImpl.sendMessage` has the identical two-block shape
+     * around `completeDurableAcceptance` — its KDoc says as much: "Return durable acceptance even if
+     * the caller is cancelled after the transaction commits" — for exactly this reason.)
+     */
+    @Test
+    fun sendMessage_twoSeparateNonCancellableBlocks_bothStillRunToCompletion_ifTheCallerCancelsInBetween() =
+        runTest {
+            var firstBlockRan = false
+            var secondBlockRan = false
+            var observedCancellation = false
+            val enteredFirst = kotlinx.coroutines.CompletableDeferred<Unit>()
+            val proceed = kotlinx.coroutines.CompletableDeferred<Unit>()
+
+            val job = launch {
+                try {
+                    withContext(kotlinx.coroutines.NonCancellable) {
+                        enteredFirst.complete(Unit)
+                        proceed.await() // pause here so the test can cancel while inside this block
+                        firstBlockRan = true
+                    }
+                    // Mirrors the gap between persistOutgoingSend's withContext(NonCancellable) and
+                    // writeAndTrack's own, separate withContext(NonCancellable) in sendMessage/
+                    // retryMessage: nothing cancellable runs between the two.
+                    withContext(kotlinx.coroutines.NonCancellable) {
+                        secondBlockRan = true
+                    }
+                } catch (cancelled: CancellationException) {
+                    observedCancellation = true
+                    throw cancelled
+                }
+            }
+
+            enteredFirst.await()
+            job.cancel() // e.g. a ViewModel scope torn down mid-send
+            proceed.complete(Unit) // let the first block's own suspension resume and finish its work
+            advanceUntilIdle()
+
+            assertTrue("the first NonCancellable block must still complete", firstBlockRan)
+            assertTrue(
+                "the second, separate NonCancellable block must ALSO still run -- there is no " +
+                    "cancellable checkpoint between the two for the cancellation to land on",
+                secondBlockRan,
+            )
+            assertFalse("no CancellationException is ever observed inside this coroutine", observedCancellation)
+        }
 
     @Test
     fun sendMessage_rejectsUnknownBuffer() = runTest {
@@ -778,6 +884,104 @@ class XmppConnectionManagerTest {
         advanceUntilIdle()
 
         assertTrue(s2.joinRoomCalls.isEmpty())
+    }
+
+    // -- wire target field consistency (review fix, P2 finding: partChannel/requestMembers used to
+    // address the room by BufferEntity.name -- BufferStore.getOrCreate's own internal row key, which
+    // it disambiguates with a NUL-separated type suffix on a name collision with another buffer, so
+    // it is not always a valid JID -- while sendMessage/sendTyping already (correctly) used
+    // displayName, which BufferStore never touches and which always retains the exact address a room
+    // was found-or-created with. All four wire paths now agree on displayName, matching the existing
+    // "wire targets always retain server spelling" contract RoomEntity.ircTarget and
+    // BufferDao.joinedChannelNames/observeJoinedChannelNames already document for IRC.) --
+
+    @Test
+    fun partChannel_addressesTheRoomByDisplayName_notTheDisambiguatedInternalKey() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+        connectReady(s1)
+        // Simulates BufferStore.getOrCreate's own collision-disambiguation shape: `name` carries a
+        // NUL-separated type suffix and is no longer a valid bare JID, while `displayName` is still
+        // the exact room address.
+        val bufferId = db.bufferDao().insert(
+            BufferEntity(
+                networkId = nid,
+                name = "$roomJid\u0000channel",
+                displayName = roomJid,
+                type = BufferType.CHANNEL,
+                joined = true,
+            ),
+        )
+
+        manager.partChannel(bufferId)
+        advanceUntilIdle()
+
+        assertEquals(listOf(roomJid), s1.leaveRoomCalls)
+    }
+
+    @Test
+    fun requestMembers_addressesTheRoomByDisplayName_notTheDisambiguatedInternalKey() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+        connectReady(s1)
+        val bufferId = db.bufferDao().insert(
+            BufferEntity(
+                networkId = nid,
+                name = "$roomJid\u0000channel",
+                displayName = roomJid,
+                type = BufferType.CHANNEL,
+                joined = true,
+            ),
+        )
+
+        manager.requestMembers(bufferId)
+        advanceUntilIdle()
+
+        assertEquals(listOf(roomJid), s1.refreshOccupantsCalls)
+    }
+
+    // -- account fingerprint must compare fields, not an ambiguously-joined string (review fix, P2
+    // finding: "a:b"/"c" and "a"/"b:c" used to join to the identical "$jid:a:b:c" string, so an
+    // edited account with exactly this shape of change could read as unchanged and keep stale
+    // credentials). --
+
+    @Test
+    fun xmppAccountFingerprint_distinguishesFieldsThatWouldCollideUnderAnUnescapedSeparator() {
+        // password "a:b" + resource "c"  vs  password "a" + resource "b:c": both would join to the
+        // exact same "$jid:a:b:c" string under a plain ":"-separated concatenation.
+        val edited = XmppAccountEntity(networkId = nid, jid = selfJid, password = "a:b", resource = "c")
+        val original = XmppAccountEntity(networkId = nid, jid = selfJid, password = "a", resource = "b:c")
+
+        assertNotEquals(xmppAccountFingerprint(edited), xmppAccountFingerprint(original))
+    }
+
+    @Test
+    fun reconcile_rebuildsTheActor_whenACollidingCredentialEditChangesOnlyTheSeparatorPosition() = runTest {
+        val s1 = FakeXmppSession()
+        val s2 = FakeXmppSession()
+        bootstrap(listOf(s1, s2))
+        db.xmppAccountDao().upsert(
+            XmppAccountEntity(networkId = nid, jid = selfJid, password = "a", resource = "b:c"),
+        )
+        manager.startAll()
+        advanceUntilIdle()
+        s1.completeConnect(XmppSessionState.Ready(selfJid))
+        advanceUntilIdle()
+        assertEquals(1, factory.created.size)
+
+        // A password/resource edit that a ":"-joined fingerprint string would read as unchanged.
+        // reconcile is driven off networkDao's own invalidation, not the xmpp_accounts satellite
+        // table, so a network-row touch is what actually re-drives it -- mirrors
+        // reconcile_revivesAFatallyParkedActor_onceThePersistedPasswordIsCorrected below.
+        db.xmppAccountDao().upsert(
+            XmppAccountEntity(networkId = nid, jid = selfJid, password = "a:b", resource = "c"),
+        )
+        db.networkDao().update(requireNotNull(db.networkDao().byId(nid)))
+        advanceUntilIdle()
+
+        assertEquals(2, factory.created.size)
+        assertEquals("a:b", factory.accountsUsed[1].password)
+        assertEquals("c", factory.accountsUsed[1].resource)
     }
 
     // -- credential fingerprint (review fix: XmppAccountActor captures its XmppAccountEntity at

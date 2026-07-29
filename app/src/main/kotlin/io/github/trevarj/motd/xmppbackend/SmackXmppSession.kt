@@ -402,25 +402,31 @@ internal class SmackXmppSession(private val account: XmppAccountEntity) : XmppSe
     }
 
     /**
-     * [roomListeners] already tracks exactly the set of rooms this session currently has joined,
-     * canonicalized the same way [joinRoom] populates it — reuse that instead of a second cache.
-     * MUC send uses [MultiUserChat.sendMessage], which fills in `to`/`type=groupchat` itself, so the
+     * [kind] — supplied by the caller, never inferred from [roomListeners] (review fix; see
+     * [XmppSession.sendMessage]'s KDoc) — is the sole decider of stanza shape. MUC send uses
+     * [MultiUserChat.sendMessage], which fills in `to`/`type=groupchat` itself, so the
      * [MessageBuilder] passed to it must stay unbuilt (per Smack's API contract); a 1:1 send instead
-     * needs a fully built [Message] for [org.jivesoftware.smack.chat2.Chat.send].
+     * needs a fully built [Message] for [org.jivesoftware.smack.chat2.Chat.send]. A [XmppSendKind.GROUPCHAT]
+     * send to a room this session has not actually joined throws (Smack's `MucNotJoinedException`)
+     * rather than silently falling back to a one-to-one stanza — [XmppConnectionManager]'s existing
+     * wire-write catch already turns that into a durable failure.
      */
-    override suspend fun sendMessage(to: String, body: String, messageId: String) {
+    override suspend fun sendMessage(to: String, body: String, messageId: String, kind: XmppSendKind) {
         withContext(Dispatchers.IO) {
             val bareTo = JidCreate.entityBareFrom(to)
-            if (roomListeners.containsKey(bareTo.toString())) {
-                val muc = MultiUserChatManager.getInstanceFor(connection).getMultiUserChat(bareTo)
-                muc.sendMessage(MessageBuilder.buildMessage(messageId).setBody(body))
-            } else {
-                val chat = ChatManager.getInstanceFor(connection).chatWith(bareTo)
-                val message = MessageBuilder.buildMessage(messageId)
-                    .ofType(Message.Type.chat)
-                    .setBody(body)
-                    .build()
-                chat.send(message)
+            when (kind) {
+                XmppSendKind.GROUPCHAT -> {
+                    val muc = MultiUserChatManager.getInstanceFor(connection).getMultiUserChat(bareTo)
+                    muc.sendMessage(MessageBuilder.buildMessage(messageId).setBody(body))
+                }
+                XmppSendKind.CHAT -> {
+                    val chat = ChatManager.getInstanceFor(connection).chatWith(bareTo)
+                    val message = MessageBuilder.buildMessage(messageId)
+                        .ofType(Message.Type.chat)
+                        .setBody(body)
+                        .build()
+                    chat.send(message)
+                }
             }
         }
     }
