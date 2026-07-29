@@ -510,14 +510,6 @@ class ConnectionManagerImpl @Inject constructor(
     override fun historyAvailability(networkId: Long): HistoryAvailability? =
         clientFor(networkId)?.historyAvailability
 
-    private fun IrcClientState.toConnectionState(generation: Long): ConnectionState = when (this) {
-        IrcClientState.Disconnected -> ConnectionState.Disconnected
-        IrcClientState.Connecting -> ConnectionState.Connecting
-        IrcClientState.Registering -> ConnectionState.Authenticating
-        is IrcClientState.Ready -> ConnectionState.Ready(selfHandle = nick, generation = generation)
-        is IrcClientState.Failed -> ConnectionState.Failed(reason = reason, fatal = fatal)
-    }
-
     private fun Set<String>.hasWebPushCap(): Boolean =
         any { it == WebPushRegistrar.WEBPUSH_CAP || it.startsWith("${WebPushRegistrar.WEBPUSH_CAP}=") }
 
@@ -2316,3 +2308,20 @@ internal fun childrenNeedingReconnect(
         }
         .map { it.id }
         .toSet()
+
+/** Maps IRC client states onto the neutral seam lifecycle; [generation] is the session sequence. */
+internal fun IrcClientState.toConnectionState(generation: Long): ConnectionState = when (this) {
+    IrcClientState.Disconnected -> ConnectionState.Disconnected
+    IrcClientState.Connecting -> ConnectionState.Connecting
+    IrcClientState.Registering -> ConnectionState.Authenticating
+    is IrcClientState.Ready -> ConnectionState.Ready(
+        selfHandle = nick,
+        generation = generation,
+        // Opaque negotiated-feature revision: a late CAP/ISUPPORT update must change the neutral
+        // projection, or the deduplicating seam flows would suppress it and capability re-pulls
+        // (history availability, live identity rules) would stay stale until the next lifecycle
+        // transition.
+        negotiationRevision = 31 * caps.hashCode() + isupport.hashCode(),
+    )
+    is IrcClientState.Failed -> ConnectionState.Failed(reason = reason, fatal = fatal)
+}

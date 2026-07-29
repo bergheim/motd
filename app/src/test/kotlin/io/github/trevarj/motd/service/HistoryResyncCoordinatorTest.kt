@@ -2436,16 +2436,16 @@ class HistoryResyncCoordinatorTest {
     // of ever constructing a ClientHistorySource.
 
     @Test
-    fun resyncBufferWithNoLiveSessionFailsWithoutPublishingOrTouchingRoom() = runTest {
+    fun resyncBufferWithNoLiveSessionPublishesStaleConnection() = runTest {
         val buffer = db.bufferDao().observeById(bufferId)!!
 
         val result = coordinator.resyncBuffer(buffer)
 
         assertTrue(result is HistoryResyncState.Failed)
-        // A manual refresh normally publishes into the per-buffer state map (surfacing a snackbar);
-        // the no-session short-circuit returns before that, exactly as the caller-side null-client
-        // check it replaces never touched the coordinator at all.
-        assertEquals(HistoryResyncState.Idle, coordinator.state(bufferId).first())
+        // Manual refresh must stay observable when the session drops between the caller's live
+        // check and this entry: the terminal state is published exactly like mid-flight staleness
+        // was pre-extraction, instead of failing silently.
+        assertEquals(result, coordinator.state(bufferId).first())
         assertTrue(rows().isEmpty())
     }
 

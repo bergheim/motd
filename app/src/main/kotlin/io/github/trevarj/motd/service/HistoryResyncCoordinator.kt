@@ -263,16 +263,19 @@ class HistoryResyncCoordinator @Inject constructor(
     /**
      * Resolve the live session for [buffer]'s network and re-validate identity around suspension
      * points exactly as the removed `ConnectionManager.clientFor` contract required (see
-     * [IrcSessions]). No session at entry is treated the same as the mid-flight staleness this
-     * file already detects via `isCurrent()`: [staleConnection]. Chat-facing callers previously
-     * never invoked this boundary without first resolving a non-null client themselves, so this
-     * mirrors that same terminal state rather than inventing a new one.
+     * [IrcSessions]). No session at entry maps to the same terminal state as mid-flight staleness
+     * ([staleConnection]) and, because this is the manual-refresh entry, it is published: the
+     * pre-extraction path captured the client caller-side and surfaced this result from the inner
+     * resync, so a session lost between the caller's gate and this entry must stay observable.
      */
     override suspend fun resyncBuffer(
         buffer: BufferEntity,
         range: HistoryRefreshRange,
     ): HistoryResyncState {
-        val client = ircSessions.get().sessionFor(buffer.networkId) ?: return staleConnection()
+        val client = ircSessions.get().sessionFor(buffer.networkId)
+            ?: return staleConnection().also { stale ->
+                publishManualState(buffer.id, manualCancellationGeneration(buffer.id), stale)
+            }
         val isCurrent = { ircSessions.get().sessionFor(buffer.networkId) === client }
         return resyncBuffer(
             buffer,
