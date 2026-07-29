@@ -34,7 +34,10 @@ internal class XmppAccountActor(
     private val scope: CoroutineScope,
     /** Assigns this attempt's session a fresh, manager-global monotonic generation number. */
     private val nextGeneration: () -> Long,
-    private val onState: (networkId: Long, state: XmppSessionState, generation: Long) -> Unit,
+    /** `suspend` since [XmppConnectionManager]'s state publisher reads that network's CHANNEL buffer
+     *  ids (a Room query) on a non-Ready transition, to clear their member-load state. Both call
+     *  sites below are already inside a suspend context, so this is a type-only change. */
+    private val onState: suspend (networkId: Long, state: XmppSessionState, generation: Long) -> Unit,
     /** Hands each live session's incoming DMs to [XmppProcessor] (docs/backend-neutral-xmpp-rollout.md
      *  "PR 2" X4); defaults to a no-op so tests exercising only connection lifecycle need not wire it. */
     private val onIncoming: suspend (networkId: Long, message: XmppIncomingMessage, generation: Long) -> Unit =

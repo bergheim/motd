@@ -227,58 +227,131 @@ class XmppConnectionManagerTest {
         assertEquals(78_000L, maxJitter.backoffDelayMs(20)) // still capped past attempt 6
     }
 
-    // -- roster (buddy-list) load state (slice X5); see XmppConnectionManager's "Known seam gap" --
+    // -- MUC member-load state (slice X5, corrected after Branch-1 pinned memberLoadStates to buffer
+    // ids: see XmppConnectionManager's KDoc). Buffer-keyed, per joined room — never the account-level
+    // XMPP roster, which stays entirely internal to xmppbackend (see the two tests at the bottom). --
 
-    @Test
-    fun rosterStates_transitionsNotLoaded_loading_loaded() = runTest {
-        val s1 = FakeXmppSession()
-        bootstrap(listOf(s1))
+    private val roomJid = "room@conference.example.org"
 
+    /** Connect [nid] on [session] and drive it to Ready. Mirrors XmppProcessorTest's helper. */
+    private suspend fun TestScope.connectReady(session: FakeXmppSession) {
         manager.connect(nid)
         advanceUntilIdle()
-        assertEquals(RosterLoadState.NOT_LOADED, manager.rosterStates.value[nid])
-
-        s1.completeConnect(XmppSessionState.Ready(selfJid))
+        session.completeConnect(XmppSessionState.Ready(selfJid))
         advanceUntilIdle()
-        assertEquals(RosterLoadState.LOADING, manager.rosterStates.value[nid])
-
-        s1.emitRosterLoad(XmppRosterLoad.Loaded(listOf(XmppRosterContact("alice@example.org", "Alice"))))
-        advanceUntilIdle()
-        assertEquals(RosterLoadState.LOADED, manager.rosterStates.value[nid])
     }
 
     @Test
-    fun rosterStates_failedOnRosterError() = runTest {
+    fun memberLoadStates_joinGoesLoading_thenLoadedOnOccupantSnapshot() = runTest {
         val s1 = FakeXmppSession()
         bootstrap(listOf(s1))
+        connectReady(s1)
 
-        manager.connect(nid)
+        manager.joinChannel(nid, roomJid)
         advanceUntilIdle()
-        s1.completeConnect(XmppSessionState.Ready(selfJid))
-        advanceUntilIdle()
-        assertEquals(RosterLoadState.LOADING, manager.rosterStates.value[nid])
+        val buffer = requireNotNull(db.bufferDao().byName(nid, roomJid)) {
+            "joinChannel must resolve/create the room's buffer before the session actually joins"
+        }
+        assertEquals(RosterLoadState.LOADING, manager.memberLoadStates.value[buffer.id])
 
-        s1.emitRosterLoad(XmppRosterLoad.Failed("roster IQ timed out"))
+        s1.emitOccupantSnapshot(roomJid, listOf("me", "alice"))
         advanceUntilIdle()
-        assertEquals(RosterLoadState.FAILED, manager.rosterStates.value[nid])
+        assertEquals(RosterLoadState.LOADED, manager.memberLoadStates.value[buffer.id])
     }
 
     @Test
-    fun rosterStates_clearedOnDisconnect() = runTest {
+    fun memberLoadStates_requestMembersGoesLoading_thenLoadedOnRefreshedSnapshot() = runTest {
         val s1 = FakeXmppSession()
         bootstrap(listOf(s1))
+        connectReady(s1)
+        manager.joinChannel(nid, roomJid)
+        advanceUntilIdle()
+        s1.emitOccupantSnapshot(roomJid, listOf("me", "alice"))
+        advanceUntilIdle()
+        val buffer = requireNotNull(db.bufferDao().byName(nid, roomJid))
+        assertEquals(RosterLoadState.LOADED, manager.memberLoadStates.value[buffer.id])
 
-        manager.connect(nid)
+        manager.requestMembers(buffer.id)
         advanceUntilIdle()
-        s1.completeConnect(XmppSessionState.Ready(selfJid))
+        assertEquals(RosterLoadState.LOADING, manager.memberLoadStates.value[buffer.id])
+        assertEquals(listOf(roomJid), s1.refreshOccupantsCalls)
+
+        s1.emitOccupantSnapshot(roomJid, listOf("me", "alice", "carol"))
         advanceUntilIdle()
-        s1.emitRosterLoad(XmppRosterLoad.Loaded(emptyList()))
+        assertEquals(RosterLoadState.LOADED, manager.memberLoadStates.value[buffer.id])
+    }
+
+    @Test
+    fun memberLoadStates_entryRemovedOnLeave_andOnDisconnect() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+        connectReady(s1)
+        manager.joinChannel(nid, roomJid)
         advanceUntilIdle()
-        assertEquals(RosterLoadState.LOADED, manager.rosterStates.value[nid])
+        s1.emitOccupantSnapshot(roomJid, listOf("me", "alice"))
+        advanceUntilIdle()
+        val buffer = requireNotNull(db.bufferDao().byName(nid, roomJid))
+        assertEquals(RosterLoadState.LOADED, manager.memberLoadStates.value[buffer.id])
+
+        // Leaving drops the entry outright (not a reset to NOT_LOADED): this session receives no
+        // further presence for the room, so nothing will repopulate it short of an explicit rejoin.
+        manager.partChannel(buffer.id)
+        advanceUntilIdle()
+        assertFalse(manager.memberLoadStates.value.containsKey(buffer.id))
+
+        // Rejoin and reach LOADED again, then drop the whole session: same removal, network-wide.
+        manager.joinChannel(nid, roomJid)
+        advanceUntilIdle()
+        s1.emitOccupantSnapshot(roomJid, listOf("me", "alice"))
+        advanceUntilIdle()
+        assertEquals(RosterLoadState.LOADED, manager.memberLoadStates.value[buffer.id])
 
         manager.disconnect(nid)
         advanceUntilIdle()
-        assertFalse(manager.rosterStates.value.containsKey(nid))
+        assertFalse(manager.memberLoadStates.value.containsKey(buffer.id))
+    }
+
+    @Test
+    fun memberLoadStates_entryRemovedWhenSessionDropsMidReconnect() = runTest {
+        val s1 = FakeXmppSession()
+        val s2 = FakeXmppSession()
+        bootstrap(listOf(s1, s2))
+        connectReady(s1)
+        manager.joinChannel(nid, roomJid)
+        advanceUntilIdle()
+        s1.emitOccupantSnapshot(roomJid, listOf("me", "alice"))
+        advanceUntilIdle()
+        val buffer = requireNotNull(db.bufferDao().byName(nid, roomJid))
+        assertEquals(RosterLoadState.LOADED, manager.memberLoadStates.value[buffer.id])
+
+        // An async drop after Ready (e.g. the transport listener firing) — the actor keeps running
+        // and will retry, but this session's occupant knowledge is stale the moment it drops.
+        s1.publish(XmppSessionState.Failed("connection reset", fatal = false))
+        advanceUntilIdle()
+        assertFalse(manager.memberLoadStates.value.containsKey(buffer.id))
+    }
+
+    /**
+     * The account-level XMPP roster (buddy list, [XmppRosterLoad]) is a completely different concept
+     * from MUC member-list load state and must never appear in the buffer-keyed [memberLoadStates]
+     * map — conflating the two (keying the old `rosterStates` by network id) was exactly the bug
+     * Branch 1 fixed. [XmppRosterLoad.Failed] equally must not leak into the seam, and must not fail
+     * the connection itself (a roster hiccup is not a connection failure).
+     */
+    @Test
+    fun accountRosterLoad_neverReachesMemberLoadStates_loadedOrFailed() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+        connectReady(s1)
+
+        s1.emitRosterLoad(XmppRosterLoad.Loaded(listOf(XmppRosterContact("alice@example.org", "Alice"))))
+        advanceUntilIdle()
+        assertTrue(manager.memberLoadStates.value.isEmpty())
+
+        s1.emitRosterLoad(XmppRosterLoad.Failed("roster IQ timed out"))
+        advanceUntilIdle()
+        assertTrue(manager.memberLoadStates.value.isEmpty())
+        assertTrue(manager.connectionStates.value[nid] is ConnectionState.Ready)
     }
 
     // -- MUC join nick decision (slice X5): configured resource, else the bare-JID localpart. --
