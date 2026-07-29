@@ -14,6 +14,8 @@ import io.github.trevarj.motd.data.sync.BufferStore
 import io.github.trevarj.motd.data.sync.CanonicalTimelineStore
 import io.github.trevarj.motd.data.sync.SemanticIdentity
 import io.github.trevarj.motd.data.sync.TimelineObservation
+import io.github.trevarj.motd.data.sync.TypingTrackerImpl
+import io.github.trevarj.motd.service.TypingTracker
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -29,12 +31,21 @@ import javax.inject.Singleton
  * [io.github.trevarj.motd.data.sync.EventProcessor] uses for IRC, and owns no table of its own.
  * [XmppConnectionManager]/[XmppAccountActor] hand this processor each live session's DM/MUC/roster
  * events; neither touches Room directly (docs/backend-neutral-xmpp-rollout.md "Required boundary").
+ *
+ * [typingTracker] (slice X6) is the one exception to "canonical repositories only": incoming 1:1
+ * typing is in-memory seam state, not a Room write, routed through the neutral
+ * [TypingTracker] **interface** — never the concrete [TypingTrackerImpl] — exactly the shared write
+ * contract Branch 1 added after this backend flagged its absence (docs/backend-neutral-xmpp-rollout.md
+ * "Feedback into PR 1"). `:irc`'s own [io.github.trevarj.motd.data.sync.EventProcessor] still depends
+ * on the concrete class directly (a grandfathered detail of the original single-backend design, not
+ * this backend's concern); depending on the interface here is what proves the boundary.
  */
 @Singleton
 class XmppProcessor @Inject constructor(
     private val db: MotdDatabase,
     private val bufferStore: BufferStore = BufferStore(db),
     private val canonicalTimeline: CanonicalTimelineStore = CanonicalTimelineStore(db),
+    private val typingTracker: TypingTracker = TypingTrackerImpl(),
 ) {
     // -- durable pending sends (slice X6; docs/backend-neutral-xmpp-rollout.md baseline: "durable
     // pending sends and send acknowledgements"). Mirrors EventProcessor's persistOutgoingPlan/beginRetry
@@ -185,6 +196,43 @@ class XmppProcessor @Inject constructor(
             ),
         )
         // notification policy arrives with a later slice
+    }
+
+    /**
+     * Route one incoming 1:1 XEP-0085 chat-state notification to the shared [TypingTracker] seam
+     * (slice X6; docs/backend-neutral-xmpp-rollout.md baseline "one-to-one typing where supported" —
+     * the incoming half; [XmppConnectionManager.sendTyping] is the outgoing half). Finds-or-creates
+     * the sender's QUERY buffer through [BufferStore.getOrCreate] — the identical idiom
+     * [onIncomingDirectMessage] uses — so a chat state from a JID with no prior conversation still
+     * surfaces a buffer to show it against; `:irc`'s
+     * [io.github.trevarj.motd.data.sync.EventProcessor.onTag] does the same find-or-create
+     * (`ensureBuffer`) for a TAGMSG(+typing) from an unseen sender, so this is not a new precedent —
+     * IRC already treats "create" as the right behavior for exactly this case.
+     *
+     * Maps [XmppChatState] onto the seam's IRC-shaped vocabulary — the inverse of
+     * [XmppConnectionManager.sendTyping]'s mapping: COMPOSING -> "active", PAUSED -> "paused", and
+     * ACTIVE/INACTIVE/GONE all collapse to "done" (each means "not composing" from the seam's
+     * three-state perspective; XEP-0085's finer distinction between "still present" (active), "gone
+     * idle" (inactive), and "left the conversation" (gone) has no counterpart there).
+     *
+     * [XmppIncomingChatState.isCarbonOrSelf] is never applied, mirroring [onIncomingDirectMessage]'s
+     * identical guard: nothing sets it true yet (no carbons in this baseline), but the field — and
+     * this check — exist now so a later carbons slice reshapes the guard's input, not this dispatch.
+     */
+    suspend fun onChatState(networkId: Long, state: XmppIncomingChatState) {
+        if (state.isCarbonOrSelf) return // carbons/self-echo land with a later slice
+        val buffer = bufferStore.getOrCreate(
+            networkId = networkId,
+            normalizedName = state.fromBareJid,
+            displayName = state.fromBareJid,
+            type = BufferType.QUERY,
+        )
+        val seamState = when (state.state) {
+            XmppChatState.COMPOSING -> "active"
+            XmppChatState.PAUSED -> "paused"
+            XmppChatState.ACTIVE, XmppChatState.INACTIVE, XmppChatState.GONE -> "done"
+        }
+        typingTracker.onTyping(buffer.id, state.fromBareJid, seamState)
     }
 
     /**

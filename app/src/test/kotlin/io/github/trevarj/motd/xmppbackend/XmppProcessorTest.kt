@@ -10,6 +10,7 @@ import io.github.trevarj.motd.data.db.MotdDatabase
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
 import io.github.trevarj.motd.data.db.XmppAccountEntity
+import io.github.trevarj.motd.data.sync.TypingTrackerImpl
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
@@ -45,6 +46,10 @@ class XmppProcessorTest {
     private lateinit var factory: FakeXmppSessionFactory
     private lateinit var manager: XmppConnectionManager
 
+    /** Exposed (slice X6) so incoming-typing tests can assert on [TypingTrackerImpl.typingNicks]
+     *  directly — the same seam instance [XmppProcessor] was constructed with, not a separate one. */
+    private lateinit var typingTracker: TypingTrackerImpl
+
     private val selfJid = "me@glvortex.net"
 
     /** Mirrors [XmppConnectionManagerTest.bootstrap]: Room and the manager's coroutines share the
@@ -59,7 +64,8 @@ class XmppProcessorTest {
             .build()
         appScope = CoroutineScope(SupervisorJob() + dispatcher)
         factory = FakeXmppSessionFactory(sessions)
-        manager = XmppConnectionManager(db, factory, appScope)
+        typingTracker = TypingTrackerImpl()
+        manager = XmppConnectionManager(db, factory, appScope, XmppProcessor(db, typingTracker = typingTracker))
     }
 
     /** Insert an XMPP network row (+ its account satellite row) and return its id. */
@@ -440,5 +446,100 @@ class XmppProcessorTest {
         assertEquals("Alice", alice.realname)
         val bob = requireNotNull(db.userDao().byNick(networkId, "bob@example.org"))
         assertNull(bob.realname)
+    }
+
+    // -- incoming 1:1 typing (slice X6; docs/backend-neutral-xmpp-rollout.md baseline "one-to-one
+    // typing where supported" — the incoming half; XmppConnectionManagerTest's sendTyping_query_*
+    // tests cover the outgoing half). Routed to the shared TypingTracker seam, never a Room write —
+    // see XmppProcessor.onChatState's KDoc. --
+
+    @Test
+    fun `incoming composing shows the sender in the typing tracker, creating its QUERY buffer like the DM path`() =
+        runTest {
+            val session = FakeXmppSession()
+            bootstrap(listOf(session))
+            val networkId = xmppNetwork("glvortex")
+            connectReady(networkId, session)
+
+            // No prior buffer for alice — the same "unseen sender" case :irc's EventProcessor.onTag
+            // already creates a buffer for via its own ensureBuffer.
+            session.emitChatState("alice@example.org", XmppChatState.COMPOSING)
+            advanceUntilIdle()
+
+            val buffer = requireNotNull(db.bufferDao().byName(networkId, "alice@example.org")) {
+                "expected a QUERY buffer created for the chat-state sender, consistent with the DM path"
+            }
+            assertEquals(BufferType.QUERY, buffer.type)
+            assertEquals(listOf("alice@example.org"), typingTracker.typingNicks(buffer.id).value)
+        }
+
+    @Test
+    fun `paused keeps the sender typing, active clears it`() = runTest {
+        val session = FakeXmppSession()
+        bootstrap(listOf(session))
+        val networkId = xmppNetwork("glvortex")
+        connectReady(networkId, session)
+        session.emitChatState("alice@example.org", XmppChatState.COMPOSING)
+        advanceUntilIdle()
+        val buffer = requireNotNull(db.bufferDao().byName(networkId, "alice@example.org"))
+        assertEquals(listOf("alice@example.org"), typingTracker.typingNicks(buffer.id).value)
+
+        session.emitChatState("alice@example.org", XmppChatState.PAUSED)
+        advanceUntilIdle()
+        assertEquals(listOf("alice@example.org"), typingTracker.typingNicks(buffer.id).value)
+
+        session.emitChatState("alice@example.org", XmppChatState.ACTIVE)
+        advanceUntilIdle()
+        assertTrue(typingTracker.typingNicks(buffer.id).value.isEmpty())
+    }
+
+    @Test
+    fun `inactive and gone both clear typing, same as active`() = runTest {
+        val session = FakeXmppSession()
+        bootstrap(listOf(session))
+        val networkId = xmppNetwork("glvortex")
+        connectReady(networkId, session)
+        session.emitChatState("alice@example.org", XmppChatState.COMPOSING)
+        advanceUntilIdle()
+        val buffer = requireNotNull(db.bufferDao().byName(networkId, "alice@example.org"))
+        assertEquals(listOf("alice@example.org"), typingTracker.typingNicks(buffer.id).value)
+
+        session.emitChatState("alice@example.org", XmppChatState.INACTIVE)
+        advanceUntilIdle()
+        assertTrue(typingTracker.typingNicks(buffer.id).value.isEmpty())
+
+        session.emitChatState("alice@example.org", XmppChatState.COMPOSING)
+        advanceUntilIdle()
+        session.emitChatState("alice@example.org", XmppChatState.GONE)
+        advanceUntilIdle()
+        assertTrue(typingTracker.typingNicks(buffer.id).value.isEmpty())
+    }
+
+    @Test
+    fun `a chat state reusing an existing DM buffer keys typing to that same buffer`() = runTest {
+        val session = FakeXmppSession()
+        bootstrap(listOf(session))
+        val networkId = xmppNetwork("glvortex")
+        connectReady(networkId, session)
+
+        // A real DM first, exactly like onIncomingDirectMessage's own tests, then a chat state from
+        // the same sender must land on the identical buffer rather than a second one.
+        session.emit(
+            XmppIncomingMessage(
+                fromBareJid = "alice@example.org",
+                body = "hello there",
+                stanzaId = "stanza-1",
+                delayStampMillis = null,
+            ),
+        )
+        advanceUntilIdle()
+        val buffer = requireNotNull(db.bufferDao().byName(networkId, "alice@example.org"))
+
+        session.emitChatState("alice@example.org", XmppChatState.COMPOSING)
+        advanceUntilIdle()
+
+        // Same buffer id, not a second one created for the chat state.
+        assertEquals(buffer.id, requireNotNull(db.bufferDao().byName(networkId, "alice@example.org")).id)
+        assertEquals(listOf("alice@example.org"), typingTracker.typingNicks(buffer.id).value)
     }
 }
