@@ -30,9 +30,10 @@ sealed interface XmppSessionState {
 
 /**
  * One incoming direct-message stanza observed on a live [XmppSession] (docs/backend-neutral-xmpp-rollout.md
- * "PR 2", slice X4). Deliberately minimal: only what a 1:1 DM needs. MUC occupant/subject/roster
- * events and XEP-0280 carbons extend this seam with their own event shapes in later slices rather
- * than reshaping this one.
+ * "PR 2", slice X4). Deliberately minimal: only what a 1:1 DM needs. MUC occupant/subject/message
+ * events (slice X5; see [XmppIncomingMucMessage], [XmppMucSubject], [XmppMucOccupantEvent]) and
+ * XEP-0280 carbons (a later slice) extend this seam with their own event shapes rather than
+ * reshaping this one.
  */
 data class XmppIncomingMessage(
     /** Bare JID (user@domain) of the sender, already resource-stripped by the session layer. */
@@ -54,10 +55,82 @@ data class XmppIncomingMessage(
 )
 
 /**
+ * One MUC (groupchat) message observed on a live [XmppSession] (docs/backend-neutral-xmpp-rollout.md
+ * "PR 2", slice X5). Mirrors [XmppIncomingMessage]'s shape but keyed by the room's bare JID plus the
+ * sending occupant's in-room nickname rather than a peer's bare JID: real JIDs are not visible in a
+ * semi-anonymous room, so the nickname is the only identity a MUC message carries.
+ */
+data class XmppIncomingMucMessage(
+    /** Bare JID (room@service) of the room. */
+    val roomBareJid: String,
+    /** The sending occupant's in-room nickname (an XMPP resourcepart) — never a real JID. */
+    val occupantNick: String,
+    val body: String,
+    /** Sender-supplied stanza `id`, exactly like [XmppIncomingMessage.stanzaId] — never invented
+     *  when the stanza carries none. */
+    val stanzaId: String?,
+    /** Wall-clock ms from a delay stamp, exactly like [XmppIncomingMessage.delayStampMillis]. */
+    val delayStampMillis: Long?,
+    /**
+     * True when [occupantNick] is this session's own nickname in this room. A MUC reflects every
+     * accepted message back to its sender with the same occupant nick, so this — not a JID
+     * comparison, which a semi-anonymous room cannot support — is how "did I send this" is known.
+     * Computed by the session (the only party that knows what nick it joined each room with; see
+     * [XmppSession.joinRoom]), never re-derived by the processor.
+     */
+    val isSelf: Boolean,
+)
+
+/**
+ * A MUC subject (topic) observation (slice X5). [byNick] is the occupant who set it; null when the
+ * room supplies a subject with no attributable occupant (e.g. the informational subject some
+ * servers replay on join).
+ */
+data class XmppMucSubject(
+    val roomBareJid: String,
+    val subject: String,
+    val byNick: String?,
+)
+
+/**
+ * Occupant roster deltas/snapshots for one joined MUC (slice X5) — the MUC counterpart of an IRC
+ * NAMES reply plus live JOIN/PART. [Snapshot] arrives exactly once per successful
+ * [XmppSession.joinRoom] (and again on [XmppSession.refreshOccupants]), listing every occupant
+ * present at that moment, including this session's own nickname; [Joined]/[Left] arrive only for
+ * occupants who arrive/depart afterwards. The initial roster is never reported through
+ * [Joined]: the session defers registering its live occupant listeners until after the join
+ * snapshot is captured (carried over from the fork/xmpp-support prototype's join-listener-ordering
+ * fix, which otherwise floods the timeline with a false JOIN per pre-existing member on a busy room).
+ */
+sealed interface XmppMucOccupantEvent {
+    val roomBareJid: String
+
+    data class Snapshot(override val roomBareJid: String, val nicks: List<String>) : XmppMucOccupantEvent
+    data class Joined(override val roomBareJid: String, val nick: String) : XmppMucOccupantEvent
+    data class Left(override val roomBareJid: String, val nick: String) : XmppMucOccupantEvent
+}
+
+/** One roster (buddy-list) contact, as surfaced by [XmppSession.rosterLoad]. */
+data class XmppRosterContact(val bareJid: String, val name: String?)
+
+/**
+ * Roster (buddy-list) load outcome for one connection attempt (slice X5). Surfaced exactly once per
+ * session, some time after [XmppSessionState.Ready] — not a live presence/subscription-change
+ * stream: this baseline narrows the fork/xmpp-support prototype's continuous `RosterListener`-driven
+ * updates down to a single load-outcome signal per connection (docs/backend-neutral-xmpp-rollout.md
+ * "PR 2" baseline scope names "roster loading", not live roster sync). A live-updates feature can
+ * extend this seam later without reshaping it.
+ */
+sealed interface XmppRosterLoad {
+    data class Loaded(val contacts: List<XmppRosterContact>) : XmppRosterLoad
+    data class Failed(val reason: String) : XmppRosterLoad
+}
+
+/**
  * Protocol seam over one XMPP connection attempt. Models the fork/xmpp-support prototype's
- * `XmppSession` abstraction (connect/login, per-room/message operations, teardown) but narrowed to
- * this slice's scope: transport/TLS/SASL lifecycle plus the incoming-DM stream. Roster and MUC
- * operations arrive with later slices (X6+) as additions to this same seam.
+ * `XmppSession` abstraction (connect/login, per-room/message operations, teardown), reshaped to this
+ * package's event/state vocabulary: transport/TLS/SASL lifecycle, the incoming-DM stream (slice X4),
+ * and MUC join/leave/occupants/subjects/messages plus one-shot roster loading (slice X5).
  *
  * One instance = one connection attempt; [XmppAccountActor] creates a fresh [XmppSession] per
  * (re)connect, exactly like the prototype and like `:irc`'s `ManagedConnection`/`IrcClient` pairing.
@@ -76,6 +149,23 @@ interface XmppSession {
      */
     val incomingMessages: Flow<XmppIncomingMessage>
 
+    /** MUC messages across every room this session has joined (slice X5); see
+     *  [XmppIncomingMucMessage]. Same hot/buffered-flow rationale as [incomingMessages]. */
+    val incomingMucMessages: Flow<XmppIncomingMucMessage>
+
+    /** MUC subject changes across every joined room (slice X5); see [XmppMucSubject]. */
+    val mucSubjects: Flow<XmppMucSubject>
+
+    /** MUC occupant snapshots/joins/leaves across every joined room (slice X5); see
+     *  [XmppMucOccupantEvent]. */
+    val mucOccupants: Flow<XmppMucOccupantEvent>
+
+    /**
+     * This connection attempt's roster load outcome (slice X5); see [XmppRosterLoad]. Emits at most
+     * once — a session that never reaches [XmppSessionState.Ready] never emits at all.
+     */
+    val rosterLoad: Flow<XmppRosterLoad>
+
     /**
      * Establish the transport, negotiate TLS, and SASL-authenticate, publishing [state] transitions
      * (Connecting -> Authenticating -> Ready/Failed) along the way. Never throws except
@@ -91,6 +181,25 @@ interface XmppSession {
 
     /** Tear down the connection and release resources. Safe to call from any state, more than once. */
     suspend fun disconnect()
+
+    /**
+     * Join the MUC at [bareRoomJid] presenting [nick]. On success, publishes exactly one
+     * [XmppMucOccupantEvent.Snapshot] on [mucOccupants]. Never throws except
+     * [kotlinx.coroutines.CancellationException]: a rejected/timed-out join (bad JID, banned,
+     * nickname conflict, gateway timeout) is logged and produces no snapshot rather than surfacing a
+     * wire exception. This baseline has no dedicated join-failure signal — callers can only infer
+     * success by whether a [XmppMucOccupantEvent.Snapshot] for that room ever arrives; a later slice
+     * can add an explicit failure event without reshaping this contract.
+     */
+    suspend fun joinRoom(bareRoomJid: String, nick: String)
+
+    /** Leave a previously joined room and stop delivering its events. Safe to call even if never
+     *  joined, and more than once. */
+    suspend fun leaveRoom(bareRoomJid: String)
+
+    /** Re-publish the current occupant list for an already-joined room as a fresh
+     *  [XmppMucOccupantEvent.Snapshot]. A no-op if [bareRoomJid] is not currently joined. */
+    suspend fun refreshOccupants(bareRoomJid: String)
 }
 
 /** Builds one [XmppSession] attempt from a persisted XMPP account row. */

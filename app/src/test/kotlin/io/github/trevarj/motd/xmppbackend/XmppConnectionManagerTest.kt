@@ -8,6 +8,7 @@ import io.github.trevarj.motd.data.db.MotdDatabase
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
 import io.github.trevarj.motd.data.db.XmppAccountEntity
+import io.github.trevarj.motd.service.RosterLoadState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
@@ -224,5 +225,94 @@ class XmppConnectionManagerTest {
         assertEquals(42_000L, minJitter.backoffDelayMs(6)) // capped: 60000 * 0.7
         assertEquals(78_000L, maxJitter.backoffDelayMs(6)) // capped: 60000 * 1.3
         assertEquals(78_000L, maxJitter.backoffDelayMs(20)) // still capped past attempt 6
+    }
+
+    // -- roster (buddy-list) load state (slice X5); see XmppConnectionManager's "Known seam gap" --
+
+    @Test
+    fun rosterStates_transitionsNotLoaded_loading_loaded() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+
+        manager.connect(nid)
+        advanceUntilIdle()
+        assertEquals(RosterLoadState.NOT_LOADED, manager.rosterStates.value[nid])
+
+        s1.completeConnect(XmppSessionState.Ready(selfJid))
+        advanceUntilIdle()
+        assertEquals(RosterLoadState.LOADING, manager.rosterStates.value[nid])
+
+        s1.emitRosterLoad(XmppRosterLoad.Loaded(listOf(XmppRosterContact("alice@example.org", "Alice"))))
+        advanceUntilIdle()
+        assertEquals(RosterLoadState.LOADED, manager.rosterStates.value[nid])
+    }
+
+    @Test
+    fun rosterStates_failedOnRosterError() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+
+        manager.connect(nid)
+        advanceUntilIdle()
+        s1.completeConnect(XmppSessionState.Ready(selfJid))
+        advanceUntilIdle()
+        assertEquals(RosterLoadState.LOADING, manager.rosterStates.value[nid])
+
+        s1.emitRosterLoad(XmppRosterLoad.Failed("roster IQ timed out"))
+        advanceUntilIdle()
+        assertEquals(RosterLoadState.FAILED, manager.rosterStates.value[nid])
+    }
+
+    @Test
+    fun rosterStates_clearedOnDisconnect() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+
+        manager.connect(nid)
+        advanceUntilIdle()
+        s1.completeConnect(XmppSessionState.Ready(selfJid))
+        advanceUntilIdle()
+        s1.emitRosterLoad(XmppRosterLoad.Loaded(emptyList()))
+        advanceUntilIdle()
+        assertEquals(RosterLoadState.LOADED, manager.rosterStates.value[nid])
+
+        manager.disconnect(nid)
+        advanceUntilIdle()
+        assertFalse(manager.rosterStates.value.containsKey(nid))
+    }
+
+    // -- MUC join nick decision (slice X5): configured resource, else the bare-JID localpart. --
+
+    @Test
+    fun joinChannel_fallsBackToBareJidLocalpart_whenNoResourceConfigured() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1)) // bootstrap's account configures no resource.
+        manager.connect(nid)
+        advanceUntilIdle()
+        s1.completeConnect(XmppSessionState.Ready(selfJid))
+        advanceUntilIdle()
+
+        manager.joinChannel(nid, "room@conference.example.org")
+        advanceUntilIdle()
+
+        assertEquals(listOf("room@conference.example.org" to "me"), s1.joinRoomCalls)
+    }
+
+    @Test
+    fun joinChannel_prefersConfiguredResourceOverBareJidLocalpart() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+        db.xmppAccountDao().upsert(
+            XmppAccountEntity(networkId = nid, jid = selfJid, password = "hunter2", resource = "phone"),
+        )
+        manager.connect(nid)
+        advanceUntilIdle()
+        s1.completeConnect(XmppSessionState.Ready(selfJid))
+        advanceUntilIdle()
+
+        manager.joinChannel(nid, "room@conference.example.org")
+        advanceUntilIdle()
+
+        assertEquals(listOf("room@conference.example.org" to "phone"), s1.joinRoomCalls)
     }
 }
