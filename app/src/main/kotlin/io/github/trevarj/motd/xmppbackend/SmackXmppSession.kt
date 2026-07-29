@@ -27,11 +27,15 @@ import org.jivesoftware.smack.MessageListener
 import org.jivesoftware.smack.ReconnectionManager
 import org.jivesoftware.smack.android.AndroidSmackInitializer
 import org.jivesoftware.smack.chat2.ChatManager
+import org.jivesoftware.smack.packet.Message
+import org.jivesoftware.smack.packet.MessageBuilder
 import org.jivesoftware.smack.packet.Presence
 import org.jivesoftware.smack.roster.Roster
 import org.jivesoftware.smack.sasl.SASLErrorException
 import org.jivesoftware.smack.tcp.XMPPTCPConnection
 import org.jivesoftware.smack.tcp.XMPPTCPConnectionConfiguration
+import org.jivesoftware.smackx.chatstates.ChatState
+import org.jivesoftware.smackx.chatstates.packet.ChatStateExtension
 import org.jivesoftware.smackx.delay.DelayInformationManager
 import org.jivesoftware.smackx.muc.MultiUserChat
 import org.jivesoftware.smackx.muc.MultiUserChatManager
@@ -367,6 +371,54 @@ internal class SmackXmppSession(private val account: XmppAccountEntity) : XmppSe
                 LOGGER.log(Level.WARNING, "MUC occupant refresh failed for $bareRoomJid", e)
             }
         }
+    }
+
+    /**
+     * [roomListeners] already tracks exactly the set of rooms this session currently has joined,
+     * canonicalized the same way [joinRoom] populates it — reuse that instead of a second cache.
+     * MUC send uses [MultiUserChat.sendMessage], which fills in `to`/`type=groupchat` itself, so the
+     * [MessageBuilder] passed to it must stay unbuilt (per Smack's API contract); a 1:1 send instead
+     * needs a fully built [Message] for [org.jivesoftware.smack.chat2.Chat.send].
+     */
+    override suspend fun sendMessage(to: String, body: String, messageId: String) {
+        withContext(Dispatchers.IO) {
+            val bareTo = JidCreate.entityBareFrom(to)
+            if (roomListeners.containsKey(bareTo.toString())) {
+                val muc = MultiUserChatManager.getInstanceFor(connection).getMultiUserChat(bareTo)
+                muc.sendMessage(MessageBuilder.buildMessage(messageId).setBody(body))
+            } else {
+                val chat = ChatManager.getInstanceFor(connection).chatWith(bareTo)
+                val message = MessageBuilder.buildMessage(messageId)
+                    .ofType(Message.Type.chat)
+                    .setBody(body)
+                    .build()
+                chat.send(message)
+            }
+        }
+    }
+
+    /** Best-effort per [XmppSession.sendChatState]'s KDoc: logged and swallowed, never thrown. */
+    override suspend fun sendChatState(toBareJid: String, state: XmppChatState) {
+        withContext(Dispatchers.IO) {
+            try {
+                val chat = ChatManager.getInstanceFor(connection).chatWith(JidCreate.entityBareFrom(toBareJid))
+                val message = MessageBuilder.buildMessage()
+                    .ofType(Message.Type.chat)
+                    .addExtension(ChatStateExtension(state.toSmackChatState()))
+                    .build()
+                chat.send(message)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (e: Exception) {
+                LOGGER.log(Level.FINE, "XMPP chat-state send failed", e)
+            }
+        }
+    }
+
+    private fun XmppChatState.toSmackChatState(): ChatState = when (this) {
+        XmppChatState.COMPOSING -> ChatState.composing
+        XmppChatState.PAUSED -> ChatState.paused
+        XmppChatState.ACTIVE -> ChatState.active
     }
 
     /** Carried over from the fork/xmpp-support prototype's `removeRoomListeners`: removing an

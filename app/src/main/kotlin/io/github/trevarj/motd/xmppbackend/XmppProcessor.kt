@@ -8,10 +8,13 @@ import io.github.trevarj.motd.data.db.MotdDatabase
 import io.github.trevarj.motd.data.db.ObservationOrigin
 import io.github.trevarj.motd.data.db.TimeProvenance
 import io.github.trevarj.motd.data.db.TimelineEventEntity
+import io.github.trevarj.motd.data.db.TimelineEventId
 import io.github.trevarj.motd.data.db.UserEntity
 import io.github.trevarj.motd.data.sync.BufferStore
 import io.github.trevarj.motd.data.sync.CanonicalTimelineStore
+import io.github.trevarj.motd.data.sync.SemanticIdentity
 import io.github.trevarj.motd.data.sync.TimelineObservation
+import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -33,6 +36,97 @@ class XmppProcessor @Inject constructor(
     private val bufferStore: BufferStore = BufferStore(db),
     private val canonicalTimeline: CanonicalTimelineStore = CanonicalTimelineStore(db),
 ) {
+    // -- durable pending sends (slice X6; docs/backend-neutral-xmpp-rollout.md baseline: "durable
+    // pending sends and send acknowledgements"). Mirrors EventProcessor's persistOutgoingPlan/beginRetry
+    // pairing, minus the multi-chunk planning and per-network sequencer IRC needs (a single XMPP
+    // send is always exactly one event, and this processor has no second writer to serialize
+    // against — see the class KDoc). --
+
+    /** [label] is the fresh outgoing-stanza id the caller hands to the live session; [eventId] is the
+     *  durable canonical row it now labels. */
+    data class OutgoingSend(val label: String, val eventId: TimelineEventId)
+
+    /**
+     * Persist the durable pending row for one outgoing send, before any wire write is attempted
+     * (docs/backend-neutral-xmpp-rollout.md "durable pending sends" — durability precedes the wire,
+     * exactly like `:irc`'s `ConnectionManagerImpl.sendMessage` +
+     * [io.github.trevarj.motd.data.sync.EventProcessor.persistOutgoingPlan]). Builds a fresh label,
+     * an `isSelf=true` PRIVMSG row pending on it (`dedupKey` follows
+     * [SemanticIdentity.pendingKey] — the store's pending-row idiom, matching what
+     * `persistOutgoingPlan` itself writes), and ingests it as [ObservationOrigin.LOCAL_SEND].
+     * [TimelineObservation.label] is left at its default (`event.pendingLabel`), so
+     * [CanonicalTimelineStore] derives the LABEL alias automatically — the same shape
+     * `BackendContractTest`'s "sender-supplied and archive-assigned identifiers reconcile on one row"
+     * scenario exercises for IRC. [replyToEventId]/[replyToMsgid], when supplied, are attached
+     * verbatim for the shared reply-preview UI; XMPP has no wire-level reply capability to negotiate
+     * in this baseline, so — unlike IRC — nothing here ever rewrites [text] with a fallback quote
+     * prefix.
+     *
+     * [sender] is caller-resolved (the account's bare JID for a DM, the account's in-room nickname
+     * for a MUC) rather than looked up here, since only [XmppConnectionManager] knows which one
+     * applies to [bufferId] without an extra buffer-type branch in this processor.
+     */
+    suspend fun persistOutgoingSend(
+        networkId: Long,
+        bufferId: Long,
+        sender: String,
+        text: String,
+        replyToEventId: TimelineEventId? = null,
+        replyToMsgid: String? = null,
+        connectionGeneration: Long? = null,
+    ): OutgoingSend {
+        val label = newOutgoingLabel()
+        val event = TimelineEventEntity(
+            bufferId = bufferId,
+            msgid = null,
+            serverTime = System.currentTimeMillis(),
+            sender = sender,
+            kind = MessageKind.PRIVMSG,
+            text = text,
+            isSelf = true,
+            replyToMsgid = replyToMsgid,
+            replyToEventId = replyToEventId,
+            pendingLabel = label,
+            dedupKey = SemanticIdentity.pendingKey(label),
+            serverTimeAuthoritative = false,
+        )
+        val result = canonicalTimeline.ingest(
+            TimelineObservation(
+                networkId = networkId,
+                event = event,
+                origin = ObservationOrigin.LOCAL_SEND,
+                connectionGeneration = connectionGeneration,
+                batchId = null,
+                timeProvenance = TimeProvenance.LOCAL_CLOCK,
+            ),
+        )
+        return OutgoingSend(label, result.event.id)
+    }
+
+    /**
+     * Attach a fresh attempt label to a failed, still-unconfirmed send (docs/backend-neutral-xmpp-rollout.md
+     * baseline "send acknowledgements"; mirrors
+     * [io.github.trevarj.motd.data.sync.EventProcessor.beginRetry]). [CanonicalTimelineStore.beginRetry]
+     * already re-arms `pendingLabel`/clears `failed` and inserts the new LABEL alias + LOCAL_SEND
+     * observation transactionally — this is a thin pass-through that only supplies the fresh label,
+     * so [XmppConnectionManager.retryMessage] never has to reach past this processor into
+     * [CanonicalTimelineStore] directly. Null when [eventId] is not a retryable row (see
+     * [CanonicalTimelineStore.beginRetry]'s guard: must still be self, pending on [eventId]'s prior
+     * label, and have no msgid).
+     */
+    suspend fun beginRetry(
+        networkId: Long,
+        eventId: TimelineEventId,
+        connectionGeneration: Long? = null,
+    ): OutgoingSend? {
+        val label = newOutgoingLabel()
+        val retried = canonicalTimeline.beginRetry(networkId, eventId, label, connectionGeneration)
+            ?: return null
+        return OutgoingSend(label, retried.id)
+    }
+
+    private fun newOutgoingLabel(): String = "xmpp-${UUID.randomUUID()}"
+
     /**
      * Persist one incoming direct message from [message.fromBareJid][XmppIncomingMessage.fromBareJid]
      * on [networkId]'s live session.
@@ -108,6 +202,20 @@ class XmppProcessor @Inject constructor(
      * re-derived here — becomes the canonical event's `isSelf` directly: an MUC reflects every
      * accepted message back to its sender, so this is the only "did I send this" signal available in
      * a semi-anonymous room (no JID comparison is possible).
+     *
+     * **Pending-send reconciliation (slice X6):** [XmppConnectionManager.sendMessage] sets the
+     * outgoing stanza's `id` to the durable row's pending label (see [persistOutgoingSend]) before
+     * handing it to a live session, so a room's reflection of that same send comes back here with
+     * [XmppIncomingMucMessage.stanzaId] equal to that label. When [XmppIncomingMucMessage.isSelf] is
+     * true, this observation's `label` is threaded as that stanza id — mirroring how
+     * [io.github.trevarj.motd.data.sync.EventProcessor] threads `ctx.label` through every incoming
+     * IRC observation — so [CanonicalTimelineStore]'s LABEL-alias lookup finds the still-pending row
+     * and coalesces this reflection into it (the exact shape `BackendContractTest`'s "sender-supplied
+     * and archive-assigned identifiers reconcile on one row" scenario proves for IRC), clearing
+     * `pendingLabel` and un-failing it even if a send-timeout already fired first — both are
+     * [CanonicalTimelineStore.enrich]'s generic behavior once the label matches, not special-cased
+     * here. A non-self message's stanza id is never threaded as a label: only an occupant reflecting
+     * back as *us* can plausibly be the echo of a send this account made.
      */
     suspend fun onMucMessage(
         networkId: Long,
@@ -135,6 +243,7 @@ class XmppProcessor @Inject constructor(
                 event = event,
                 origin = ObservationOrigin.LIVE,
                 connectionGeneration = connectionGeneration,
+                label = message.stanzaId.takeIf { message.isSelf },
                 batchId = null,
                 timeProvenance = timeProvenance,
             ),

@@ -1,7 +1,9 @@
 package io.github.trevarj.motd.xmppbackend
 
 import io.github.trevarj.motd.backend.ConnectionState
+import io.github.trevarj.motd.data.db.BufferEntity
 import io.github.trevarj.motd.data.db.BufferType
+import io.github.trevarj.motd.data.db.MessageEntity
 import io.github.trevarj.motd.data.db.MotdDatabase
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.TimelineAnchor
@@ -10,6 +12,7 @@ import io.github.trevarj.motd.data.db.XmppAccountEntity
 import io.github.trevarj.motd.di.ApplicationScope
 import io.github.trevarj.motd.service.CertPrompt
 import io.github.trevarj.motd.service.ConnectionManager
+import io.github.trevarj.motd.service.ImmediateWireAcceptance
 import io.github.trevarj.motd.service.RosterLoadState
 import io.github.trevarj.motd.service.SendAcceptance
 import io.github.trevarj.motd.service.SendRejectionReason
@@ -17,8 +20,11 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -29,6 +35,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /** [XmppSessionState] -> the neutral [ConnectionState] the seam publishes to shared code. */
 private fun XmppSessionState.toConnectionState(generation: Long): ConnectionState = when (this) {
@@ -51,10 +58,12 @@ private fun XmppSessionState.toConnectionState(generation: Long): ConnectionStat
  * are never observed, spawned, or otherwise touched.
  *
  * Slice X5 adds MUC join/leave/occupant-refresh ([joinChannel]/[partChannel]/[requestMembers]) and
- * MUC member-load state ([memberLoadStates]). Everything else — sendMessage, typing, react,
- * query/server buffers, markRead, history, cert prompts — is still out of scope and returns the same
- * inert rejection/no-op [InertConnectionManager][io.github.trevarj.motd.backend.InertConnectionManager]
- * uses, pending later slices.
+ * MUC member-load state ([memberLoadStates]). Slice X6 adds durable pending sends and send
+ * acknowledgements ([sendMessage]/[retryMessage]/[writeAndTrack]) and 1:1 typing ([sendTyping]).
+ * Everything else — react, query/server buffers, markRead, history, cert prompts — is still out of
+ * scope and returns the same inert rejection/no-op
+ * [InertConnectionManager][io.github.trevarj.motd.backend.InertConnectionManager] uses, pending
+ * later slices.
  *
  * Every live session's [XmppSession.incomingMessages]/`incomingMucMessages`/`mucSubjects`/
  * `mucOccupants`/`rosterLoad` is wired to [XmppProcessor] through the actor it runs on
@@ -92,6 +101,20 @@ class XmppConnectionManager @Inject constructor(
      *  every new connection attempt anywhere gets the next value, so [ConnectionState.Ready] always
      *  carries a fresh generation even across a transparent actor-owned reconnect. */
     private val sessionSeq = AtomicLong(0)
+
+    /**
+     * MUC send-acknowledgement watchdogs (slice X6; docs/backend-neutral-xmpp-rollout.md baseline
+     * "send acknowledgements"), keyed like `:irc` `ConnectionRegistry.pendingEchoJobs` by
+     * `"$bufferId:$label"`. Mirrors [io.github.trevarj.motd.service.ConnectionManagerImpl]'s
+     * `armEchoTimeout` shape with a plain coroutine + map instead of that class's actor/command-channel
+     * machinery: a fresh arm for the same key cancels any prior job (labels are unique per attempt, so
+     * this only ever matters defensively), and the job removes its own entry on completion. Launched
+     * on [scope] (not any per-actor job), so a send that survives a reconnect is still resolved:
+     * [io.github.trevarj.motd.data.db.MessageDao.failIfStillPending]'s `pendingLabel = :label AND
+     * msgid IS NULL` guard is idempotent, so firing after the row is already confirmed/failed by
+     * some other path is always a safe no-op — see [armSendTimeout].
+     */
+    private val pendingSendTimeouts = ConcurrentHashMap<String, Job>()
 
     private val mutex = Mutex()
     private var reconcileJob: Job? = null
@@ -249,17 +272,204 @@ class XmppConnectionManager @Inject constructor(
         if (channelIds.isNotEmpty()) _memberLoadStates.update { it - channelIds.toSet() }
     }
 
-    // -- Out of scope for this slice: same inert contract as InertConnectionManager. --
+    // -- durable pending sends and send acknowledgements (slice X6; docs/backend-neutral-xmpp-rollout.md
+    // baseline). Mirrors `:irc` ConnectionManagerImpl.sendMessage/retryMessage/writeDurablePlan's
+    // decision structure: persist a durable pending row FIRST, then attempt the wire write, then
+    // decide confirm-now / arm-a-timeout / fail-now from the outcome — never the other order. --
 
-    // arrives with slice X4/X6
+    /**
+     * Accept a send for [bufferId] the way `:irc` `ConnectionManagerImpl.sendMessage` does:
+     * durability precedes the wire. [XmppProcessor.persistOutgoingSend] persists the pending row
+     * unconditionally, before this method has even looked at whether a live session exists, so a
+     * send made while disconnected is still durably represented (visible, retryable) rather than
+     * silently dropped. [writeAndTrack] then resolves the live session and decides confirm/arm/fail —
+     * see its KDoc for the exact acknowledgement shape per buffer type.
+     *
+     * Only QUERY and CHANNEL buffers are sendable (a SERVER buffer, and any other future buffer type,
+     * is rejected outright — mirroring IRC's identical SERVER guard); an empty body is
+     * [io.github.trevarj.motd.service.SendRejectionReason.INVALID_CONTENT], matching what `:irc`'s
+     * chunk-splitter would reject a same-shaped composer submission as. [replyToEventId] is honored
+     * only when it names an event already in this same buffer (mirroring IRC's identical
+     * cross-buffer guard in `sendMessage`); its `msgid` (if any) is carried onto the persisted row
+     * for the shared reply-preview UI, but — unlike IRC — is never sent as a wire-level reply tag,
+     * since XMPP has no such capability in this baseline (see [XmppProcessor.persistOutgoingSend]'s
+     * KDoc).
+     */
     override suspend fun sendMessage(
         bufferId: Long,
         text: String,
         replyToEventId: TimelineEventId?,
-    ): SendAcceptance = SendAcceptance.Rejected(SendRejectionReason.BUFFER_NOT_FOUND)
+    ): SendAcceptance {
+        val buffer = db.bufferDao().observeById(bufferId)
+            ?: return SendAcceptance.Rejected(SendRejectionReason.BUFFER_NOT_FOUND)
+        if (buffer.type != BufferType.QUERY && buffer.type != BufferType.CHANNEL) {
+            return SendAcceptance.Rejected(SendRejectionReason.UNSUPPORTED_BUFFER)
+        }
+        if (text.isEmpty()) {
+            return SendAcceptance.Rejected(SendRejectionReason.INVALID_CONTENT)
+        }
+        val account = db.xmppAccountDao().byNetwork(buffer.networkId)
+            ?: return SendAcceptance.Rejected(SendRejectionReason.BUFFER_NOT_FOUND)
+        val sender = if (buffer.type == BufferType.CHANNEL) mucNick(account) else account.jid
+        val parent = replyToEventId
+            ?.let { db.messageDao().byCanonicalId(it) }
+            ?.takeIf { it.bufferId == buffer.id }
 
-    // arrives with slice X4/X6
-    override suspend fun sendTyping(bufferId: Long, state: String) = Unit
+        val pending = withContext(NonCancellable) {
+            processor.persistOutgoingSend(
+                networkId = buffer.networkId,
+                bufferId = buffer.id,
+                sender = sender,
+                text = text,
+                replyToEventId = parent?.id,
+                replyToMsgid = parent?.msgid,
+                connectionGeneration = currentGeneration(buffer.networkId),
+            )
+        }
+        return writeAndTrack(buffer, text, pending.label, pending.eventId)
+    }
+
+    /**
+     * Retry a failed, still-unconfirmed self-send with a fresh attempt label (docs/backend-neutral-xmpp-rollout.md
+     * baseline "send acknowledgements"; mirrors `:irc` `ConnectionManagerImpl.retryMessage` +
+     * [io.github.trevarj.motd.data.sync.EventProcessor.beginRetry] through
+     * [XmppProcessor.beginRetry]/[CanonicalTimelineStore.beginRetry]). [isRetryEligible] mirrors
+     * IRC's [io.github.trevarj.motd.service.isGenericRetryEligible] minus its IRC-only checks
+     * (BouncerServ, redacted text): only a failed, unconfirmed, still-self row in a real
+     * conversation buffer may be retried. The resend then follows the exact same [writeAndTrack]
+     * path a fresh [sendMessage] does.
+     */
+    override suspend fun retryMessage(eventId: TimelineEventId): SendAcceptance {
+        val original = db.messageDao().byCanonicalId(eventId)
+            ?: return SendAcceptance.Rejected(SendRejectionReason.EVENT_NOT_RETRYABLE)
+        val buffer = db.bufferDao().observeById(original.bufferId)
+            ?: return SendAcceptance.Rejected(SendRejectionReason.BUFFER_NOT_FOUND)
+        if (!isRetryEligible(buffer, original)) {
+            return SendAcceptance.Rejected(SendRejectionReason.EVENT_NOT_RETRYABLE)
+        }
+        val retried = withContext(NonCancellable) {
+            processor.beginRetry(buffer.networkId, original.id, currentGeneration(buffer.networkId))
+        } ?: return SendAcceptance.Rejected(SendRejectionReason.EVENT_NOT_RETRYABLE)
+        return writeAndTrack(buffer, original.text, retried.label, retried.eventId)
+    }
+
+    /**
+     * Resolve the live session and wire-write [text] labeled [label] for [eventId], deciding the
+     * acknowledgement path from the outcome — the shared tail of [sendMessage]/[retryMessage],
+     * mirroring how `:irc` `ConnectionManagerImpl` shares `writeDurablePlan` between both. The whole
+     * decision (not just the persistence step before it) runs under [NonCancellable], mirroring
+     * `:irc` `completeDurableAcceptance`'s KDoc: "Return durable acceptance even if the caller is
+     * cancelled after the transaction commits" — once a pending row exists, a cancelled caller must
+     * not leave it stranded with nothing left to resolve it.
+     *
+     * Decision table (docs/backend-neutral-xmpp-rollout.md baseline "durable pending sends and send
+     * acknowledgements"):
+     *  - no live/Ready session for [BufferEntity.networkId]: fail the row immediately — mirrors
+     *    IRC's `writeDurablePlan` `client == null || ready == null -> failPendingEvents`, i.e. never
+     *    the fork/xmpp-support prototype's blanket 30s watchdog for this case (a send that was never
+     *    going to have a session to answer it should not make the user wait 30s to find out).
+     *  - the wire write itself throws: fail the row immediately — mirrors IRC's
+     *    `transmitDurableOutgoingPlan`'s `write`-step catch.
+     *  - wire write succeeds, QUERY (1:1): confirm now — mirrors IRC's `!hasCap("echo-message")`
+     *    path (`confirmIfStillPending`). A DM's own send is only ever echoed back via XEP-0280
+     *    carbons, deferred past this baseline, so there is no reflection to wait for.
+     *  - wire write succeeds, CHANNEL (MUC): do NOT confirm — arm a [armSendTimeout] watchdog and
+     *    let the room's reflection reconcile the row through the normal incoming path instead (see
+     *    [XmppProcessor.onMucMessage]'s KDoc) — mirrors IRC's `hasCap("echo-message")` path
+     *    (`armEchoTimeout`).
+     */
+    private suspend fun writeAndTrack(
+        buffer: BufferEntity,
+        text: String,
+        label: String,
+        eventId: TimelineEventId,
+    ): SendAcceptance = withContext(NonCancellable) {
+        val eventIds = listOf(eventId)
+        val session = actors[buffer.networkId]?.connection
+        val ready = _connectionStates.value[buffer.networkId] as? ConnectionState.Ready
+        if (session == null || ready == null) {
+            db.messageDao().failPending(eventIds)
+            return@withContext SendAcceptance.Accepted(eventIds, ImmediateWireAcceptance.DISCONNECTED)
+        }
+        val wireAcceptance = try {
+            session.sendMessage(buffer.displayName, text, label)
+            ImmediateWireAcceptance.ACCEPTED
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            ImmediateWireAcceptance.FAILED
+        }
+        if (wireAcceptance != ImmediateWireAcceptance.ACCEPTED) {
+            db.messageDao().failPending(eventIds)
+            return@withContext SendAcceptance.Accepted(eventIds, wireAcceptance)
+        }
+        when (buffer.type) {
+            BufferType.QUERY -> db.messageDao().confirmIfStillPending(buffer.id, label)
+            BufferType.CHANNEL -> armSendTimeout(buffer.id, label)
+            BufferType.SERVER -> Unit
+        }
+        SendAcceptance.Accepted(eventIds)
+    }
+
+    /** Mirrors [io.github.trevarj.motd.service.isGenericRetryEligible] minus IRC-only checks
+     *  (BouncerServ, redacted-text placeholders): a failed, still-unconfirmed self-send in a real
+     *  conversation buffer. */
+    private fun isRetryEligible(buffer: BufferEntity, message: MessageEntity): Boolean =
+        message.isSelf && message.failed && message.msgid == null && buffer.type != BufferType.SERVER
+
+    /**
+     * MUC send-acknowledgement watchdog: mirrors `:irc` `ConnectionManagerImpl.armEchoTimeout`'s
+     * shape (delay, then fail-if-still-pending) as a plain coroutine keyed in [pendingSendTimeouts],
+     * rather than that class's `ConnectionRegistry` actor/command-channel machinery — see
+     * [pendingSendTimeouts]'s KDoc for why a plain map is a safe, proportionate substitute here.
+     */
+    private fun armSendTimeout(bufferId: Long, label: String) {
+        val key = "$bufferId:$label"
+        pendingSendTimeouts.remove(key)?.cancel()
+        // Labels are fresh per attempt, so this key is never re-armed while this job is still
+        // in flight; an unconditional remove(key) is therefore always removing this same job.
+        pendingSendTimeouts[key] = scope.launch {
+            delay(SEND_TIMEOUT_MS)
+            db.messageDao().failIfStillPending(bufferId, label)
+            pendingSendTimeouts.remove(key)
+        }
+    }
+
+    /** Best-effort current connection generation for [networkId], or null with no live Ready
+     *  session — purely a diagnostic passenger on the persisted observation, exactly like `:irc`'s
+     *  `connectionGenerations[networkId]` (never consulted by [CanonicalTimelineStore]'s own
+     *  reconciliation, which identifies solely through aliases). */
+    private fun currentGeneration(networkId: Long): Long? =
+        (_connectionStates.value[networkId] as? ConnectionState.Ready)?.generation
+
+    /**
+     * Map the seam's IRC-shaped typing vocabulary (`:irc` `IrcClient.sendTyping`'s `+typing` tag
+     * values, as sent by `ChatViewModel.sendTyping`/its recomposition-triggered "done": "active" on
+     * composing, "done" on an emptied composer or right after a send; "paused" is accepted for
+     * protocol completeness though nothing upstream sends it today) onto XEP-0085 chat states
+     * (docs/backend-neutral-xmpp-rollout.md baseline "one-to-one typing where supported"):
+     *  - "active" -> [XmppChatState.COMPOSING] (currently typing);
+     *  - "paused" -> [XmppChatState.PAUSED] (was typing, paused);
+     *  - "done" -> [XmppChatState.ACTIVE] (stopped typing, still in the conversation — XEP-0085's
+     *    `active`, not `inactive`, which means the user left the conversation entirely, a presence/idle
+     *    concept this baseline does not track).
+     *
+     * QUERY buffers only, matching XEP-0085's 1:1 chat-state scope — MUC typing is explicitly out of
+     * this baseline (docs/backend-neutral-xmpp-rollout.md "one-to-one typing where supported"), and a
+     * buffer with no live session is a silent no-op, mirroring every other buffer-scoped method here.
+     */
+    override suspend fun sendTyping(bufferId: Long, state: String) {
+        val buffer = db.bufferDao().observeById(bufferId) ?: return
+        if (buffer.type != BufferType.QUERY) return
+        val session = actors[buffer.networkId]?.connection ?: return
+        val chatState = when (state) {
+            "active" -> XmppChatState.COMPOSING
+            "paused" -> XmppChatState.PAUSED
+            "done" -> XmppChatState.ACTIVE
+            else -> return
+        }
+        session.sendChatState(buffer.displayName, chatState)
+    }
 
     // arrives with slice X4/X6
     override suspend fun sendReact(bufferId: Long, msgid: String, emoji: String) = Unit
@@ -282,11 +492,17 @@ class XmppConnectionManager @Inject constructor(
     override suspend fun joinChannel(networkId: Long, channel: String) {
         val session = actors[networkId]?.connection ?: return
         val account = db.xmppAccountDao().byNetwork(networkId) ?: return
-        val nick = account.resource?.takeIf(String::isNotBlank) ?: account.jid.substringBefore('@')
         val bufferId = processor.ensureMucBuffer(networkId, channel).id
         _memberLoadStates.update { it + (bufferId to RosterLoadState.LOADING) }
-        session.joinRoom(channel, nick)
+        session.joinRoom(channel, mucNick(account))
     }
+
+    /** In-room nickname this account presents for MUC operations: the configured resource, else the
+     *  bare JID's localpart (see [joinChannel]'s KDoc). Factored out (slice X6) so a MUC send's
+     *  persisted `sender` — see [sendMessage] — matches the nick the room will later reflect it back
+     *  under, exactly like the nick [joinChannel] already presents when entering the room. */
+    private fun mucNick(account: XmppAccountEntity): String =
+        account.resource?.takeIf(String::isNotBlank) ?: account.jid.substringBefore('@')
 
     /** Resolve [bufferId]'s room (a MUC buffer's `name` column is its bare room JID; see
      *  [XmppProcessor]) and leave it, dropping its [memberLoadStates] entry entirely (not just
@@ -341,4 +557,11 @@ class XmppConnectionManager @Inject constructor(
 
     // arrives with slice X4/X6
     override fun dismissCertPrompt(prompt: CertPrompt) = Unit
+
+    private companion object {
+        /** MUC send-acknowledgement watchdog (slice X6); matches both `:irc`
+         *  `ConnectionManagerImpl.ECHO_TIMEOUT_MS` and the fork/xmpp-support prototype's
+         *  `XmppAccountActor.SEND_TIMEOUT_MS`. */
+        const val SEND_TIMEOUT_MS = 30_000L
+    }
 }
