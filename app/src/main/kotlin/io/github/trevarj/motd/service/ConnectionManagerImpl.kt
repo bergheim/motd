@@ -51,7 +51,6 @@ import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.backend.ReactionCapability
 import io.github.trevarj.motd.ircbackend.IrcSessions
 import io.github.trevarj.motd.irc.event.IrcClientState
-import kotlinx.coroutines.flow.FlowCollector
 import io.github.trevarj.motd.irc.event.IrcEvent
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 import io.github.trevarj.motd.irc.ext.MonitorCommands
@@ -468,13 +467,14 @@ class ConnectionManagerImpl @Inject constructor(
     // manual disconnect/connect is not undone by the next DB write. Reset by stopAll (not persisted).
     private val userIntents = java.util.concurrent.ConcurrentHashMap<Long, Boolean>()
 
+    // Sourced from the full snapshot, not the states map: a redial can attach a new session while
+    // the IRC state map compares equal (Ready -> Ready with the same payload), and only the
+    // snapshot's sessionSeq change would republish the new generation. MappedStateFlow dedups the
+    // mapped result, so collectors still see an emission exactly when this neutral map changes.
     override val connectionStates: StateFlow<Map<Long, ConnectionState>> =
-        MappedStateFlow(registry.connectionStates) { states ->
-            // states and the actor snapshot publish together from the registry's command loop, so
-            // reading the snapshot's generation here observes the same (or a newer) publish.
-            val actors = registry.snapshot.value.actors
-            states.mapValues { (networkId, state) ->
-                state.toConnectionState(generation = actors[networkId]?.sessionSeq ?: 0L)
+        MappedStateFlow(registry.snapshot) { snapshot ->
+            snapshot.states.mapValues { (networkId, state) ->
+                state.toConnectionState(generation = snapshot.actors[networkId]?.sessionSeq ?: 0L)
             }
         }
 
@@ -565,18 +565,6 @@ class ConnectionManagerImpl @Inject constructor(
 
     private fun Set<String>.hasWebPushCap(): Boolean =
         any { it == WebPushRegistrar.WEBPUSH_CAP || it.startsWith("${WebPushRegistrar.WEBPUSH_CAP}=") }
-
-    /** StateFlow view mapping [source] on read; keeps the seam neutral without an extra scope. */
-    private class MappedStateFlow<T, R>(
-        private val source: StateFlow<T>,
-        private val transform: (T) -> R,
-    ) : StateFlow<R> {
-        override val value: R get() = transform(source.value)
-        override val replayCache: List<R> get() = listOf(value)
-        override suspend fun collect(collector: FlowCollector<R>): Nothing {
-            source.collect { collector.emit(transform(it)) }
-        }
-    }
 
     // -- lifecycle ----------------------------------------------------------
 
