@@ -13,15 +13,13 @@ import io.github.trevarj.motd.service.ConnectionManagerImpl
 import javax.inject.Singleton
 
 /**
- * IRC/service seam wiring. [ConnectionManager] → [ConnectionManagerImpl] (WP5). The
+ * IRC adapter wiring. The shared [ConnectionManager] binding lives in [BackendModule] (the
+ * registry-dispatching composite); the IRC session manager reaches it via [IrcChatBackend]. The
  * [IrcEventSink] binding lives in [AppModule] (EventProcessor).
  */
 @Module
 @InstallIn(SingletonComponent::class)
 internal abstract class IrcModule {
-    @Binds @Singleton
-    abstract fun connectionManager(impl: ConnectionManagerImpl): ConnectionManager
-
     /** IRC-owned session accessor for IRC feature surfaces (docs/backend-neutral-xmpp-rollout.md). */
     @Binds @Singleton
     abstract fun ircSessions(impl: ConnectionManagerImpl): IrcSessions

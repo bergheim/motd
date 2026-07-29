@@ -55,7 +55,9 @@ class BackendContractTest {
     /** Trivial open-registry participant; only [protocol] distinguishes it from [IrcChatBackend]. */
     private class FakeChatBackend(
         override val protocol: ProtocolId = ProtocolId(FAKE_PROTOCOL),
-    ) : ChatBackend
+    ) : ChatBackend {
+        override val sessions get() = InertConnectionManager
+    }
 
     /**
      * Stand-in for a backend-owned processor — this fake backend's counterpart to IRC's
@@ -147,7 +149,7 @@ class BackendContractTest {
 
     @Test
     fun `fake backend registers and resolves through the open registry`() {
-        val irc = IrcChatBackend()
+        val irc = IrcChatBackend(dagger.Lazy { error("sessions are not resolved by registry lookups") })
         val fake = FakeChatBackend()
         val registry = BackendRegistry(setOf(irc, fake))
 

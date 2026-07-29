@@ -8,6 +8,7 @@ import org.junit.Test
 class BackendRegistryTest {
     private class FakeBackend(id: String) : ChatBackend {
         override val protocol = ProtocolId(id)
+        override val sessions get() = InertConnectionManager
     }
 
     @Test

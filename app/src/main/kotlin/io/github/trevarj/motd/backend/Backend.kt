@@ -13,12 +13,19 @@ import javax.inject.Singleton
 value class ProtocolId(val value: String)
 
 /**
- * One chat protocol backend. The contract grows session lifecycle, commands, event streams, and
- * capabilities slice by slice; shared code resolves a backend through [BackendRegistry] and must
+ * One chat protocol backend. Shared code resolves a backend through [BackendRegistry] and must
  * never downcast to a concrete implementation or switch on [protocol].
  */
 interface ChatBackend {
     val protocol: ProtocolId
+
+    /**
+     * The backend's session manager: the neutral seam surface for the networks carrying
+     * [protocol]. The composite ConnectionManager dispatches per-network operations here and
+     * merges per-backend state flows; a backend only ever reports its own networks. Backends
+     * whose session layer has not landed yet expose [InertConnectionManager].
+     */
+    val sessions: io.github.trevarj.motd.service.ConnectionManager
 }
 
 /**
