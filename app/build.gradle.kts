@@ -345,9 +345,15 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.coroutines.android)
     implementation(libs.serialization.json)
-    implementation(libs.smack.android)
-    implementation(libs.smack.extensions)
-    implementation(libs.smack.tcp)
+    // smack-xmlparser-xpp3 depends on both xpp3 and xpp3_min, which carry identical copies of
+    // every org.xmlpull class and fail the APK duplicate-class check. Keep the full artifact (a
+    // superset) and drop the minimal one so D8 sees exactly one copy.
+    val withoutDuplicateXmlPull: ExternalModuleDependency.() -> Unit = {
+        exclude(group = "xpp3", module = "xpp3_min")
+    }
+    implementation(libs.smack.android, withoutDuplicateXmlPull)
+    implementation(libs.smack.extensions, withoutDuplicateXmlPull)
+    implementation(libs.smack.tcp, withoutDuplicateXmlPull)
     implementation(libs.unifiedpush.connector)
     "googleImplementation"(platform(libs.firebase.bom))
     "googleImplementation"(libs.firebase.messaging)

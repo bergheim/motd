@@ -46,3 +46,11 @@ data class NotificationTarget(
 @Serializable data object AddNetworkRoute
 @Serializable data class BouncerNetworksRoute(val rootNetworkId: Long)
 @Serializable data class ChannelListRoute(val networkId: Long)
+
+// Backend-neutral account entry points (docs/backend-neutral-xmpp-rollout.md): the add-account
+// protocol picker, shown only when more than one backend is registered (see
+// AccountRoutingViewModel.createDestination), and XMPP's own create/edit account route. A null
+// networkId is create; a non-null id is edit. Every protocol-owned account route lives beside its
+// screen (e.g. AddNetworkRoute/NetworkSettingsRoute above are IRC's); this one is XMPP's.
+@Serializable data object AccountPickerRoute
+@Serializable data class XmppAccountRoute(val networkId: Long? = null)
