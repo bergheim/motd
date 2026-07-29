@@ -425,12 +425,13 @@ class BufferStoreCanonicalTest {
         val notifyingStore = BufferStore(
             db,
             object : MessageNotifier {
-                override suspend fun onIncoming(
+                override suspend fun onCanonicalIncoming(
                     networkId: Long,
                     bufferId: Long,
                     type: BufferType,
                     hasMention: Boolean,
-                    message: io.github.trevarj.motd.irc.event.IrcEvent.ChatMessage,
+                    eventId: Long,
+                    message: MessageEntity,
                 ) = Unit
 
                 override suspend fun onRoomsMerged(winnerId: Long, loserId: Long) {

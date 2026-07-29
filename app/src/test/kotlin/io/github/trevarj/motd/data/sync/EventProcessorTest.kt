@@ -281,12 +281,13 @@ class EventProcessorTest {
             db,
             TypingTrackerImpl(),
             object : MessageNotifier {
-                override suspend fun onIncoming(
+                override suspend fun onCanonicalIncoming(
                     networkId: Long,
                     bufferId: Long,
                     type: BufferType,
                     hasMention: Boolean,
-                    message: IrcEvent.ChatMessage,
+                    eventId: Long,
+                    message: MessageEntity,
                 ) {
                     notifications++
                 }
@@ -1251,12 +1252,13 @@ class EventProcessorTest {
     fun replyToOwnKnownParent_notifiesExactlyOnce() = runTest {
         var notifications = 0
         val notifying = EventProcessor(db, TypingTrackerImpl(), object : MessageNotifier {
-            override suspend fun onIncoming(
+            override suspend fun onCanonicalIncoming(
                 networkId: Long,
                 bufferId: Long,
                 type: BufferType,
                 hasMention: Boolean,
-                message: IrcEvent.ChatMessage,
+                eventId: Long,
+                message: MessageEntity,
             ) {
                 notifications++
                 assertTrue(hasMention)
@@ -1284,12 +1286,13 @@ class EventProcessorTest {
             db = db,
             typing = TypingTrackerImpl(),
             notifier = object : MessageNotifier {
-                override suspend fun onIncoming(
+                override suspend fun onCanonicalIncoming(
                     networkId: Long,
                     bufferId: Long,
                     type: BufferType,
                     hasMention: Boolean,
-                    message: IrcEvent.ChatMessage,
+                    eventId: Long,
+                    message: MessageEntity,
                 ) {
                     notifications++
                 }
@@ -1298,7 +1301,7 @@ class EventProcessorTest {
                 override suspend fun onIncoming(
                     bufferId: Long,
                     type: BufferType,
-                    message: IrcEvent.ChatMessage,
+                    message: MessageEntity,
                 ) {
                     error("audio service unavailable")
                 }
@@ -1334,12 +1337,13 @@ class EventProcessorTest {
             db = db,
             typing = TypingTrackerImpl(),
             notifier = object : MessageNotifier {
-                override suspend fun onIncoming(
+                override suspend fun onCanonicalIncoming(
                     networkId: Long,
                     bufferId: Long,
                     type: BufferType,
                     hasMention: Boolean,
-                    message: IrcEvent.ChatMessage,
+                    eventId: Long,
+                    message: MessageEntity,
                 ) {
                     notifications++
                 }
@@ -1348,7 +1352,7 @@ class EventProcessorTest {
                 override suspend fun onIncoming(
                     bufferId: Long,
                     type: BufferType,
-                    message: IrcEvent.ChatMessage,
+                    message: MessageEntity,
                 ) {
                     sounds++
                 }
@@ -1959,12 +1963,13 @@ class EventProcessorTest {
     fun readMarker_notifiesOnlyForKnownTimestampedTarget() = runTest {
         val observed = mutableListOf<Pair<Long, io.github.trevarj.motd.data.db.TimelineAnchor>>()
         val notifying = EventProcessor(db, TypingTrackerImpl(), object : MessageNotifier {
-            override suspend fun onIncoming(
+            override suspend fun onCanonicalIncoming(
                 networkId: Long,
                 bufferId: Long,
                 type: BufferType,
                 hasMention: Boolean,
-                message: IrcEvent.ChatMessage,
+                eventId: Long,
+                message: MessageEntity,
             ) = Unit
 
             override suspend fun onRead(
@@ -2236,7 +2241,7 @@ class EventProcessorTest {
         // A recording notifier; a motd line containing our nick must not fire.
         var fired = false
         val recProcessor = EventProcessor(db, TypingTrackerImpl(), object : MessageNotifier {
-            override suspend fun onIncoming(networkId: Long, bufferId: Long, type: BufferType, hasMention: Boolean, message: IrcEvent.ChatMessage) {
+            override suspend fun onCanonicalIncoming(networkId: Long, bufferId: Long, type: BufferType, hasMention: Boolean, eventId: Long, message: MessageEntity) {
                 fired = true
             }
         })
@@ -2255,14 +2260,15 @@ class EventProcessorTest {
     fun rootBouncerServ_privmsg_isPersistedSeenWithoutNotification_butNoticeRemainsOrdinary() = runTest {
         val direct = db.networkDao().byId(networkId)!!
         db.networkDao().update(direct.copy(role = NetworkRole.BOUNCER_ROOT))
-        val notifiedKinds = mutableListOf<IrcEvent.ChatKind>()
+        val notifiedKinds = mutableListOf<MessageKind>()
         val recording = EventProcessor(db, TypingTrackerImpl(), object : MessageNotifier {
-            override suspend fun onIncoming(
+            override suspend fun onCanonicalIncoming(
                 networkId: Long,
                 bufferId: Long,
                 type: BufferType,
                 hasMention: Boolean,
-                message: IrcEvent.ChatMessage,
+                eventId: Long,
+                message: MessageEntity,
             ) {
                 notifiedKinds += message.kind
             }
@@ -2284,7 +2290,7 @@ class EventProcessorTest {
             source = Prefix("BouncerServ"), target = "me", text = "detached relay",
             isSelf = false, replyToMsgid = null,
         ))
-        assertEquals(listOf(IrcEvent.ChatKind.NOTICE), notifiedKinds)
+        assertEquals(listOf(MessageKind.NOTICE), notifiedKinds)
     }
 
     @Test
@@ -2952,12 +2958,13 @@ class EventProcessorTest {
         val notified = mutableListOf<Triple<Long, Long, Long>>()
         val resolved = mutableListOf<Long>()
         val recording = EventProcessor(db, TypingTrackerImpl(), object : MessageNotifier {
-            override suspend fun onIncoming(
+            override suspend fun onCanonicalIncoming(
                 networkId: Long,
                 bufferId: Long,
                 type: BufferType,
                 hasMention: Boolean,
-                message: IrcEvent.ChatMessage,
+                eventId: Long,
+                message: MessageEntity,
             ) = Unit
 
             override suspend fun onInvitation(networkId: Long, bufferId: Long, messageId: Long) {
@@ -3003,12 +3010,13 @@ class EventProcessorTest {
     fun dccFileOffer_createsQueryTimelineRow_transferState_andNotification() = runTest {
         val notified = mutableListOf<Triple<Long, Long, Long>>()
         val recording = EventProcessor(db, TypingTrackerImpl(), object : MessageNotifier {
-            override suspend fun onIncoming(
+            override suspend fun onCanonicalIncoming(
                 networkId: Long,
                 bufferId: Long,
                 type: BufferType,
                 hasMention: Boolean,
-                message: IrcEvent.ChatMessage,
+                eventId: Long,
+                message: MessageEntity,
             ) = Unit
 
             override suspend fun onDccTransferOffer(networkId: Long, bufferId: Long, messageId: Long) {
@@ -3097,12 +3105,13 @@ class EventProcessorTest {
             db,
             TypingTrackerImpl(),
             object : MessageNotifier {
-                override suspend fun onIncoming(
+                override suspend fun onCanonicalIncoming(
                     networkId: Long,
                     bufferId: Long,
                     type: BufferType,
                     hasMention: Boolean,
-                    message: IrcEvent.ChatMessage,
+                    eventId: Long,
+                    message: MessageEntity,
                 ) = Unit
 
                 override suspend fun onInvitation(networkId: Long, bufferId: Long, messageId: Long) {
@@ -3497,12 +3506,13 @@ class EventProcessorTest {
     fun historyBatch_persistsMentionsAndDms_withoutNotifications() = runTest {
         val notifications = mutableListOf<String>()
         val recording = EventProcessor(db, TypingTrackerImpl(), object : MessageNotifier {
-            override suspend fun onIncoming(
+            override suspend fun onCanonicalIncoming(
                 networkId: Long,
                 bufferId: Long,
                 type: BufferType,
                 hasMention: Boolean,
-                message: IrcEvent.ChatMessage,
+                eventId: Long,
+                message: MessageEntity,
             ) {
                 notifications += message.text
             }
@@ -3562,12 +3572,13 @@ class EventProcessorTest {
         val resolvedInvites = mutableListOf<Long>()
         val typing = TypingTrackerImpl()
         val recording = EventProcessor(db, typing, object : MessageNotifier {
-            override suspend fun onIncoming(
+            override suspend fun onCanonicalIncoming(
                 networkId: Long,
                 bufferId: Long,
                 type: BufferType,
                 hasMention: Boolean,
-                message: IrcEvent.ChatMessage,
+                eventId: Long,
+                message: MessageEntity,
             ) {
                 notifications += message.text
             }
@@ -4358,12 +4369,13 @@ class EventProcessorTest {
     fun push_persistsSupportedMessage_withoutMutatingSessionState() = runTest {
         val notifications = mutableListOf<String>()
         val recording = EventProcessor(db, TypingTrackerImpl(), object : MessageNotifier {
-            override suspend fun onIncoming(
+            override suspend fun onCanonicalIncoming(
                 networkId: Long,
                 bufferId: Long,
                 type: BufferType,
                 hasMention: Boolean,
-                message: IrcEvent.ChatMessage,
+                eventId: Long,
+                message: MessageEntity,
             ) {
                 notifications += message.text
             }
