@@ -1,7 +1,6 @@
 package io.github.trevarj.motd.xmppbackend
 
 import io.github.trevarj.motd.backend.ChatBackend
-import io.github.trevarj.motd.backend.InertConnectionManager
 import io.github.trevarj.motd.backend.ProtocolId
 import io.github.trevarj.motd.service.ConnectionManager
 import javax.inject.Inject
@@ -13,11 +12,13 @@ import javax.inject.Singleton
  * slice, always writing through the shared canonical repositories.
  */
 @Singleton
-class XmppChatBackend @Inject constructor() : ChatBackend {
+class XmppChatBackend @Inject constructor(
+    // Lazy to break the Dagger cycle through the registry's backend set, mirroring IrcChatBackend.
+    private val xmppSessions: dagger.Lazy<XmppConnectionManager>,
+) : ChatBackend {
     override val protocol: ProtocolId = XMPP_PROTOCOL
 
-    /** Inert until the Smack session slice lands; the composite then dispatches XMPP rows here. */
-    override val sessions: ConnectionManager get() = InertConnectionManager
+    override val sessions: ConnectionManager get() = xmppSessions.get()
 
     companion object {
         /** Persisted discriminator for XMPP rows; detail lives in `xmpp_accounts`. */
