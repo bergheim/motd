@@ -183,9 +183,9 @@ class ChannelInfoViewModel @Inject constructor(
             bufferFlow,
             membersFlow,
             derivedRosterFlow,
-            connectionManager.rosterStates,
+            connectionManager.memberLoadStates,
             networkLagFlow,
-        ) { buffer, members, derived, rosterStates, networkLag ->
+        ) { buffer, members, derived, memberLoadStates, networkLag ->
             val (lagMs, connected) = networkLag
             val order = prefixOrderForBuffer(buffer)
             val identityRules = derived.identityRules
@@ -206,7 +206,7 @@ class ChannelInfoViewModel @Inject constructor(
                 foolMembers = emptyList()
                 searchResults = rankMembersFuzzy(derived.query, members, identityRules::normalize, lookup)
             }
-            val rosterState = buffer?.let { rosterStates[it.id] } ?: RosterLoadState.NOT_LOADED
+            val rosterState = buffer?.let { memberLoadStates[it.id] } ?: RosterLoadState.NOT_LOADED
             val presentation = rosterPresentation(members.size, rosterState)
             ChannelInfoUiState(
                 buffer = buffer,

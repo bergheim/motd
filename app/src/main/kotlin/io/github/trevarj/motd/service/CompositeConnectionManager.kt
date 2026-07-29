@@ -47,8 +47,8 @@ class CompositeConnectionManager @Inject constructor(
     override val connectionStates: StateFlow<Map<Long, ConnectionState>> by lazy {
         CombinedStateFlow(sessionList.map { it.connectionStates }) { maps -> union(maps) }
     }
-    override val rosterStates: StateFlow<Map<Long, RosterLoadState>> by lazy {
-        CombinedStateFlow(sessionList.map { it.rosterStates }) { maps -> union(maps) }
+    override val memberLoadStates: StateFlow<Map<Long, RosterLoadState>> by lazy {
+        CombinedStateFlow(sessionList.map { it.memberLoadStates }) { maps -> union(maps) }
     }
     override val presenceStates: StateFlow<Map<PresenceKey, PresenceState>> by lazy {
         CombinedStateFlow(sessionList.map { it.presenceStates }) { maps -> union(maps) }
