@@ -16,9 +16,9 @@ pull requests:
 ```text
 main
   |
-  +-- backend-neutral-irc       PR 1: behavior-preserving IRC extraction
+  +-- feat/backend-neutral-irc  PR 1: behavior-preserving IRC extraction
         |
-        +-- xmpp-backend        PR 2: XMPP implementation
+        +-- feat/xmpp-backend   PR 2: XMPP implementation
               |
               +-- later XMPP and MOTD work
 ```
