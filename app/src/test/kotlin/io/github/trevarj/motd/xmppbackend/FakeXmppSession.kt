@@ -57,10 +57,12 @@ internal class FakeXmppSession : XmppSession {
     val refreshOccupantsCalls = mutableListOf<String>()
 
     /** One recorded [XmppSession.sendMessage] call (slice X6): [to] a bare JID or joined room, the
-     *  [body], and the [messageId] the caller asked to be set as the outgoing stanza id — a test
-     *  reads this back and feeds it to [emitMucMessage]'s `stanzaId` to simulate a MUC's delivery
-     *  echo of this exact send. */
-    data class SentMessage(val to: String, val body: String, val messageId: String)
+     *  [body], the [messageId] the caller asked to be set as the outgoing stanza id — a test reads
+     *  this back and feeds it to [emitMucMessage]'s `stanzaId` to simulate a MUC's delivery echo of
+     *  this exact send — and [kind], the caller-decided stanza shape (review fix: this used to be
+     *  inferred here from [joinedRooms], which a test double could get away with but a real session
+     *  could not once a rejoin lagged the send; see [XmppSession.sendMessage]'s KDoc). */
+    data class SentMessage(val to: String, val body: String, val messageId: String, val kind: XmppSendKind)
 
     val sentMessages = mutableListOf<SentMessage>()
     val sentChatStates = mutableListOf<Pair<String, XmppChatState>>()
@@ -98,12 +100,12 @@ internal class FakeXmppSession : XmppSession {
         refreshOccupantsCalls += bareRoomJid
     }
 
-    override suspend fun sendMessage(to: String, body: String, messageId: String) {
+    override suspend fun sendMessage(to: String, body: String, messageId: String, kind: XmppSendKind) {
         sendMessageFailure?.let { failure ->
             sendMessageFailure = null
             throw failure
         }
-        sentMessages += SentMessage(to, body, messageId)
+        sentMessages += SentMessage(to, body, messageId, kind)
     }
 
     override suspend fun sendChatState(toBareJid: String, state: XmppChatState) {

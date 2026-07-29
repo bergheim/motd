@@ -462,6 +462,52 @@ class XmppProcessorTest {
         assertEquals("alice", topicRow.sender)
     }
 
+    /**
+     * P2 review finding: a MUC server replays the room's current subject on every join/reconnect
+     * (XEP-0045), and Smack's `SubjectUpdatedListener` fires identically for that replay and for a
+     * genuine live change (see [XmppSession.mucSubjects]' KDoc: "both can fire mid-join") -- so
+     * treating every emission as a fresh change accumulated one duplicate TOPIC row per reconnect.
+     * [onMucSubject] now compares against the buffer's previously persisted topic first.
+     */
+    @Test
+    fun `a replayed subject identical to the persisted topic does not duplicate the topic row`() = runTest {
+        val session = FakeXmppSession()
+        bootstrap(listOf(session))
+        val networkId = xmppNetwork("glvortex")
+        connectReady(networkId, session)
+        manager.joinChannel(networkId, roomJid)
+        advanceUntilIdle()
+        session.emitOccupantSnapshot(roomJid, listOf("me"))
+        advanceUntilIdle()
+
+        session.emitMucSubject(roomJid, "Welcome to the room", "alice")
+        advanceUntilIdle()
+        val buffer = requireNotNull(db.bufferDao().byName(networkId, roomJid))
+        assertEquals(
+            1,
+            db.canonicalTimelineDao().eventsForRoom(buffer.id).count { it.kind == MessageKind.TOPIC },
+        )
+
+        // A reconnect rejoins the room and the server replays its current (unchanged) subject --
+        // servers commonly supply no attributable occupant for this informational replay, unlike a
+        // real live change.
+        session.emitMucSubject(roomJid, "Welcome to the room", null)
+        advanceUntilIdle()
+
+        val topicRows = db.canonicalTimelineDao().eventsForRoom(buffer.id).filter { it.kind == MessageKind.TOPIC }
+        assertEquals(1, topicRows.size) // still exactly one row, not two.
+        assertEquals("Welcome to the room", requireNotNull(db.bufferDao().observeById(buffer.id)).topic)
+
+        // A genuine change to a new value still lands as a second, distinct TOPIC row.
+        session.emitMucSubject(roomJid, "New topic", "bob")
+        advanceUntilIdle()
+
+        val updatedTopicRows =
+            db.canonicalTimelineDao().eventsForRoom(buffer.id).filter { it.kind == MessageKind.TOPIC }
+        assertEquals(2, updatedTopicRows.size)
+        assertEquals("New topic", requireNotNull(db.bufferDao().observeById(buffer.id)).topic)
+    }
+
     @Test
     fun `leaving a room stops processing further events for it`() = runTest {
         val session = FakeXmppSession()

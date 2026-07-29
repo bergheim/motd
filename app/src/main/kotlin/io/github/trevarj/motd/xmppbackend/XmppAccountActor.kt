@@ -4,6 +4,7 @@ import io.github.trevarj.motd.data.db.XmppAccountEntity
 import kotlin.random.Random
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
@@ -84,27 +85,58 @@ internal class XmppAccountActor(
         var attempt = 0
         while (currentCoroutineContext().isActive) {
             val generation = nextGeneration()
-            val session = sessionFactory.create(account)
+            // Construction is guarded separately from the connect attempt below (review fix, P2
+            // finding): sessionFactory.create can throw for a JID/resource that passed UI validation
+            // but fails Smack's stricter nodeprep/resourceprep parsing (SmackXmppSession's
+            // constructor eagerly builds an XMPPTCPConnectionConfiguration). Left unguarded, that
+            // exception used to escape loop() entirely, killing this actor's coroutine with no
+            // published Failed state: the manager's `actors` entry stayed registered (looking alive)
+            // while `isAlive` silently went false, and the user saw no error at all. A bad, persisted
+            // configuration will not fix itself on retry, so this is fatal — exactly like a rejected
+            // SASL credential below — parking the actor until an explicit connect() (e.g. after the
+            // user edits the account) retries it.
+            val session = try {
+                sessionFactory.create(account)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (e: Exception) {
+                onState(networkId, XmppSessionState.Failed(e.message ?: "invalid account configuration", fatal = true), generation)
+                return
+            }
             connection = session
-            val collector = scope.launch { session.state.collect { onState(networkId, it, generation) } }
+            // Started UNDISPATCHED, not the default dispatched start (review fix, P2 finding): a
+            // dispatched launch only *schedules* its body, so without this nothing guarantees any of
+            // these seven collectors has actually subscribed before session.connect() runs below —
+            // and MutableSharedFlow(replay = 0) drops an emission for good when it has no subscriber
+            // yet, no matter how large extraBufferCapacity is. A real SmackXmppSession's connect()
+            // loads the roster (and can see stanzas) synchronously, in the same call, right after
+            // reaching Ready, so a slow-to-start collector could lose that first emission. UNDISPATCHED
+            // runs each collector's body immediately, up to its first real suspension — which is the
+            // flow subscription itself, made synchronously inside `collect` before it ever suspends
+            // waiting for a value — so by the time connect() is called, every subscription is already
+            // in place, exactly as incomingMessages' KDoc assumes ("attaches its collector before
+            // calling connect").
+            val collector = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                session.state.collect { onState(networkId, it, generation) }
+            }
             // Attached before connect() below (per incomingMessages' KDoc) so nothing arriving right
             // after Ready races this subscription. Same rationale for the four MUC/roster collectors.
-            val messageCollector = scope.launch {
+            val messageCollector = scope.launch(start = CoroutineStart.UNDISPATCHED) {
                 session.incomingMessages.collect { onIncoming(networkId, it, generation) }
             }
-            val chatStateCollector = scope.launch {
+            val chatStateCollector = scope.launch(start = CoroutineStart.UNDISPATCHED) {
                 session.incomingChatStates.collect { onChatState(networkId, it) }
             }
-            val mucMessageCollector = scope.launch {
+            val mucMessageCollector = scope.launch(start = CoroutineStart.UNDISPATCHED) {
                 session.incomingMucMessages.collect { onMucMessage(networkId, it, generation) }
             }
-            val mucSubjectCollector = scope.launch {
+            val mucSubjectCollector = scope.launch(start = CoroutineStart.UNDISPATCHED) {
                 session.mucSubjects.collect { onMucSubject(networkId, it, generation) }
             }
-            val mucOccupantCollector = scope.launch {
+            val mucOccupantCollector = scope.launch(start = CoroutineStart.UNDISPATCHED) {
                 session.mucOccupants.collect { onMucOccupant(networkId, it) }
             }
-            val rosterCollector = scope.launch {
+            val rosterCollector = scope.launch(start = CoroutineStart.UNDISPATCHED) {
                 session.rosterLoad.collect { onRosterLoad(networkId, it) }
             }
             var reachedReady = false

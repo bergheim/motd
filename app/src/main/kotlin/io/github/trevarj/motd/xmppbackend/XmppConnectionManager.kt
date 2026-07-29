@@ -104,7 +104,7 @@ class XmppConnectionManager @Inject constructor(
      * would leave every live and even fatally-parked actor running forever on stale credentials —
      * [ensureActorLocked] is the sole writer/reader pairing that keeps this in sync with [actors].
      */
-    private val actorFingerprints = ConcurrentHashMap<Long, String>()
+    private val actorFingerprints = ConcurrentHashMap<Long, XmppAccountFingerprint>()
 
     /** Sticky manual override of autoConnect: true = force-connect, false = force-disconnect,
      *  absent = follow the row's autoConnect flag. Survives reconcile emissions, cleared by stopAll. */
@@ -309,10 +309,14 @@ class XmppConnectionManager @Inject constructor(
      * identical "a fresh direct socket has no channel membership" JOIN restore for its own DIRECT
      * rows). [XmppAccountActor] creates a brand-new [XmppSession] on every (re)connect attempt, so
      * without this, a session that reconnects after a drop has no MUC room membership at all even
-     * though Room still marks these buffers joined: [SmackXmppSession.sendMessage] decides "is this
-     * a room" purely from *its own* in-session `roomListeners` map (empty on every fresh session,
-     * see that class's KDoc), so it would silently fall through and address the room as a
-     * one-to-one chat stanza instead of a groupchat one.
+     * though Room still marks these buffers joined. [writeAndTrack] always addresses a CHANNEL send
+     * as [XmppSendKind.GROUPCHAT] regardless of this session's own join bookkeeping (P1 review fix:
+     * the wire shape is decided by buffer type, never inferred from the session — see
+     * [XmppSession.sendMessage]'s KDoc), so a send that races an unfinished rejoin no longer goes out
+     * on the wire *wrong*; without a rejoin at all, though, it still goes out *nowhere* — Smack's
+     * `MucNotJoinedException` durably fails the row instead (the caller's existing wire-write catch
+     * already handles it) — so timely rejoining remains what makes a post-reconnect send actually
+     * succeed.
      *
      * Each rejoin runs on [scope] rather than inline here, so a slow/unresponsive room (a MUC join
      * can wait up to a minute for a cold gateway, see [SmackXmppSession.joinRoom]'s KDoc) can never
@@ -473,7 +477,14 @@ class XmppConnectionManager @Inject constructor(
             return@withContext SendAcceptance.Accepted(eventIds, ImmediateWireAcceptance.DISCONNECTED)
         }
         val wireAcceptance = try {
-            session.sendMessage(buffer.displayName, text, label)
+            // kind is decided HERE, from the buffer's own type -- never inferred by the session from
+            // its own live join bookkeeping (review fix, P1 finding: see XmppSession.sendMessage's
+            // KDoc). A CHANNEL buffer always sends GROUPCHAT, even when this session has not actually
+            // (re)joined the room yet: SmackXmppSession then either succeeds as a real groupchat send
+            // or throws (MucNotJoinedException), which the catch below durably fails the row on,
+            // rather than ever silently going out as a one-to-one chat stanza.
+            val kind = if (buffer.type == BufferType.CHANNEL) XmppSendKind.GROUPCHAT else XmppSendKind.CHAT
+            session.sendMessage(buffer.displayName, text, label, kind)
             ImmediateWireAcceptance.ACCEPTED
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -585,16 +596,23 @@ class XmppConnectionManager @Inject constructor(
     private fun mucNick(account: XmppAccountEntity): String =
         account.resource?.takeIf(String::isNotBlank) ?: account.jid.substringBefore('@')
 
-    /** Resolve [bufferId]'s room (a MUC buffer's `name` column is its bare room JID; see
-     *  [XmppProcessor]) and leave it, dropping its [memberLoadStates] entry entirely (not just
-     *  resetting it — this session receives no further presence for a room it explicitly left, so
-     *  nothing will repopulate the entry until an explicit rejoin). A non-CHANNEL buffer, or a buffer
-     *  with no live session, is a silent no-op — mirroring every other buffer-scoped method here. */
+    /** Resolve [bufferId]'s room (a MUC buffer's `displayName` column is its bare room JID, verbatim —
+     *  review fix: `name` is [io.github.trevarj.motd.data.sync.BufferStore.getOrCreate]'s own
+     *  internal, possibly-disambiguated row key (it appends a NUL-separated type suffix on a name
+     *  collision with another buffer), so it is not always a valid JID; `displayName` is never
+     *  touched by that disambiguation and always retains the exact address the room was
+     *  found-or-created with — the same "wire targets always retain server spelling" contract
+     *  [io.github.trevarj.motd.data.db.RoomEntity.ircTarget] and `BufferDao.joinedChannelNames`
+     *  already document and rely on) and leave it, dropping its [memberLoadStates] entry entirely
+     *  (not just resetting it — this session receives no further presence for a room it explicitly
+     *  left, so nothing will repopulate the entry until an explicit rejoin). A non-CHANNEL buffer, or
+     *  a buffer with no live session, is a silent no-op — mirroring every other buffer-scoped method
+     *  here. */
     override suspend fun partChannel(bufferId: Long, reason: String?) {
         val buffer = db.bufferDao().rawById(bufferId) ?: return
         if (buffer.type != BufferType.CHANNEL) return
         val session = actors[buffer.networkId]?.connection ?: return
-        session.leaveRoom(buffer.name)
+        session.leaveRoom(buffer.displayName)
         processor.onLeftRoom(bufferId)
         _memberLoadStates.update { it - bufferId }
     }
@@ -607,13 +625,16 @@ class XmppConnectionManager @Inject constructor(
      * unused: unlike IRC's NAMES (a real wire round-trip worth deduping while one is already in
      * flight), a MUC occupant refresh only re-emits [XmppSession]'s already-live, Smack-cached
      * occupant list — cheap enough that there is no in-flight request to dedupe against.
+     *
+     * Addresses the room by `displayName`, not `name` (review fix — see [partChannel]'s KDoc for why
+     * `name` is not always a valid wire JID).
      */
     override suspend fun requestMembers(bufferId: Long, force: Boolean) {
         val buffer = db.bufferDao().rawById(bufferId) ?: return
         if (buffer.type != BufferType.CHANNEL) return
         val session = actors[buffer.networkId]?.connection ?: return
         _memberLoadStates.update { it + (bufferId to RosterLoadState.LOADING) }
-        session.refreshOccupants(buffer.name)
+        session.refreshOccupants(buffer.displayName)
     }
 
     /**
@@ -679,6 +700,19 @@ class XmppConnectionManager @Inject constructor(
  * are exactly what a credential edit must be detected from. [XmppConnectionManager.ensureActorLocked]
  * compares this against the fingerprint its live actor was built from and rebuilds on a mismatch,
  * regardless of whether that actor is currently alive.
+ *
+ * A [data class] of the three fields, not their `":"`-joined concatenation (review fix — P2
+ * finding: an unescaped separator lets two different accounts collide, e.g. password `"a:b"` +
+ * resource `"c"` joins to the exact same string as password `"a"` + resource `"b:c"`, so an edited
+ * account could read as unchanged and keep stale credentials). A generated `equals`/`hashCode`
+ * compares the fields directly and can never collide this way, with no encoding scheme to get
+ * subtly wrong.
  */
-internal fun xmppAccountFingerprint(account: XmppAccountEntity): String =
-    "${account.jid}:${account.password}:${account.resource}"
+internal data class XmppAccountFingerprint(
+    val jid: String,
+    val password: String,
+    val resource: String?,
+)
+
+internal fun xmppAccountFingerprint(account: XmppAccountEntity): XmppAccountFingerprint =
+    XmppAccountFingerprint(account.jid, account.password, account.resource)
