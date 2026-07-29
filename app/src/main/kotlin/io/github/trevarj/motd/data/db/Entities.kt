@@ -574,3 +574,29 @@ data class UserEntity(
 
 @Entity(tableName = "members", primaryKeys = ["bufferId", "nick"])
 data class MemberEntity(val bufferId: Long, val nick: String, val prefixes: String = "")
+
+/**
+ * XMPP account detail for a network row (docs/backend-neutral-xmpp-rollout.md): a per-protocol
+ * satellite table instead of nullable protocol columns on the shared `networks` row. One row per
+ * XMPP network; IRC rows have none.
+ */
+@Entity(
+    tableName = "xmpp_accounts",
+    foreignKeys = [ForeignKey(
+        entity = NetworkEntity::class,
+        parentColumns = ["id"],
+        childColumns = ["networkId"],
+        onDelete = ForeignKey.CASCADE,
+    )],
+)
+data class XmppAccountEntity(
+    @PrimaryKey val networkId: Long,
+    /** Bare JID (user@domain). */
+    val jid: String,
+    val password: String,
+    /** Desired resource; null lets the server assign one. */
+    val resource: String? = null,
+) {
+    // Redact the password from logs; the jid identifies the row.
+    override fun toString() = "XmppAccountEntity(networkId=$networkId, jid=$jid)"
+}

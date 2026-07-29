@@ -1820,3 +1820,18 @@ interface AppStateDao {
     @Query("DELETE FROM app_state WHERE `key` = :key")
     suspend fun delete(key: String)
 }
+
+@Dao
+interface XmppAccountDao {
+    @Query("SELECT * FROM xmpp_accounts WHERE networkId = :networkId")
+    suspend fun byNetwork(networkId: Long): XmppAccountEntity?
+
+    @Query("SELECT * FROM xmpp_accounts WHERE networkId = :networkId")
+    fun observe(networkId: Long): Flow<XmppAccountEntity?>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(account: XmppAccountEntity)
+
+    @Query("DELETE FROM xmpp_accounts WHERE networkId = :networkId")
+    suspend fun delete(networkId: Long)
+}
