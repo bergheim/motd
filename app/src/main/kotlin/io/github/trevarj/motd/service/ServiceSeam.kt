@@ -40,6 +40,12 @@ enum class RosterLoadState { NOT_LOADED, LOADING, LOADED, FAILED }
 enum class PresenceState { UNKNOWN, ONLINE, OFFLINE }
 data class PresenceKey(val networkId: Long, val normalizedNick: String)
 
+/** Stable, casemapping-invariant name for a network's per-network SERVER buffer
+ *  ([ConnectionManager.ensureServerBuffer]) — shared so every backend (IRC's `ConnectionManagerImpl`,
+ *  XMPP's `XmppConnectionManager`) resolves/creates the identical buffer identity for a network's
+ *  "server messages" timeline rather than each backend inventing its own convention. */
+const val SERVER_BUFFER_NAME = "*"
+
 /** Ephemeral, target-keyed server rejection for a browser-initiated JOIN. */
 sealed interface ChannelJoinOutcome {
     data class Rejected(

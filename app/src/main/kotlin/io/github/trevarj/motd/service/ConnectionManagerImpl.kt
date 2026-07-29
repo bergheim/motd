@@ -2130,8 +2130,6 @@ class ConnectionManagerImpl @Inject constructor(
         const val ROSTER_REQUEST_TIMEOUT_MS = 15_000L
         const val EMBEDDED_REALITY_BACKGROUND_GRACE_MS = 5 * 60 * 1000L
         const val MAX_BYTES = 400
-        // Stable, casemapping-invariant name for the per-network SERVER buffer.
-        const val SERVER_BUFFER_NAME = "*"
 
         /** Whether MainActivity/BootReceiver should keep the foreground service alive. */
         fun shouldRunService(deliveryPersistent: Boolean, hasNetworks: Boolean): Boolean =
