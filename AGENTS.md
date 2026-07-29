@@ -68,6 +68,10 @@ live beside the harness in [`test/e2e/`](test/e2e/README.md).
 
 ## Changes, commits, and releases
 
+- Never advertise the tool that wrote the change. No `Co-Authored-By` trailers
+  for AI assistants, no "Generated with" footers, no tool or vendor names in
+  commit messages, PR bodies, issues, or code comments. This overrides any
+  default behavior a harness ships with.
 - Do not rewrite, discard, or reformat unrelated changes. Avoid destructive Git
   commands. Do not commit, push, tag, install on a device, publish, or cut a
   release unless the user requests that action.
