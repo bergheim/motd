@@ -15,6 +15,7 @@ import io.github.trevarj.motd.data.sync.CanonicalTimelineStore
 import io.github.trevarj.motd.data.sync.SemanticIdentity
 import io.github.trevarj.motd.data.sync.TimelineObservation
 import io.github.trevarj.motd.data.sync.TypingTrackerImpl
+import io.github.trevarj.motd.service.SERVER_BUFFER_NAME
 import io.github.trevarj.motd.service.TypingTracker
 import java.util.UUID
 import javax.inject.Inject
@@ -139,6 +140,45 @@ class XmppProcessor @Inject constructor(
     private fun newOutgoingLabel(): String = "xmpp-${UUID.randomUUID()}"
 
     /**
+     * Scope a sender-supplied XMPP stanza id to its assigning authority before it becomes a
+     * canonical event's `msgid` (review fix). [CanonicalTimelineStore] keys its MSGID alias as
+     * `(networkId, MSGID, value)` — network/account and identifier namespace, in the rollout doc's
+     * "generic backend-scoped identity" vocabulary (docs/backend-neutral-xmpp-rollout.md
+     * "Persistence and writer ownership") — but a raw XMPP stanza `id` (RFC 6120 §8.1.3) is
+     * sender-supplied and only guaranteed unique within *its sender's own stream*, unlike an IRC
+     * `msgid` (server-assigned, unique across the whole network). Without this, two different DM
+     * peers or MUC occupants both happening to use a common id (e.g. "1") on the same network would
+     * collide on the exact same alias: [CanonicalTimelineStore.ingestInTransaction] resolves an
+     * MSGID match unconditionally (ahead of every weaker signal, with no bufferId check), so the
+     * second sender's message would silently coalesce into the first sender's event — and, since
+     * [CanonicalTimelineStore.enrich] always keeps the *existing* row's `bufferId`, vanish from its
+     * own conversation into a different one entirely.
+     *
+     * This adds the missing fourth component the rollout doc's vocabulary names — "assigning
+     * authority when applicable" — by folding it directly into the opaque `value` string
+     * [aliasesFor] already derives from `msgid`, rather than widening [CanonicalTimelineStore]'s
+     * schema for one backend's narrower id scope (that store, and its `(networkId, namespace,
+     * value)` triple, stay entirely unmodified and protocol-neutral). [authority] is the peer's
+     * bare JID for a DM, or the room's bare JID *and* the sending occupant's nickname for a MUC —
+     * anything finer than "the whole network" that the id is actually guaranteed unique within.
+     * A NUL separator (a zero byte, never spelled out literally in this comment to keep the
+     * source file plain ASCII) can never appear in a JID or a MUC nickname, so joining with it
+     * is unambiguous — the same trick
+     * [io.github.trevarj.motd.data.sync.BufferStore.getOrCreate]'s own collision-disambiguation
+     * key already uses. Every caller that later looks a message up by
+     * `msgid` — [XmppConnectionManager.sendMessage]'s reply-target resolution
+     * ([persistOutgoingSend]'s `replyToMsgid`), a future reaction target — reads whatever composed
+     * value is already stored on the row, so composing it once here keeps them all consistent
+     * without any lookup-side change.
+     *
+     * Superseded once XEP-0359 stable stanza-id/origin-id (docs/backend-neutral-xmpp-rollout.md
+     * "later" cross-device list) lands: a server- or origin-assigned id is unique on its own and
+     * would not need this per-authority scoping.
+     */
+    private fun scopedMsgid(stanzaId: String, vararg authority: String): String =
+        (authority.toList() + stanzaId).joinToString(MSGID_AUTHORITY_SEPARATOR)
+
+    /**
      * Persist one incoming direct message from [message.fromBareJid][XmppIncomingMessage.fromBareJid]
      * on [networkId]'s live session.
      *
@@ -149,15 +189,14 @@ class XmppProcessor @Inject constructor(
      * display name arrives with roster support). Two networks sharing an identical bare JID stay
      * separate conversations because every buffer/alias lookup here is scoped by [networkId].
      *
-     * Dedup/alias identity: [XmppIncomingMessage.stanzaId] becomes the canonical event's `msgid`, so
-     * [CanonicalTimelineStore] derives an [io.github.trevarj.motd.data.db.EventAliasNamespace.MSGID]
-     * alias from it exactly like an IRC `msgid` — the rollout doc's "generic backend-scoped identity"
-     * direction rather than a protocol-named `XMPP_MSGID` alias. A stanza id is sender-supplied, not
-     * archive-assigned (no XMPP MAM/XEP-0359 stanza-id in this slice), which matches the MSGID
-     * namespace's existing IRC semantics (also sender/server-assigned per-message, not a paging
-     * cursor) rather than requiring a new namespace. Redelivery with the same stanza id therefore
-     * dedups to the same row; a message with no stanza id lands with `msgid = null` and no alias,
-     * exactly like an IRC message with no msgid.
+     * Dedup/alias identity: [scopedMsgid] of [XmppIncomingMessage.stanzaId] becomes the canonical
+     * event's `msgid`, so [CanonicalTimelineStore] derives an
+     * [io.github.trevarj.motd.data.db.EventAliasNamespace.MSGID] alias from it exactly like an IRC
+     * `msgid` — the rollout doc's "generic backend-scoped identity" direction rather than a
+     * protocol-named `XMPP_MSGID` alias. See [scopedMsgid]'s KDoc for why the raw stanza id is never
+     * used as-is. Redelivery with the same stanza id from the same peer therefore still dedups to
+     * the same row; a message with no stanza id lands with `msgid = null` and no alias, exactly like
+     * an IRC message with no msgid.
      */
     suspend fun onIncomingDirectMessage(
         networkId: Long,
@@ -165,18 +204,13 @@ class XmppProcessor @Inject constructor(
         connectionGeneration: Long?,
     ) {
         if (message.isCarbonOrSelf) return // carbons/self-echo land with a later slice
-        val buffer = bufferStore.getOrCreate(
-            networkId = networkId,
-            normalizedName = message.fromBareJid,
-            displayName = message.fromBareJid,
-            type = BufferType.QUERY,
-        )
+        val buffer = ensureQueryBuffer(networkId, message.fromBareJid)
         val delayStamp = message.delayStampMillis
         val timeProvenance = if (delayStamp != null) TimeProvenance.SERVER_TAG else TimeProvenance.LOCAL_CLOCK
         val serverTime = delayStamp ?: System.currentTimeMillis()
         val event = TimelineEventEntity(
             bufferId = buffer.id,
-            msgid = message.stanzaId,
+            msgid = message.stanzaId?.let { scopedMsgid(it, message.fromBareJid) },
             serverTime = serverTime,
             sender = message.fromBareJid,
             kind = MessageKind.PRIVMSG,
@@ -221,12 +255,7 @@ class XmppProcessor @Inject constructor(
      */
     suspend fun onChatState(networkId: Long, state: XmppIncomingChatState) {
         if (state.isCarbonOrSelf) return // carbons/self-echo land with a later slice
-        val buffer = bufferStore.getOrCreate(
-            networkId = networkId,
-            normalizedName = state.fromBareJid,
-            displayName = state.fromBareJid,
-            type = BufferType.QUERY,
-        )
+        val buffer = ensureQueryBuffer(networkId, state.fromBareJid)
         val seamState = when (state.state) {
             XmppChatState.COMPOSING -> "active"
             XmppChatState.PAUSED -> "paused"
@@ -241,10 +270,12 @@ class XmppProcessor @Inject constructor(
      * idiom [onIncomingDirectMessage] uses for a QUERY, keyed by [XmppIncomingMucMessage.roomBareJid]
      * instead of a peer's bare JID.
      *
-     * Dedup/alias identity mirrors [onIncomingDirectMessage] exactly:
+     * Dedup/alias identity mirrors [onIncomingDirectMessage] exactly: [scopedMsgid] of
      * [XmppIncomingMucMessage.stanzaId] becomes the canonical event's `msgid` (an MSGID alias, not a
-     * new namespace), so redelivery of the same stanza id dedups to one row and a stanza with no id
-     * lands with `msgid = null` and no alias.
+     * new namespace) — scoped to the room *and* occupant here (see [scopedMsgid]'s KDoc), since a
+     * MUC's occupants are exactly as likely to reuse a common id as two unrelated DM peers are. A
+     * redelivery of the same stanza id from the same occupant in the same room still dedups to one
+     * row; a stanza with no id lands with `msgid = null` and no alias.
      *
      * [XmppIncomingMucMessage.isSelf] — computed by the session from its own in-room nickname, never
      * re-derived here — becomes the canonical event's `isSelf` directly: an MUC reflects every
@@ -276,7 +307,7 @@ class XmppProcessor @Inject constructor(
         val serverTime = delayStamp ?: System.currentTimeMillis()
         val event = TimelineEventEntity(
             bufferId = buffer.id,
-            msgid = message.stanzaId,
+            msgid = message.stanzaId?.let { scopedMsgid(it, message.roomBareJid, message.occupantNick) },
             serverTime = serverTime,
             sender = message.occupantNick,
             kind = MessageKind.PRIVMSG,
@@ -434,4 +465,44 @@ class XmppProcessor @Inject constructor(
         displayName = roomBareJid,
         type = BufferType.CHANNEL,
     )
+
+    /**
+     * Find-or-create the QUERY buffer for a DM peer's bare JID — the same find-or-create idiom
+     * [onIncomingDirectMessage] and [onChatState] both need (a bare JID is already a stable,
+     * network-scoped identity, unlike an IRC nick, so unlike [ensureMucBuffer]'s IRC counterpart
+     * there is no casemapping normalization step here).
+     *
+     * Not `private`: [XmppConnectionManager.ensureQueryBuffer] calls this directly (review fix —
+     * that seam method used to be an inert `error()` stub) so `/msg`, `/query`, "Message user", and
+     * any other shared-UI caller reach the identical find-or-create path this processor already
+     * uses for a live incoming DM/chat-state, rather than a second, duplicated implementation.
+     */
+    suspend fun ensureQueryBuffer(networkId: Long, bareJid: String) = bufferStore.getOrCreate(
+        networkId = networkId,
+        normalizedName = bareJid,
+        displayName = bareJid,
+        type = BufferType.QUERY,
+    )
+
+    /**
+     * Find-or-create the per-network SERVER buffer (review fix — [XmppConnectionManager.ensureServerBuffer]
+     * used to be an inert `error()` stub, reached by the drawer's "Server messages" entry for every
+     * network including XMPP ones). Keyed by the shared, casemapping-invariant
+     * [SERVER_BUFFER_NAME] convention every backend's
+     * [io.github.trevarj.motd.service.ConnectionManager.ensureServerBuffer] uses (`:irc`
+     * `ConnectionManagerImpl.ensureServerBuffer`'s identical `"*"` key) rather than a second,
+     * XMPP-invented one. [displayName] is caller-resolved (the network row's own name) since this
+     * processor has no reason to hold a `NetworkDao` reference beyond this one call site.
+     */
+    suspend fun ensureServerBuffer(networkId: Long, displayName: String) = bufferStore.getOrCreate(
+        networkId = networkId,
+        normalizedName = SERVER_BUFFER_NAME,
+        displayName = displayName,
+        type = BufferType.SERVER,
+    )
+
+    private companion object {
+        /** [scopedMsgid]'s join separator between authority component(s) and the raw stanza id. */
+        const val MSGID_AUTHORITY_SEPARATOR = "\u0000"
+    }
 }

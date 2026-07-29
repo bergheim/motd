@@ -16,6 +16,7 @@ import io.github.trevarj.motd.service.ImmediateWireAcceptance
 import io.github.trevarj.motd.service.RosterLoadState
 import io.github.trevarj.motd.service.SendAcceptance
 import io.github.trevarj.motd.service.SendRejectionReason
+import io.github.trevarj.motd.service.resolveAndAdvanceCurrentReadTarget
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
@@ -60,8 +61,10 @@ private fun XmppSessionState.toConnectionState(generation: Long): ConnectionStat
  * Slice X5 adds MUC join/leave/occupant-refresh ([joinChannel]/[partChannel]/[requestMembers]) and
  * MUC member-load state ([memberLoadStates]). Slice X6 adds durable pending sends and send
  * acknowledgements ([sendMessage]/[retryMessage]/[writeAndTrack]) and 1:1 typing ([sendTyping]).
- * Everything else — react, query/server buffers, markRead, history, cert prompts — is still out of
- * scope and returns the same inert rejection/no-op
+ * A later review pass added [ensureQueryBuffer]/[ensureServerBuffer] (shared UI's `/msg`, `/query`,
+ * "Message user", and "Server messages" reach every backend through these) and [markRead] (the
+ * backend-neutral local read-anchor advance). React, history, and cert prompts remain out of scope
+ * and return the same inert rejection/no-op
  * [InertConnectionManager][io.github.trevarj.motd.backend.InertConnectionManager] uses, pending
  * later slices.
  *
@@ -92,6 +95,16 @@ class XmppConnectionManager @Inject constructor(
 ) : ConnectionManager {
 
     private val actors = ConcurrentHashMap<Long, XmppAccountActor>()
+
+    /**
+     * The [XmppAccountEntity] fingerprint ([xmppAccountFingerprint]) each live [actors] entry was
+     * built from (review fix — mirrors `:irc` `ConnectionRegistry`'s per-actor `fingerprint` +
+     * `isConfigurationFailure`-gated rebuild). [XmppAccountActor] captures its `account` parameter
+     * at construction and never re-reads Room, so without this an edited JID/password/resource
+     * would leave every live and even fatally-parked actor running forever on stale credentials —
+     * [ensureActorLocked] is the sole writer/reader pairing that keeps this in sync with [actors].
+     */
+    private val actorFingerprints = ConcurrentHashMap<Long, String>()
 
     /** Sticky manual override of autoConnect: true = force-connect, false = force-disconnect,
      *  absent = follow the row's autoConnect flag. Survives reconcile emissions, cleared by stopAll. */
@@ -150,6 +163,7 @@ class XmppConnectionManager @Inject constructor(
             reconcileJob = null
             for (actor in actors.values) actor.stopAndJoin()
             actors.clear()
+            actorFingerprints.clear()
             userIntents.clear()
             _connectionStates.value = emptyMap()
             _memberLoadStates.value = emptyMap()
@@ -162,12 +176,12 @@ class XmppConnectionManager @Inject constructor(
         userIntents[networkId] = true
         mutex.withLock {
             val existing = actors[networkId]
-            if (existing != null && existing.isAlive) return@withLock
-            // Manual connect overrides even a fatal (auth) park: the user may have fixed creds.
-            existing?.stopAndJoin()
-            actors.remove(networkId)
-            if (existing != null) clearMemberLoadStatesForNetwork(networkId)
-            ensureActorLocked(row)
+            // Manual connect overrides even a fatal (auth) park or stale credentials: the user may
+            // have fixed creds, or just edited them (review fix — see [actorFingerprints]'s KDoc). A
+            // live, healthy actor whose fingerprint is unchanged is left alone; [ensureActorLocked]
+            // decides that from the fresh account row, so a live-but-edited actor still rebuilds here
+            // instead of only reconcile ever noticing.
+            ensureActorLocked(row, forceRebuild = existing == null || !existing.isAlive)
         }
     }
 
@@ -177,6 +191,7 @@ class XmppConnectionManager @Inject constructor(
         userIntents[networkId] = false
         mutex.withLock {
             actors.remove(networkId)?.stopAndJoin()
+            actorFingerprints.remove(networkId)
             _connectionStates.update { it - networkId }
             clearMemberLoadStatesForNetwork(networkId)
         }
@@ -194,28 +209,57 @@ class XmppConnectionManager @Inject constructor(
         reconcile(observeXmppNetworks().first())
     }
 
+    /**
+     * Re-drive the wanted set. Every wanted row — including one already tracked in [actors] —
+     * always goes through [ensureActorLocked], which is what notices a credential edit even for a
+     * row this manager already believes is connected (review fix: the previous
+     * `actors.containsKey(row.id)` skip meant a JID/password/resource edit, or even a corrected
+     * password after a fatal auth park, was never picked up until the user found some other way to
+     * fully disconnect and reconnect). A fatal park with *unchanged* credentials is still never
+     * revived here — [ensureActorLocked] only rebuilds on a fingerprint change, preserving the
+     * existing "only an explicit [connect] retries an unchanged fatal park" contract.
+     */
     private suspend fun reconcile(rows: List<NetworkEntity>) {
         mutex.withLock {
             val wantedIds = rows.filter(::wantConnected).mapTo(mutableSetOf()) { it.id }
             for (id in actors.keys.toList()) {
                 if (id !in wantedIds) {
                     actors.remove(id)?.stopAndJoin()
+                    actorFingerprints.remove(id)
                     _connectionStates.update { it - id }
                     clearMemberLoadStatesForNetwork(id)
                 }
             }
             for (row in rows) {
-                if (row.id !in wantedIds || actors.containsKey(row.id)) continue
+                if (row.id !in wantedIds) continue
                 ensureActorLocked(row)
             }
         }
     }
 
-    /** Create, register, and start an actor for [row]. Caller must hold [mutex]. A missing detail
-     *  row (corrupt/deleted `xmpp_accounts` row) is skipped rather than crashing the whole reconcile. */
-    private suspend fun ensureActorLocked(row: NetworkEntity) {
-        if (actors.containsKey(row.id)) return
+    /**
+     * Create an actor for [row], or — when [forceRebuild] or the persisted [XmppAccountEntity] no
+     * longer matches the fingerprint the existing actor was built from ([xmppAccountFingerprint]) —
+     * tear down the stale one first. Caller must hold [mutex]. A missing detail row (corrupt/deleted
+     * `xmpp_accounts` row) is skipped rather than crashing the whole reconcile.
+     *
+     * Mirrors `:irc` `ConnectionRegistry.ensureActor`'s fingerprint-triggered rebuild (see
+     * [actorFingerprints]'s KDoc) rather than inventing a new mechanism: [reconcile] calls this with
+     * [forceRebuild] = false for every wanted row (fingerprint-diff-only, so an unchanged fatal park
+     * is still left alone), while [connect] passes true whenever the existing actor is absent or
+     * dead (an explicit user action always overrides a fatal park, unchanged credentials or not).
+     */
+    private suspend fun ensureActorLocked(row: NetworkEntity, forceRebuild: Boolean = false) {
         val account = db.xmppAccountDao().byNetwork(row.id) ?: return
+        val fingerprint = xmppAccountFingerprint(account)
+        val existing = actors[row.id]
+        if (existing != null) {
+            if (!forceRebuild && actorFingerprints[row.id] == fingerprint) return
+            existing.stopAndJoin()
+            actors.remove(row.id)
+            actorFingerprints.remove(row.id)
+            clearMemberLoadStatesForNetwork(row.id)
+        }
         val actor = XmppAccountActor(
             networkId = row.id,
             account = account,
@@ -237,6 +281,7 @@ class XmppConnectionManager @Inject constructor(
             onRosterLoad = processor::onRosterLoad,
         )
         actors[row.id] = actor
+        actorFingerprints[row.id] = fingerprint
         actor.start()
     }
 
@@ -245,11 +290,43 @@ class XmppConnectionManager @Inject constructor(
      * ever loses entries here — a non-Ready transition ("the session drops", in [memberLoadStates]'
      * KDoc terms) means every one of this network's CHANNEL buffers stops receiving MUC presence, so
      * their member-list state can no longer be trusted. [joinChannel]/[onMucOccupant]/[requestMembers]
-     * are what (re-)populate an entry once a room is actually joined again.
+     * (and, for a *reconnect*, [rejoinPersistedChannels] below) are what (re-)populate an entry once
+     * a room is actually joined again.
      */
     private suspend fun publishState(networkId: Long, state: XmppSessionState, generation: Long) {
         _connectionStates.update { it + (networkId to state.toConnectionState(generation)) }
-        if (state !is XmppSessionState.Ready) clearMemberLoadStatesForNetwork(networkId)
+        if (state is XmppSessionState.Ready) {
+            rejoinPersistedChannels(networkId)
+        } else {
+            clearMemberLoadStatesForNetwork(networkId)
+        }
+    }
+
+    /**
+     * Rejoin every CHANNEL buffer whose durable self-join state (`BufferEntity.joined`) is still
+     * true once a fresh session reaches Ready (review fix; chosen over marking those buffers
+     * unjoined/disabling their composer, mirroring `:irc` `ConnectionManagerImpl.onReady`'s
+     * identical "a fresh direct socket has no channel membership" JOIN restore for its own DIRECT
+     * rows). [XmppAccountActor] creates a brand-new [XmppSession] on every (re)connect attempt, so
+     * without this, a session that reconnects after a drop has no MUC room membership at all even
+     * though Room still marks these buffers joined: [SmackXmppSession.sendMessage] decides "is this
+     * a room" purely from *its own* in-session `roomListeners` map (empty on every fresh session,
+     * see that class's KDoc), so it would silently fall through and address the room as a
+     * one-to-one chat stanza instead of a groupchat one.
+     *
+     * Each rejoin runs on [scope] rather than inline here, so a slow/unresponsive room (a MUC join
+     * can wait up to a minute for a cold gateway, see [SmackXmppSession.joinRoom]'s KDoc) can never
+     * block this state collector from noticing the *next* state transition — the same
+     * fire-and-move-on shape `:irc`'s own JOIN restore already has (a one-way wire write there; a
+     * backgrounded [joinChannel] call here, since a MUC join has no such fire-and-forget primitive
+     * of its own). Reuses [joinChannel] itself — the exact same buffer-resolve/LOADING-publish/
+     * `session.joinRoom` sequence a user-initiated join already runs — rather than a second,
+     * duplicated rejoin path.
+     */
+    private suspend fun rejoinPersistedChannels(networkId: Long) {
+        for (roomJid in db.bufferDao().joinedChannelNames(networkId)) {
+            scope.launch { joinChannel(networkId, roomJid) }
+        }
     }
 
     /**
@@ -539,16 +616,39 @@ class XmppConnectionManager @Inject constructor(
         session.refreshOccupants(buffer.name)
     }
 
-    // arrives with slice X4/X6
+    /**
+     * Find-or-create the QUERY buffer for [nick] (a bare JID here, not an IRC nick — the seam's
+     * shared vocabulary; see [ConnectionManager.ensureQueryBuffer]'s KDoc). Review fix: shared UI
+     * (`/msg`, `/query`, "Message user") reaches this for XMPP networks the exact same way it does
+     * for IRC ones, so this used to `error()` from viewModelScope instead of opening a buffer.
+     * Delegates to [XmppProcessor.ensureQueryBuffer] — the identical find-or-create idiom an
+     * incoming DM/chat-state already uses — rather than a second, duplicated implementation.
+     */
     override suspend fun ensureQueryBuffer(networkId: Long, nick: String): Long =
-        error("XMPP buffers are not implemented yet (docs/backend-neutral-xmpp-rollout.md)")
+        processor.ensureQueryBuffer(networkId, nick).id
 
-    // arrives with slice X4/X6
+    /**
+     * Find-or-create the per-network SERVER buffer (review fix; see [ensureQueryBuffer]'s KDoc —
+     * the drawer's "Server messages" entry reaches this for XMPP networks too). Mirrors `:irc`
+     * `ConnectionManagerImpl.ensureServerBuffer`'s displayName fallback (the network row's own
+     * name, else "Server") through [XmppProcessor.ensureServerBuffer].
+     */
     override suspend fun ensureServerBuffer(networkId: Long): Long =
-        error("XMPP buffers are not implemented yet (docs/backend-neutral-xmpp-rollout.md)")
+        processor.ensureServerBuffer(networkId, db.networkDao().byId(networkId)?.name ?: "Server").id
 
-    // arrives with slice X4/X6
-    override suspend fun markRead(bufferId: Long, anchor: TimelineAnchor) = Unit
+    /**
+     * Advance the local read anchor through the exact shared DAO path `:irc`
+     * [io.github.trevarj.motd.service.ConnectionManagerImpl.markRead] uses
+     * ([io.github.trevarj.motd.service.resolveAndAdvanceCurrentReadTarget]) — review fix: this used
+     * to be a no-op, so XMPP conversations never cleared unread and "mark all read" did nothing for
+     * them. Read-anchor advancement is backend-neutral (docs/backend-neutral-xmpp-rollout.md); only
+     * IRC's own wire MARKREAD send (and its read-marker-capability/authoritative-boundary gating)
+     * is IRC-specific, and is deliberately not mirrored here — XMPP has no wire read-marker in this
+     * baseline (XEP-0333 is in the deferred cross-device list), so there is nothing to send.
+     */
+    override suspend fun markRead(bufferId: Long, anchor: TimelineAnchor) {
+        resolveAndAdvanceCurrentReadTarget(db, bufferId, anchor)
+    }
 
     // arrives with slice X4/X6
     override suspend fun evaluatePushMode() = Unit
@@ -569,3 +669,16 @@ class XmppConnectionManager @Inject constructor(
         const val SEND_TIMEOUT_MS = 30_000L
     }
 }
+
+/**
+ * Connection-affecting XMPP account fields, mirroring `:irc`'s
+ * [io.github.trevarj.motd.service.networkFingerprint] (review fix: "Make a credential change
+ * rebuild the actor... the IRC side solves this with a configuration fingerprint"). Only
+ * [XmppAccountEntity.jid]/[XmppAccountEntity.password]/[XmppAccountEntity.resource] are ever read
+ * by a live session ([SmackXmppSession]'s KDoc), so those three — and nothing else on the row —
+ * are exactly what a credential edit must be detected from. [XmppConnectionManager.ensureActorLocked]
+ * compares this against the fingerprint its live actor was built from and rebuilds on a mismatch,
+ * regardless of whether that actor is currently alive.
+ */
+internal fun xmppAccountFingerprint(account: XmppAccountEntity): String =
+    "${account.jid}:${account.password}:${account.resource}"

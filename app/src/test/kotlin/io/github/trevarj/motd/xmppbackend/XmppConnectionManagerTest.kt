@@ -10,6 +10,7 @@ import io.github.trevarj.motd.data.db.EventAliasNamespace
 import io.github.trevarj.motd.data.db.MotdDatabase
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
+import io.github.trevarj.motd.data.db.TimelineAnchor
 import io.github.trevarj.motd.data.db.XmppAccountEntity
 import io.github.trevarj.motd.service.ImmediateWireAcceptance
 import io.github.trevarj.motd.service.RosterLoadState
@@ -36,6 +37,15 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+
+/**
+ * Mirrors [XmppProcessor]'s private `scopedMsgid`/`MSGID_AUTHORITY_SEPARATOR` (review fix — see
+ * [XmppProcessorTest]'s copy of this same helper for the full rationale) without depending on that
+ * implementation detail directly. The separator is built from [Int.toChar] rather than typed as a
+ * literal escape so this file stays plain, unambiguous source text.
+ */
+private fun scopedMsgid(stanzaId: String, vararg authority: String): String =
+    (authority.toList() + stanzaId).joinToString(0.toChar().toString())
 
 /**
  * XmppConnectionManager unit tests (docs/backend-neutral-xmpp-rollout.md "PR 2"). Mirrors the
@@ -497,7 +507,10 @@ class XmppConnectionManagerTest {
 
         val rows = db.canonicalTimelineDao().eventsForRoom(buffer.id)
         val row = rows.single() // still exactly one row: the reflection enriches, never duplicates.
-        assertEquals(sent.messageId, row.msgid)
+        // msgid is scoped to its assigning authority (room + own occupant nick), not the raw stanza
+        // id verbatim; the LABEL-based reconciliation above is unaffected (it uses sent.messageId
+        // directly — see scopedMsgid's KDoc on why LABEL and MSGID differ here).
+        assertEquals(scopedMsgid(sent.messageId, roomJid, "me"), row.msgid)
         assertNull(row.pendingLabel)
         assertFalse(row.failed)
         assertTrue(row.isSelf)
@@ -570,7 +583,7 @@ class XmppConnectionManagerTest {
         assertEquals(failedRow.id, finalRow.id)
         assertNull(finalRow.pendingLabel)
         assertFalse(finalRow.failed)
-        assertEquals(secondLabel, finalRow.msgid)
+        assertEquals(scopedMsgid(secondLabel, roomJid, "me"), finalRow.msgid)
     }
 
     @Test
@@ -635,5 +648,230 @@ class XmppConnectionManagerTest {
         advanceUntilIdle()
 
         assertTrue(s1.sentChatStates.isEmpty())
+    }
+
+    /**
+     * A reply's `replyToMsgid` (carried for the shared reply-preview UI; see
+     * [XmppProcessor.persistOutgoingSend]'s KDoc) must show the SAME authority-scoped value already
+     * stored on the parent row, not the bare wire stanza id some other peer could also be using.
+     */
+    @Test
+    fun sendMessage_reply_carriesTheAuthorityScopedParentMsgid() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+        connectReady(s1)
+
+        s1.emit(XmppIncomingMessage(fromBareJid = peerJid, body = "original", stanzaId = "1", delayStampMillis = null))
+        advanceUntilIdle()
+        val buffer = requireNotNull(db.bufferDao().byName(nid, peerJid))
+        val original = db.canonicalTimelineDao().eventsForRoom(buffer.id).single()
+        assertEquals(scopedMsgid("1", peerJid), original.msgid)
+
+        val acceptance = manager.sendMessage(buffer.id, "a reply", replyToEventId = original.id)
+        advanceUntilIdle()
+
+        val accepted = acceptance as SendAcceptance.Accepted
+        val replyRow = db.canonicalTimelineDao().eventsForRoom(buffer.id).single { it.id == accepted.eventIds.single() }
+        assertEquals(original.id, replyRow.replyToEventId)
+        assertEquals(original.msgid, replyRow.replyToMsgid)
+    }
+
+    // -- ensureQueryBuffer / ensureServerBuffer (review fix: these used to error() from
+    // viewModelScope for every XMPP network instead of opening a buffer — /msg, /query, "Message
+    // user", and the drawer's "Server messages" entry all reach these through ConnectionManager). --
+
+    @Test
+    fun ensureQueryBuffer_findsOrCreatesTheQueryBufferForABareJid() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+
+        val bufferId = manager.ensureQueryBuffer(nid, peerJid)
+        advanceUntilIdle()
+
+        val buffer = requireNotNull(db.bufferDao().rawById(bufferId))
+        assertEquals(BufferType.QUERY, buffer.type)
+        assertEquals(peerJid, buffer.displayName)
+
+        // Idempotent: a second call resolves the identical buffer rather than creating another one.
+        assertEquals(bufferId, manager.ensureQueryBuffer(nid, peerJid))
+    }
+
+    @Test
+    fun ensureQueryBuffer_resolvesTheSameBufferAnIncomingDmAlreadyCreated() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+        connectReady(s1)
+
+        s1.emit(XmppIncomingMessage(fromBareJid = peerJid, body = "hi", stanzaId = "1", delayStampMillis = null))
+        advanceUntilIdle()
+        val existing = requireNotNull(db.bufferDao().byName(nid, peerJid))
+
+        assertEquals(existing.id, manager.ensureQueryBuffer(nid, peerJid))
+    }
+
+    @Test
+    fun ensureServerBuffer_findsOrCreatesTheServerBuffer_namedAfterTheNetwork() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+
+        val bufferId = manager.ensureServerBuffer(nid)
+        advanceUntilIdle()
+
+        val buffer = requireNotNull(db.bufferDao().rawById(bufferId))
+        assertEquals(BufferType.SERVER, buffer.type)
+        assertEquals("glvortex", buffer.displayName) // bootstrap()'s network row is named "glvortex".
+
+        // Idempotent, exactly like ensureQueryBuffer above.
+        assertEquals(bufferId, manager.ensureServerBuffer(nid))
+    }
+
+    // -- MUC rejoin after reconnect (review fix: a session drop used to leave Room's `joined = true`
+    // buffers with no live room membership at all on the replacement session, since a fresh
+    // XmppSession/SmackXmppSession always starts with no rooms joined). --
+
+    @Test
+    fun reconnect_rejoinsPersistedJoinedChannels_onTheReplacementSession() = runTest {
+        val s1 = FakeXmppSession()
+        val s2 = FakeXmppSession()
+        bootstrap(listOf(s1, s2))
+        connectReady(s1)
+        manager.joinChannel(nid, roomJid)
+        advanceUntilIdle()
+        s1.emitOccupantSnapshot(roomJid, listOf("me", "alice"))
+        advanceUntilIdle()
+        val buffer = requireNotNull(db.bufferDao().byName(nid, roomJid))
+        assertTrue(requireNotNull(db.bufferDao().rawById(buffer.id)).joined)
+        assertEquals(listOf(roomJid to "me"), s1.joinRoomCalls)
+
+        // An async drop after Ready (e.g. the transport listener firing) — the actor reconnects with
+        // a brand-new session, which (like a real SmackXmppSession) starts with no room membership.
+        s1.publish(XmppSessionState.Failed("connection reset", fatal = false))
+        advanceUntilIdle()
+        s2.completeConnect(XmppSessionState.Ready(selfJid))
+        advanceUntilIdle()
+
+        // The new session must have actually rejoined the room — not just inherited Room's stale
+        // joined=true — so a subsequent send is addressed as a groupchat, not silently misrouted to
+        // a one-to-one chat stanza (see SmackXmppSession.sendMessage's own-session roomListeners check).
+        assertEquals(listOf(roomJid to "me"), s2.joinRoomCalls)
+    }
+
+    @Test
+    fun reconnect_doesNotRejoinAChannelThatWasExplicitlyLeftBeforeTheDrop() = runTest {
+        val s1 = FakeXmppSession()
+        val s2 = FakeXmppSession()
+        bootstrap(listOf(s1, s2))
+        connectReady(s1)
+        manager.joinChannel(nid, roomJid)
+        advanceUntilIdle()
+        s1.emitOccupantSnapshot(roomJid, listOf("me", "alice"))
+        advanceUntilIdle()
+        val buffer = requireNotNull(db.bufferDao().byName(nid, roomJid))
+
+        manager.partChannel(buffer.id)
+        advanceUntilIdle()
+        assertFalse(requireNotNull(db.bufferDao().rawById(buffer.id)).joined)
+
+        s1.publish(XmppSessionState.Failed("connection reset", fatal = false))
+        advanceUntilIdle()
+        s2.completeConnect(XmppSessionState.Ready(selfJid))
+        advanceUntilIdle()
+
+        assertTrue(s2.joinRoomCalls.isEmpty())
+    }
+
+    // -- credential fingerprint (review fix: XmppAccountActor captures its XmppAccountEntity at
+    // construction and never re-reads Room, and reconcile used to skip every id already tracked in
+    // `actors`, so an edited JID/password/resource — even one that fixed a fatal auth failure — was
+    // never picked up until something fully disconnected and reconnected the actor from scratch). --
+
+    @Test
+    fun reconcile_revivesAFatallyParkedActor_onceThePersistedPasswordIsCorrected() = runTest {
+        val s1 = FakeXmppSession()
+        val s2 = FakeXmppSession()
+        bootstrap(listOf(s1, s2))
+        manager.startAll()
+        advanceUntilIdle()
+        assertEquals(1, factory.created.size)
+
+        s1.completeConnect(XmppSessionState.Failed(XMPP_AUTH_FAILURE_REASON, fatal = true))
+        advanceUntilIdle()
+        assertTrue((manager.connectionStates.value[nid] as ConnectionState.Failed).fatal)
+
+        // Reconcile alone must never revive an UNCHANGED fatal park (pre-existing, tested behavior —
+        // see fatalAuthFailure_parksWithoutRetry above).
+        manager.reconnectStale()
+        advanceUntilIdle()
+        assertEquals(1, factory.created.size)
+
+        // The user fixes the password via the edit screen. XmppAccountRepository.updateAccount writes
+        // both the network row and the xmpp_accounts row in one transaction, so this mirrors that.
+        db.xmppAccountDao().upsert(XmppAccountEntity(networkId = nid, jid = selfJid, password = "correct-password"))
+        db.networkDao().update(requireNotNull(db.networkDao().byId(nid)))
+        advanceUntilIdle()
+
+        // The credential change alone, through the always-running reconcile loop, must revive the
+        // parked actor with the corrected password — the user has no separate "reconnect" control to
+        // find (XmppAccountViewModel.save's edit path never calls ConnectionManager.connect).
+        assertEquals(2, factory.created.size)
+        assertEquals("correct-password", factory.accountsUsed[1].password)
+
+        s2.completeConnect(XmppSessionState.Ready(selfJid))
+        advanceUntilIdle()
+        assertTrue(manager.connectionStates.value[nid] is ConnectionState.Ready)
+    }
+
+    @Test
+    fun connect_rebuildsAnAlreadyAliveActor_whenCalledAfterAPasswordEdit() = runTest {
+        val s1 = FakeXmppSession()
+        val s2 = FakeXmppSession()
+        bootstrap(listOf(s1, s2))
+        manager.connect(nid)
+        advanceUntilIdle()
+        s1.completeConnect(XmppSessionState.Ready(selfJid))
+        advanceUntilIdle()
+        assertEquals(1, factory.created.size)
+
+        // Calling connect() again with nothing changed must be a no-op: still alive, same fingerprint.
+        manager.connect(nid)
+        advanceUntilIdle()
+        assertEquals(1, factory.created.size)
+        assertEquals(0, s1.disconnectCalls)
+
+        db.xmppAccountDao().upsert(XmppAccountEntity(networkId = nid, jid = selfJid, password = "new-password"))
+        advanceUntilIdle()
+
+        // Still alive on the OLD credentials here: only connect() (not startAll()'s reconcile loop)
+        // is in play in this test, and the actor was never told anything changed. An explicit
+        // reconnect must still notice the edit rather than leaving it connected on stale creds.
+        manager.connect(nid)
+        advanceUntilIdle()
+
+        assertEquals(2, factory.created.size)
+        assertEquals("new-password", factory.accountsUsed[1].password)
+        assertEquals(1, s1.disconnectCalls) // the stale actor was actually torn down, not just replaced.
+    }
+
+    // -- markRead (review fix: this used to be a no-op, so XMPP conversations never cleared unread
+    // and "mark all read" did nothing for them). --
+
+    @Test
+    fun markRead_advancesTheLocalReadAnchor_forAnIncomingMessage() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+        connectReady(s1)
+
+        s1.emit(XmppIncomingMessage(fromBareJid = peerJid, body = "hi", stanzaId = "1", delayStampMillis = null))
+        advanceUntilIdle()
+        val buffer = requireNotNull(db.bufferDao().byName(nid, peerJid))
+        val row = db.canonicalTimelineDao().eventsForRoom(buffer.id).single()
+        assertNull(db.bufferDao().observeById(buffer.id)?.localReadAnchorTime)
+
+        manager.markRead(buffer.id, TimelineAnchor(row.serverTime, row.id))
+        advanceUntilIdle()
+
+        val updated = requireNotNull(db.bufferDao().observeById(buffer.id))
+        assertEquals(row.serverTime, updated.localReadAnchorTime)
+        assertEquals(row.id, updated.localReadAnchorEventId)
     }
 }
