@@ -3,6 +3,7 @@ package io.github.trevarj.motd.service
 import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.backend.ProtocolCommands
 import io.github.trevarj.motd.backend.ReactionCapability
+import io.github.trevarj.motd.backend.RoomTargetSyntax
 import io.github.trevarj.motd.irc.client.HistoryAvailability
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 import io.github.trevarj.motd.data.db.TimelineAnchor
@@ -141,6 +142,31 @@ interface ConnectionManager {
      * [ProtocolCommands] for the exact operations and their behavior contract.
      */
     fun protocolCommands(networkId: Long): ProtocolCommands? = null
+
+    /**
+     * Optional per-network capability describing how free-form "join channel" user input maps onto
+     * this backend's own room-target wire syntax (docs/backend-neutral-xmpp-rollout.md capability
+     * list example "room-target syntax"; review fix — shared UI used to hardcode an IRC-shaped
+     * `#`-prefix transform itself, so entering a bare XMPP room JID like `room@conference.example.org`
+     * tried to join `#room@conference.example.org` instead). Independent of live connection state —
+     * unlike [protocolCommands]/[historyAvailability], a user should be able to type a join target
+     * whether or not the network happens to be connected right now. Null means the backend has no
+     * such transform and shared UI must use the trimmed input verbatim (XMPP's baseline: a bare room
+     * JID has no channel-name convention to add).
+     */
+    suspend fun roomTargetSyntax(networkId: Long): RoomTargetSyntax? = null
+
+    /**
+     * Whether this network's backend can browse/discover rooms at all (docs/backend-neutral-xmpp-rollout.md
+     * capability list example "room discovery"; review fix — shared UI's channel browser used to
+     * reach for an IRC-owned live-session accessor unconditionally, so opening it for an XMPP network
+     * always waited out its poll timeout and settled on a misleading "try again" error). Independent
+     * of live connection state — false means the backend has no such capability at all, never merely
+     * "not connected right now" (which shared UI already distinguishes through [connectionStates]).
+     * Default false; only a backend that actually implements discovery (IRC's LIST/ELIST) overrides
+     * this to true.
+     */
+    suspend fun supportsRoomDiscovery(networkId: Long): Boolean = false
 
     /** Start/stop the whole subsystem (invoked by service / delivery-mode changes). */
     suspend fun startAll()

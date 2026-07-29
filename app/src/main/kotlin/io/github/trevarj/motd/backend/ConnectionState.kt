@@ -35,3 +35,16 @@ sealed interface ConnectionState {
 
 /** Composer reaction sendability for one network, derived by its backend. */
 data class ReactionCapability(val canAdd: Boolean, val canRemoveOwn: Boolean)
+
+/**
+ * Optional per-network capability turning free-form, already-trimmed "join channel" user input into
+ * a backend's own wire-shaped room-join target for
+ * [io.github.trevarj.motd.service.ConnectionManager.joinChannel] (docs/backend-neutral-xmpp-rollout.md
+ * capability list example "room-target syntax"). Reached only through
+ * [io.github.trevarj.motd.service.ConnectionManager.roomTargetSyntax] — shared UI must never assume
+ * an IRC-shaped `#`-prefix convention itself; a null capability means the backend has no such
+ * transform and the input is used verbatim (XMPP room JIDs have no channel-name convention to add).
+ */
+fun interface RoomTargetSyntax {
+    fun targetFor(rawInput: String): String
+}

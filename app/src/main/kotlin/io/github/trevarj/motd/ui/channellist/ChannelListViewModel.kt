@@ -51,10 +51,13 @@ data class ChannelListUiState(
     /** Persisted joined names normalized with [identityRules] for channel-browser matching. */
     val joinedChannels: Set<String> = emptySet(),
     val joinError: String? = null,
+    /** From [ConnectionManager.supportsRoomDiscovery] (review fix, P2 finding); defaults `true` so
+     *  the pre-[start] synthetic state never flashes [ChannelBrowserAvailability.UNSUPPORTED]. */
+    val supportsDiscovery: Boolean = true,
 ) {
     val isReady: Boolean get() = connState is ConnectionState.Ready
     val availability: ChannelBrowserAvailability
-        get() = channelBrowserAvailability(initialized, isRoot, connState)
+        get() = channelBrowserAvailability(initialized, isRoot, connState, supportsDiscovery)
 }
 
 @HiltViewModel
@@ -76,19 +79,32 @@ class ChannelListViewModel @Inject constructor(
     private var activeFetchQuery: String? = null
     private var queuedFetchQuery: String? = null
 
-    /** Idempotent entry point: mirrors connection state and auto-fetches once Ready. */
+    /**
+     * Idempotent entry point: mirrors connection state and auto-fetches once Ready. Checks
+     * [ConnectionManager.supportsRoomDiscovery] first (review fix, P2 finding) and settles
+     * immediately on [ChannelBrowserAvailability.UNSUPPORTED] — `initialized = true` alongside it, so
+     * the screen does not get stuck showing [ChannelBrowserAvailability.INITIALIZING] forever — for a
+     * backend with no such capability, never reaching the IRC-owned [ircSessions] accessor or
+     * [fetch]'s poll-and-timeout at all.
+     */
     fun start() {
         if (started) return
         started = true
         viewModelScope.launch {
             val network = networkRepository.networkById(networkId)
+            val supportsDiscovery = connectionManager.supportsRoomDiscovery(networkId)
             _state.value = _state.value.copy(
                 networkName = network?.name.orEmpty(),
                 isRoot = network?.role == NetworkRole.BOUNCER_ROOT,
+                supportsDiscovery = supportsDiscovery,
+                initialized = true,
             )
+            if (!supportsDiscovery) return@launch
             connectionManager.connectionStates.collect { states ->
-                // Live-session freshness read via the IRC-owned accessor; replaced by a neutral
-                // room-discovery capability with the XMPP branch (docs/backend-neutral-xmpp-rollout.md).
+                // Live-session freshness read via the IRC-owned accessor. Reachable only when
+                // supportsDiscovery is true (review fix — see start()'s KDoc): [ircSessions] itself
+                // stays IRC-owned, not neutralized, but a backend with no room-discovery capability
+                // now never reaches this collector, let alone this accessor, at all.
                 val rawClientState = ircSessions.sessionFor(networkId)?.state?.value
                 val clientState = rawClientState?.toConnectionState()
                 val rules = connectionManager.liveIdentityRules(networkId)

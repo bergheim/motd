@@ -197,8 +197,16 @@ class ChatListViewModel @Inject constructor(
         }
     }
 
-    fun joinChannel(networkId: Long, channel: String) = viewModelScope.launch {
-        connectionManager.joinChannel(networkId, channel)
+    /**
+     * [rawInput] is the trimmed text the user typed in [NewConversationSheet]'s "join channel" tab —
+     * review fix: that shared composable used to apply an IRC-shaped `"#$input"` transform itself
+     * before this method ever saw it, so entering a bare XMPP room JID tried to join a `#`-prefixed
+     * target instead. [ConnectionManager.roomTargetSyntax] supplies whatever backend-specific
+     * transform applies (IRC's `#`-prefix; XMPP has none, so a null capability means "use verbatim").
+     */
+    fun joinChannel(networkId: Long, rawInput: String) = viewModelScope.launch {
+        val target = connectionManager.roomTargetSyntax(networkId)?.targetFor(rawInput) ?: rawInput
+        connectionManager.joinChannel(networkId, target)
     }
 
     fun acceptInvitation(messageId: Long) = viewModelScope.launch {

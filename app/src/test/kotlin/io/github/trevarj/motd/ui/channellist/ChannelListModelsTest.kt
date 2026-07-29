@@ -102,6 +102,25 @@ class ChannelListModelsTest {
         )
     }
 
+    /**
+     * Review fix (P2 finding): a backend with no room-discovery capability at all (XMPP's baseline)
+     * must settle on [ChannelBrowserAvailability.UNSUPPORTED] even once Ready, rather than presenting
+     * [ChannelBrowserAvailability.READY] and letting the fetch pipeline poll an IRC-owned accessor
+     * that backend never registers with.
+     */
+    @Test
+    fun `browser presents unsupported for a backend with no room-discovery capability`() {
+        assertEquals(
+            ChannelBrowserAvailability.UNSUPPORTED,
+            channelBrowserAvailability(true, false, ConnectionState.Ready("me"), supportsDiscovery = false),
+        )
+        // The default (omitted) parameter preserves every existing 3-arg caller's behavior.
+        assertEquals(
+            ChannelBrowserAvailability.READY,
+            channelBrowserAvailability(true, false, ConnectionState.Ready("me")),
+        )
+    }
+
     @Test
     fun `ready server without ELIST still auto-fetches locally bounded popular channels`() {
         assertEquals(

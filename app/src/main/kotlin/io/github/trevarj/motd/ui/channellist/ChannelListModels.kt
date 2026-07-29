@@ -29,18 +29,31 @@ fun channelBrowserConnectionState(
 enum class ChannelBrowserAvailability {
     INITIALIZING,
     ROOT_UNAVAILABLE,
+    /** This network's backend has no room-discovery capability at all (review fix, P2 finding) —
+     *  never reached for IRC; XMPP is the first backend that settles here today. */
+    UNSUPPORTED,
     CONNECTING,
     READY,
     OFFLINE,
     FAILED,
 }
 
+/**
+ * [supportsDiscovery] defaults to `true` for source compatibility with every pre-existing 3-arg
+ * caller (review fix — P2 finding: XMPP's `ChannelListViewModel` used to reach for the IRC-owned
+ * `IrcSessions` accessor unconditionally, so opening the browser for an XMPP network always waited
+ * out a poll timeout). `false` — from [io.github.trevarj.motd.service.ConnectionManager.supportsRoomDiscovery] —
+ * settles the browser on [ChannelBrowserAvailability.UNSUPPORTED] immediately, before ever touching
+ * a protocol-specific session accessor.
+ */
 fun channelBrowserAvailability(
     initialized: Boolean,
     isRoot: Boolean,
     connection: ConnectionState,
+    supportsDiscovery: Boolean = true,
 ): ChannelBrowserAvailability = when {
     !initialized -> ChannelBrowserAvailability.INITIALIZING
+    !supportsDiscovery -> ChannelBrowserAvailability.UNSUPPORTED
     isRoot -> ChannelBrowserAvailability.ROOT_UNAVAILABLE
     connection is ConnectionState.Ready -> ChannelBrowserAvailability.READY
     connection is ConnectionState.Connecting || connection is ConnectionState.Authenticating ->
