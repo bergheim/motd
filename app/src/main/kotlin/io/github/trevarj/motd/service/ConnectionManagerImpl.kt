@@ -464,8 +464,8 @@ class ConnectionManagerImpl @Inject constructor(
     private val _channelJoinOutcomes = MutableSharedFlow<ChannelJoinOutcome>(extraBufferCapacity = 16)
     override val channelJoinOutcomes: SharedFlow<ChannelJoinOutcome> = _channelJoinOutcomes.asSharedFlow()
 
-    private val _rosterStates = MutableStateFlow<Map<Long, RosterLoadState>>(emptyMap())
-    override val rosterStates: StateFlow<Map<Long, RosterLoadState>> = _rosterStates.asStateFlow()
+    private val _memberLoadStates = MutableStateFlow<Map<Long, RosterLoadState>>(emptyMap())
+    override val memberLoadStates: StateFlow<Map<Long, RosterLoadState>> = _memberLoadStates.asStateFlow()
     private val rosterRequests = java.util.concurrent.ConcurrentHashMap<Long, Deferred<Unit>>()
 
     private val _presenceStates = MutableStateFlow<Map<PresenceKey, PresenceState>>(emptyMap())
@@ -740,7 +740,7 @@ class ConnectionManagerImpl @Inject constructor(
             pushSuspendedIds.clear()
             rosterRequests.values.forEach { it.cancel() }
             rosterRequests.clear()
-            _rosterStates.value = emptyMap()
+            _memberLoadStates.value = emptyMap()
             monitoredTargets.clear()
             monitorInitialized.clear()
             monitorLocks.clear()
@@ -976,7 +976,7 @@ class ConnectionManagerImpl @Inject constructor(
         bufferStore.resolveChannelRoom(networkId, normalize(networkId, channel))
 
     private fun setRosterState(bufferId: Long, state: RosterLoadState) {
-        _rosterStates.update { it + (bufferId to state) }
+        _memberLoadStates.update { it + (bufferId to state) }
     }
 
     /** Publish one network's latest latency reading; a null [lag] clears it (#34). */
@@ -989,14 +989,14 @@ class ConnectionManagerImpl @Inject constructor(
     private suspend fun clearRoster(networkId: Long, channel: String) {
         bufferForChannel(networkId, channel)?.let { buffer ->
             rosterRequests.remove(buffer.id)?.cancel()
-            _rosterStates.update { it - buffer.id }
+            _memberLoadStates.update { it - buffer.id }
         }
     }
 
     private suspend fun invalidateRosters(networkId: Long) {
         val ids = bufferDao.channelIds(networkId).toSet()
         ids.forEach { rosterRequests.remove(it)?.cancel() }
-        _rosterStates.update { states ->
+        _memberLoadStates.update { states ->
             states + ids.associateWith { RosterLoadState.NOT_LOADED }
         }
     }
@@ -1826,7 +1826,7 @@ class ConnectionManagerImpl @Inject constructor(
         val buffer = bufferDao.observeById(bufferId) ?: return
         val canonicalBufferId = buffer.id
         if (buffer.type != BufferType.CHANNEL || !buffer.joined) return
-        if (!force && rosterStates.value[bufferId] == RosterLoadState.LOADED) return
+        if (!force && memberLoadStates.value[bufferId] == RosterLoadState.LOADED) return
         val client = clientFor(buffer.networkId) ?: run {
             setRosterState(bufferId, RosterLoadState.FAILED)
             return

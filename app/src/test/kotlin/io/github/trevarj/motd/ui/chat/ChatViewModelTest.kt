@@ -1130,7 +1130,7 @@ class ChatViewModelTest {
         override val connectionStates = MutableStateFlow(mapOf(networkId to state))
         override val presenceStates: StateFlow<Map<PresenceKey, PresenceState>> =
             MutableStateFlow(emptyMap())
-        override val rosterStates: StateFlow<Map<Long, RosterLoadState>> = MutableStateFlow(emptyMap())
+        override val memberLoadStates: StateFlow<Map<Long, RosterLoadState>> = MutableStateFlow(emptyMap())
         override val certPrompts = MutableStateFlow<List<CertPrompt>>(emptyList())
         override val reactionCapabilities: StateFlow<Map<Long, ReactionCapability>> =
             MutableStateFlow(reactionCapability?.let { mapOf(networkId to it) } ?: emptyMap())

@@ -345,7 +345,7 @@ class BackendContractTest {
             override fun dismissCertPrompt(prompt: CertPrompt) = Unit
         }
 
-        assertEquals(emptyMap<Long, RosterLoadState>(), bare.rosterStates.value)
+        assertEquals(emptyMap<Long, RosterLoadState>(), bare.memberLoadStates.value)
         assertEquals(emptyMap<PresenceKey, PresenceState>(), bare.presenceStates.value)
         assertEquals(emptyMap<Long, Long?>(), bare.lagStates.value)
         assertFalse(bare.serverPushAvailable.value)

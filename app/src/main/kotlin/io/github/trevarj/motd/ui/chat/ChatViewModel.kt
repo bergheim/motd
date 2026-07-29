@@ -508,10 +508,10 @@ class ChatViewModel @Inject constructor(
             membersJob = viewModelScope.launch {
                 combine(
                     bufferRepository.observeMembers(bufferId).distinctUntilChanged(),
-                    connectionManager.rosterStates,
+                    connectionManager.memberLoadStates,
                     operationalBufferId,
                     identityRules,
-                ) { members, rosterStates, roomId, rules -> Triple(members, rosterStates[roomId], rules) }
+                ) { members, memberLoadStates, roomId, rules -> Triple(members, memberLoadStates[roomId], rules) }
                 .distinctUntilChanged()
                 .collect { (members, rosterState, rules) ->
                     val authoritative = rosterState == RosterLoadState.LOADED

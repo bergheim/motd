@@ -54,7 +54,7 @@ internal fun rosterStateAfterNames(explicitRefreshInFlight: Boolean): RosterLoad
 internal fun rosterStateAfterExplicitRefresh(completed: Boolean): RosterLoadState =
     if (completed) RosterLoadState.LOADED else RosterLoadState.FAILED
 
-private val EMPTY_ROSTER_STATES: StateFlow<Map<Long, RosterLoadState>> = MutableStateFlow(emptyMap())
+private val EMPTY_MEMBER_LOAD_STATES: StateFlow<Map<Long, RosterLoadState>> = MutableStateFlow(emptyMap())
 private val EMPTY_PRESENCE_STATES: StateFlow<Map<PresenceKey, PresenceState>> = MutableStateFlow(emptyMap())
 private val EMPTY_LAG_STATES: StateFlow<Map<Long, Long?>> = MutableStateFlow(emptyMap())
 private val EMPTY_SERVER_PUSH: StateFlow<Boolean> = MutableStateFlow(false)
@@ -81,7 +81,12 @@ data class CertPrompt(
 interface ConnectionManager {
     /** Connection state per network row id, in the backend-neutral lifecycle vocabulary. */
     val connectionStates: StateFlow<Map<Long, ConnectionState>>
-    val rosterStates: StateFlow<Map<Long, RosterLoadState>> get() = EMPTY_ROSTER_STATES
+    /**
+     * Member-list load state per BUFFER row id — IRC channel NAMES, XMPP MUC occupants. Never
+     * keyed by network id: the map's keyspace is buffer ids across every backend, unioned by the
+     * composite (pinned after Branch-2 feedback, docs/backend-neutral-xmpp-rollout.md).
+     */
+    val memberLoadStates: StateFlow<Map<Long, RosterLoadState>> get() = EMPTY_MEMBER_LOAD_STATES
     val presenceStates: StateFlow<Map<PresenceKey, PresenceState>> get() = EMPTY_PRESENCE_STATES
     /** Latest PING/PONG round-trip latency (ms) per network id; null = unknown/disconnected (#34). */
     val lagStates: StateFlow<Map<Long, Long?>> get() = EMPTY_LAG_STATES
