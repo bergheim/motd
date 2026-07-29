@@ -457,7 +457,7 @@ internal class ConnectionRegistry(
         )
         _connectionActivity.value = ConnectionActivitySnapshot(
             states = immutableStates.mapValues { (networkId, state) ->
-                state.toConnectionState(generation = actors[networkId]?.generation ?: 0L)
+                state.toConnectionState(generation = actors[networkId]?.sessionSeq ?: 0L)
             },
             progressing = actors.mapValues { (_, actor) -> actor.isAlive },
             initializationComplete = initialReconcileComplete,

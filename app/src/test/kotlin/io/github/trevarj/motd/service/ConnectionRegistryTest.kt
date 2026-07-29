@@ -84,9 +84,10 @@ class ConnectionRegistryTest {
         assertTrue(activity.initializationComplete)
         assertTrue(activity.progressing.getValue(1))
         assertEquals(ConnectionState.Connecting, activity.states.getValue(1))
+        val sessionSeqs = registry.snapshot.value.actors.mapValues { (_, actor) -> actor.sessionSeq }
         assertEquals(
-            registry.connectionStates.value.mapValues { (_, state) ->
-                state.toConnectionState(generation)
+            registry.connectionStates.value.mapValues { (networkId, state) ->
+                state.toConnectionState(sessionSeqs[networkId] ?: 0L)
             },
             activity.states,
         )

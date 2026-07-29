@@ -19,8 +19,15 @@ sealed interface ConnectionState {
      * [generation] identifies this session instance: it changes whenever a new session is
      * established, so callers can detect reconnects without holding protocol session objects
      * (docs/backend-neutral-xmpp-rollout.md connection-generation boundary).
+     * [negotiationRevision] is an opaque value that changes whenever the session's negotiated
+     * feature set changes after Ready (late IRC CAP/ISUPPORT updates); observers of deduplicated
+     * seam flows re-pull capability contracts when it moves.
      */
-    data class Ready(val selfHandle: String, val generation: Long = 0) : ConnectionState
+    data class Ready(
+        val selfHandle: String,
+        val generation: Long = 0,
+        val negotiationRevision: Int = 0,
+    ) : ConnectionState
 
     /** [fatal] = do not auto-retry (e.g. failed authentication). */
     data class Failed(val reason: String, val fatal: Boolean) : ConnectionState

@@ -2374,15 +2374,6 @@ internal fun wantedNetworkIds(
         .map { it.id }
         .toSet()
 
-/** Maps the IRC adapter's wire lifecycle onto the backend-neutral seam vocabulary. */
-internal fun IrcClientState.toConnectionState(generation: Long = 0L): ConnectionState = when (this) {
-    IrcClientState.Disconnected -> ConnectionState.Disconnected
-    IrcClientState.Connecting -> ConnectionState.Connecting
-    IrcClientState.Registering -> ConnectionState.Authenticating
-    is IrcClientState.Ready -> ConnectionState.Ready(selfHandle = nick, generation = generation)
-    is IrcClientState.Failed -> ConnectionState.Failed(reason = reason, fatal = fatal)
-}
-
 /**
  * BOUNCER_CHILD ids to revive when their [rootId] transitions into Ready. A bound child tunnels
  * through the root's transport (BOUNCER BIND), so an absent, dead, or terminally
@@ -2412,3 +2403,20 @@ internal fun childrenNeedingReconnect(
         }
         .map { it.id }
         .toSet()
+
+/** Maps IRC client states onto the neutral seam lifecycle; [generation] is the session sequence. */
+internal fun IrcClientState.toConnectionState(generation: Long): ConnectionState = when (this) {
+    IrcClientState.Disconnected -> ConnectionState.Disconnected
+    IrcClientState.Connecting -> ConnectionState.Connecting
+    IrcClientState.Registering -> ConnectionState.Authenticating
+    is IrcClientState.Ready -> ConnectionState.Ready(
+        selfHandle = nick,
+        generation = generation,
+        // Opaque negotiated-feature revision: a late CAP/ISUPPORT update must change the neutral
+        // projection, or the deduplicating seam flows would suppress it and capability re-pulls
+        // (history availability, live identity rules) would stay stale until the next lifecycle
+        // transition.
+        negotiationRevision = 31 * caps.hashCode() + isupport.hashCode(),
+    )
+    is IrcClientState.Failed -> ConnectionState.Failed(reason = reason, fatal = fatal)
+}
