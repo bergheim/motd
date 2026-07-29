@@ -23,9 +23,10 @@ import kotlinx.coroutines.withContext
  * sequence, a fatal failure parks the actor instead of retrying — without importing either.
  *
  * Concurrency contract: exactly one coroutine ([job], running [loop]) creates sessions and mutates
- * [connection]; [onState], [onIncoming], [onMucMessage], [onMucSubject], [onMucOccupant], and
- * [onRosterLoad] are invoked only from that coroutine's children (plus, redundantly and harmlessly
- * for [onState], by [XmppSession]'s own state collector forwarding the same values).
+ * [connection]; [onState], [onIncoming], [onChatState], [onMucMessage], [onMucSubject],
+ * [onMucOccupant], and [onRosterLoad] are invoked only from that coroutine's children (plus,
+ * redundantly and harmlessly for [onState], by [XmppSession]'s own state collector forwarding the
+ * same values).
  */
 internal class XmppAccountActor(
     private val networkId: Long,
@@ -42,6 +43,11 @@ internal class XmppAccountActor(
      *  "PR 2" X4); defaults to a no-op so tests exercising only connection lifecycle need not wire it. */
     private val onIncoming: suspend (networkId: Long, message: XmppIncomingMessage, generation: Long) -> Unit =
         { _, _, _ -> },
+    /** Hands each live session's incoming 1:1 chat-state notifications to [XmppProcessor] (slice X6);
+     *  defaults to a no-op so tests exercising only connection lifecycle need not wire it. No
+     *  [generation] parameter: like [onMucOccupant]/[onRosterLoad], this drives an in-memory seam
+     *  signal, not a canonical timeline observation. */
+    private val onChatState: suspend (networkId: Long, state: XmppIncomingChatState) -> Unit = { _, _ -> },
     /** Hands each live session's incoming MUC messages/subjects/occupant deltas, and its one-shot
      *  roster load outcome, to [XmppProcessor] and [XmppConnectionManager] (slice X5); each defaults
      *  to a no-op so tests exercising only connection lifecycle need not wire them. */
@@ -86,6 +92,9 @@ internal class XmppAccountActor(
             val messageCollector = scope.launch {
                 session.incomingMessages.collect { onIncoming(networkId, it, generation) }
             }
+            val chatStateCollector = scope.launch {
+                session.incomingChatStates.collect { onChatState(networkId, it) }
+            }
             val mucMessageCollector = scope.launch {
                 session.incomingMucMessages.collect { onMucMessage(networkId, it, generation) }
             }
@@ -126,6 +135,7 @@ internal class XmppAccountActor(
                 withContext(NonCancellable) {
                     collector.cancelAndJoin()
                     messageCollector.cancelAndJoin()
+                    chatStateCollector.cancelAndJoin()
                     mucMessageCollector.cancelAndJoin()
                     mucSubjectCollector.cancelAndJoin()
                     mucOccupantCollector.cancelAndJoin()

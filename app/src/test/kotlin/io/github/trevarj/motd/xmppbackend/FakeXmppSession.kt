@@ -25,6 +25,9 @@ internal class FakeXmppSession : XmppSession {
     private val _incomingMessages = MutableSharedFlow<XmppIncomingMessage>(extraBufferCapacity = 64)
     override val incomingMessages: Flow<XmppIncomingMessage> = _incomingMessages.asSharedFlow()
 
+    private val _incomingChatStates = MutableSharedFlow<XmppIncomingChatState>(extraBufferCapacity = 64)
+    override val incomingChatStates: Flow<XmppIncomingChatState> = _incomingChatStates.asSharedFlow()
+
     private val _incomingMucMessages = MutableSharedFlow<XmppIncomingMucMessage>(extraBufferCapacity = 64)
     override val incomingMucMessages: Flow<XmppIncomingMucMessage> = _incomingMucMessages.asSharedFlow()
 
@@ -123,6 +126,14 @@ internal class FakeXmppSession : XmppSession {
      *  Ready, without an extra `advanceUntilIdle()` first to make sure the collector is attached. */
     fun emit(message: XmppIncomingMessage) {
         check(_incomingMessages.tryEmit(message)) { "incomingMessages buffer full in test" }
+    }
+
+    /** Simulate a XEP-0085 chat-state notification arriving from [fromBareJid] (slice X6) — the
+     *  incoming-chat-state counterpart to [emit]. Same buffered, no-extra-advance rationale. */
+    fun emitChatState(fromBareJid: String, state: XmppChatState, isCarbonOrSelf: Boolean = false) {
+        check(
+            _incomingChatStates.tryEmit(XmppIncomingChatState(fromBareJid, state, isCarbonOrSelf)),
+        ) { "incomingChatStates buffer full in test" }
     }
 
     /**

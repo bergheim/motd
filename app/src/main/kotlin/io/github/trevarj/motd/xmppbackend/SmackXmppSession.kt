@@ -77,6 +77,12 @@ internal class SmackXmppSession(private val account: XmppAccountEntity) : XmppSe
     private val _incomingMessages = MutableSharedFlow<XmppIncomingMessage>(extraBufferCapacity = INCOMING_MESSAGE_BUFFER)
     override val incomingMessages: Flow<XmppIncomingMessage> = _incomingMessages.asSharedFlow()
 
+    // Fed from the exact same registerIncomingMessageListener callback as _incomingMessages (slice
+    // X6) — a chat-state-only stanza has no body, so it would otherwise be silently dropped there.
+    private val _incomingChatStates =
+        MutableSharedFlow<XmppIncomingChatState>(extraBufferCapacity = INCOMING_MESSAGE_BUFFER)
+    override val incomingChatStates: Flow<XmppIncomingChatState> = _incomingChatStates.asSharedFlow()
+
     // Same buffered-flow rationale as _incomingMessages above; all four are fed from Smack's
     // synchronous MUC/roster listener callbacks (slice X5).
     private val _incomingMucMessages =
@@ -190,15 +196,28 @@ internal class SmackXmppSession(private val account: XmppAccountEntity) : XmppSe
     }
 
     /**
-     * Bridge Smack's one-to-one chat callback onto [incomingMessages]. `ChatManager`'s listener
-     * already narrows delivery to 1:1 DM-shaped stanzas addressed to us (not MUC, not our own sends —
-     * carbons are not enabled in this slice, so there is no reflection to filter here); a stanza with
-     * no `<body/>` (e.g. a bare chat-state notification, XEP-0085) carries no message to persist and
-     * is dropped rather than landing as a blank row. Never logs stanza content (same privacy
-     * invariant as the parsing-exception callback above).
+     * Bridge Smack's one-to-one chat callback onto [incomingMessages] and (slice X6)
+     * [incomingChatStates]. `ChatManager`'s listener already narrows delivery to 1:1 DM-shaped
+     * stanzas addressed to us (not MUC, not our own sends — carbons are not enabled in this slice, so
+     * there is no reflection to filter here). A XEP-0085 [ChatStateExtension], when present, is
+     * routed to [incomingChatStates] regardless of whether the stanza also carries a body (many
+     * clients send `<active/>` alongside the body of a just-sent message, signaling "done composing";
+     * both listeners legitimately fire for that one stanza). A stanza with no `<body/>` (e.g. a bare
+     * chat-state notification) carries no message to persist and is dropped from [incomingMessages]
+     * rather than landing as a blank row — this is the "floor" a chat-state-only stanza used to fall
+     * through entirely before this slice routed it to [incomingChatStates] instead. Never logs stanza
+     * content (same privacy invariant as the parsing-exception callback above).
      */
     private fun registerIncomingMessageListener() {
         ChatManager.getInstanceFor(connection).addIncomingListener { from, message, _ ->
+            message.extensions.filterIsInstance<ChatStateExtension>().firstOrNull()?.let { extension ->
+                _incomingChatStates.tryEmit(
+                    XmppIncomingChatState(
+                        fromBareJid = from.toString(),
+                        state = extension.chatState.toXmppChatState(),
+                    ),
+                )
+            }
             val body = message.body ?: return@addIncomingListener
             _incomingMessages.tryEmit(
                 XmppIncomingMessage(
@@ -209,6 +228,14 @@ internal class SmackXmppSession(private val account: XmppAccountEntity) : XmppSe
                 ),
             )
         }
+    }
+
+    private fun ChatState.toXmppChatState(): XmppChatState = when (this) {
+        ChatState.composing -> XmppChatState.COMPOSING
+        ChatState.paused -> XmppChatState.PAUSED
+        ChatState.active -> XmppChatState.ACTIVE
+        ChatState.inactive -> XmppChatState.INACTIVE
+        ChatState.gone -> XmppChatState.GONE
     }
 
     /**
@@ -415,10 +442,15 @@ internal class SmackXmppSession(private val account: XmppAccountEntity) : XmppSe
         }
     }
 
+    /** [XmppConnectionManager.sendTyping] never actually produces INACTIVE/GONE (the seam it maps
+     *  from has no outgoing vocabulary for them; see [XmppChatState]'s KDoc), but the mapping must
+     *  still be exhaustive over the full incoming-capable enum. */
     private fun XmppChatState.toSmackChatState(): ChatState = when (this) {
         XmppChatState.COMPOSING -> ChatState.composing
         XmppChatState.PAUSED -> ChatState.paused
         XmppChatState.ACTIVE -> ChatState.active
+        XmppChatState.INACTIVE -> ChatState.inactive
+        XmppChatState.GONE -> ChatState.gone
     }
 
     /** Carried over from the fork/xmpp-support prototype's `removeRoomListeners`: removing an

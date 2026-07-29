@@ -149,6 +149,14 @@ interface XmppSession {
      */
     val incomingMessages: Flow<XmppIncomingMessage>
 
+    /**
+     * Incoming 1:1 XEP-0085 chat-state stream for this connection attempt (slice X6); see
+     * [XmppIncomingChatState]. Same hot/buffered-flow rationale as [incomingMessages] — fed from the
+     * same synchronous Smack listener callback that feeds it, since a chat-state-only stanza (no
+     * `<body/>`) is exactly the kind [incomingMessages]' listener already has to see and skip.
+     */
+    val incomingChatStates: Flow<XmppIncomingChatState>
+
     /** MUC messages across every room this session has joined (slice X5); see
      *  [XmppIncomingMucMessage]. Same hot/buffered-flow rationale as [incomingMessages]. */
     val incomingMucMessages: Flow<XmppIncomingMucMessage>
@@ -237,13 +245,31 @@ interface XmppSession {
 }
 
 /**
- * XEP-0085 chat-state vocabulary this baseline sends (docs/backend-neutral-xmpp-rollout.md, slice
- * X6: "one-to-one typing where supported"). Deliberately narrower than the full five-state XEP:
- * `inactive`/`gone` describe idle/departed semantics nothing upstream produces — the seam's own
- * typing vocabulary (mirrored from `:irc`'s `+typing` client tag; see [XmppConnectionManager.sendTyping])
- * is only "active"/"paused"/"done", which map onto exactly these three states.
+ * The full XEP-0085 chat-state vocabulary (docs/backend-neutral-xmpp-rollout.md, slice X6: "one-to-one
+ * typing where supported"). Bidirectional: [XmppConnectionManager.sendTyping] only ever *sends*
+ * COMPOSING/PAUSED/ACTIVE (the seam's own typing vocabulary — mirrored from `:irc`'s `+typing` client
+ * tag — is only "active"/"paused"/"done", which map onto exactly those three), but an incoming
+ * notification (see [XmppIncomingChatState]) can legitimately carry any of the five, so this type
+ * covers the whole XEP rather than only the outgoing subset.
  */
-enum class XmppChatState { COMPOSING, PAUSED, ACTIVE }
+enum class XmppChatState { COMPOSING, PAUSED, ACTIVE, INACTIVE, GONE }
+
+/**
+ * One incoming XEP-0085 chat-state notification observed on a live [XmppSession] (docs/backend-neutral-xmpp-rollout.md,
+ * slice X6) — the incoming half of one-to-one typing; [XmppSession.sendChatState] is the outgoing
+ * half. Deliberately shaped like [XmppIncomingMessage]: a bare-JID-keyed 1:1 signal, with the same
+ * [isCarbonOrSelf] escape hatch and the same "not wired until carbons land" rationale.
+ */
+data class XmppIncomingChatState(
+    /** Bare JID (user@domain) of the sender, already resource-stripped by the session layer. */
+    val fromBareJid: String,
+    val state: XmppChatState,
+    /** True when this stanza is a reflection of this account's own chat state rather than a peer's.
+     *  Carbons are not wired until a later slice, so every emission from [SmackXmppSession] sets this
+     *  false today; the field exists now so that slice reshapes the processor's dispatch, not this
+     *  model — exactly like [XmppIncomingMessage.isCarbonOrSelf]. */
+    val isCarbonOrSelf: Boolean = false,
+)
 
 /** Builds one [XmppSession] attempt from a persisted XMPP account row. */
 fun interface XmppSessionFactory {

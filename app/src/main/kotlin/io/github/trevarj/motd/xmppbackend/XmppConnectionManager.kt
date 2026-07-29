@@ -224,6 +224,10 @@ class XmppConnectionManager @Inject constructor(
             nextGeneration = sessionSeq::incrementAndGet,
             onState = ::publishState,
             onIncoming = processor::onIncomingDirectMessage,
+            // Slice X6: incoming 1:1 typing is a bare pass-through, exactly like onRosterLoad below —
+            // XmppProcessor routes it straight to the shared TypingTracker seam, an in-memory signal
+            // this manager never touches (docs/backend-neutral-xmpp-rollout.md "one-to-one typing").
+            onChatState = processor::onChatState,
             onMucMessage = processor::onMucMessage,
             onMucSubject = processor::onMucSubject,
             onMucOccupant = ::onMucOccupant,
