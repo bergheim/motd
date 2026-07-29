@@ -355,6 +355,9 @@ class BackendContractTest {
         assertNull(bare.historyAvailability(networkId))
         assertNull(bare.protocolCommands(networkId))
         assertTrue(bare.channelJoinOutcomes.toList().isEmpty())
+        // Review fix additions: room-target syntax and room discovery are equally optional.
+        assertNull(bare.roomTargetSyntax(networkId))
+        assertFalse(bare.supportsRoomDiscovery(networkId))
     }
 
     private companion object {

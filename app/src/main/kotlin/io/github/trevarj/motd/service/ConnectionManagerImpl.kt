@@ -50,6 +50,7 @@ import io.github.trevarj.motd.attachment.sojuFileHostEndpoint
 import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.backend.ProtocolCommands
 import io.github.trevarj.motd.backend.ReactionCapability
+import io.github.trevarj.motd.backend.RoomTargetSyntax
 import io.github.trevarj.motd.ircbackend.IrcChatBackend
 import io.github.trevarj.motd.ircbackend.IrcSessions
 import io.github.trevarj.motd.irc.event.IrcClientState
@@ -368,6 +369,17 @@ internal fun identityRulesFallback(
 ): IrcIdentityRules = live.takeIf { liveReady } ?: persisted?.identityRules ?: IrcIdentityRules()
 
 /**
+ * IRC's [RoomTargetSyntax] transform (review fix — docs/backend-neutral-xmpp-rollout.md capability
+ * list example "room-target syntax"): preserves, byte-for-byte, the pre-capability shared-UI
+ * `NewConversationSheet.channelJoinTarget` behavior — a literal `#` is always prepended, even when
+ * the caller already typed one (`"#motd"` becomes `"##motd"`), matching a plain IRC channel-name
+ * convention. A top-level function (like [identityRulesFallback] above) rather than only a lambda
+ * wired into [ConnectionManagerImpl], so it stays directly unit-testable without instantiating the
+ * whole manager.
+ */
+internal fun ircRoomTargetSyntax(rawInput: String): String = "#${rawInput.trim()}"
+
+/**
  * Hilt @Singleton connection subsystem (plans/05). Outlives the foreground service — the service
  * is merely its keeper. Spawns one [ConnectionActor] per connectable network row (BOUNCER_ROOT
  * gets the root actor; each BOUNCER_CHILD a bound actor copying the root host/SASL with its
@@ -523,6 +535,23 @@ class ConnectionManagerImpl @Inject constructor(
 
     override fun protocolCommands(networkId: Long): ProtocolCommands? =
         clientFor(networkId)?.let { IrcProtocolCommands(it, scope) }
+
+    /**
+     * IRC's [RoomTargetSyntax] (review fix — see [ConnectionManager.roomTargetSyntax]'s KDoc): by
+     * the time [CompositeConnectionManager] reaches this override it has already resolved [networkId]
+     * to the IRC backend through the persisted protocol discriminator, so this needs no live-session
+     * check of its own — unlike [historyAvailability]/[protocolCommands], which stay null while
+     * offline, an IRC channel target's `#`-prefix convention does not depend on being connected.
+     * Delegates to [ircRoomTargetSyntax], preserving byte-for-byte the shared UI transform this
+     * replaces (previously `NewConversationSheet.channelJoinTarget`).
+     */
+    override suspend fun roomTargetSyntax(networkId: Long): RoomTargetSyntax =
+        RoomTargetSyntax(::ircRoomTargetSyntax)
+
+    /** IRC always supports LIST/ELIST-based room discovery (review fix — see
+     *  [ConnectionManager.supportsRoomDiscovery]'s KDoc); like [roomTargetSyntax] this does not
+     *  depend on being connected right now. */
+    override suspend fun supportsRoomDiscovery(networkId: Long): Boolean = true
 
     private fun Set<String>.hasWebPushCap(): Boolean =
         any { it == WebPushRegistrar.WEBPUSH_CAP || it.startsWith("${WebPushRegistrar.WEBPUSH_CAP}=") }

@@ -334,6 +334,8 @@ private fun NotReadyState(state: ChannelListUiState) {
             R.string.channel_list_checking to R.string.channel_list_checking_message
         ChannelBrowserAvailability.ROOT_UNAVAILABLE ->
             R.string.channel_list_title to R.string.channel_list_root_cant_browse
+        ChannelBrowserAvailability.UNSUPPORTED ->
+            R.string.channel_list_title to R.string.channel_list_unsupported
         ChannelBrowserAvailability.CONNECTING ->
             R.string.channel_list_connecting to R.string.channel_list_connecting_message
         ChannelBrowserAvailability.FAILED ->

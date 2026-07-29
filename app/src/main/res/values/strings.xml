@@ -762,6 +762,7 @@
     <string name="channel_list_title">Browse channels</string>
     <string name="channel_list_search_hint">Search channels</string>
     <string name="channel_list_root_cant_browse">This soju account can\'t browse channels. Open one of its networks instead.</string>
+    <string name="channel_list_unsupported">This account type doesn\'t support browsing or discovering rooms.</string>
     <string name="channel_list_empty">No channels found</string>
     <string name="channel_list_empty_message">Try a different channel name or search term.</string>
     <string name="channel_list_search_title">Find a channel</string>

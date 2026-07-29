@@ -6,6 +6,7 @@ import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.backend.ProtocolCommands
 import io.github.trevarj.motd.backend.ProtocolId
 import io.github.trevarj.motd.backend.ReactionCapability
+import io.github.trevarj.motd.backend.RoomTargetSyntax
 import io.github.trevarj.motd.data.db.MotdDatabase
 import io.github.trevarj.motd.data.db.TimelineAnchor
 import io.github.trevarj.motd.data.db.TimelineEventId
@@ -84,6 +85,17 @@ class CompositeConnectionManager @Inject constructor(
 
     override fun protocolCommands(networkId: Long): ProtocolCommands? =
         sessionList.firstNotNullOfOrNull { it.protocolCommands(networkId) }
+
+    // roomTargetSyntax/supportsRoomDiscovery are independent of live connection state (review fix;
+    // see ConnectionManager's KDoc on each), so — unlike the synchronous, connection-derived
+    // historyAvailability/protocolCommands fan-out above — both resolve through the same persisted
+    // sessionsForNetwork routing connect/joinChannel/etc. already use, rather than asking every
+    // backend to recognize a networkId it may not own from a synchronous, connection-only signal.
+    override suspend fun roomTargetSyntax(networkId: Long): RoomTargetSyntax? =
+        sessionsForNetwork(networkId)?.roomTargetSyntax(networkId)
+
+    override suspend fun supportsRoomDiscovery(networkId: Long): Boolean =
+        sessionsForNetwork(networkId)?.supportsRoomDiscovery(networkId) ?: false
 
     override suspend fun startAll() = sessionList.forEach { it.startAll() }
     override suspend fun stopAll() = sessionList.forEach { it.stopAll() }

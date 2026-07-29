@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -34,6 +35,16 @@ class CompositeConnectionManagerTest {
         val calls = mutableListOf<String>()
         val states = MutableStateFlow<Map<Long, ConnectionState>>(emptyMap())
         override val connectionStates: StateFlow<Map<Long, ConnectionState>> get() = states
+        var roomDiscoverySupported = false
+        var roomTarget: io.github.trevarj.motd.backend.RoomTargetSyntax? = null
+        override suspend fun supportsRoomDiscovery(networkId: Long): Boolean {
+            calls += "supportsRoomDiscovery:$networkId"
+            return roomDiscoverySupported
+        }
+        override suspend fun roomTargetSyntax(networkId: Long): io.github.trevarj.motd.backend.RoomTargetSyntax? {
+            calls += "roomTargetSyntax:$networkId"
+            return roomTarget
+        }
         override suspend fun startAll() { calls += "startAll" }
         override suspend fun stopAll() { calls += "stopAll" }
         override suspend fun connect(networkId: Long) { calls += "connect:$networkId" }
@@ -176,6 +187,36 @@ class CompositeConnectionManagerTest {
         assertTrue(accepted is SendAcceptance.Accepted)
         assertEquals(listOf("retry:501"), sessionsA.calls)
         assertTrue(sessionsB.calls.isEmpty())
+    }
+
+    /**
+     * Review fix (P2 findings): [ConnectionManager.roomTargetSyntax]/[ConnectionManager.supportsRoomDiscovery]
+     * are independent of live connection state, so — unlike the synchronous, connection-derived
+     * `historyAvailability`/`protocolCommands` fan-out — they route through the same persisted
+     * per-network lookup `joinChannel`/`connect`/etc. already use, resolving to the OWNING backend
+     * only, never a foreign one and never a network with no registered backend at all.
+     */
+    @Test
+    fun `roomTargetSyntax and supportsRoomDiscovery resolve through the owning network only`() = runTest {
+        sessionsA.roomDiscoverySupported = true
+        val target = io.github.trevarj.motd.backend.RoomTargetSyntax { "#$it" }
+        sessionsA.roomTarget = target
+
+        assertTrue(composite.supportsRoomDiscovery(1)) // network 1 -> backendA -> true
+        assertFalse(composite.supportsRoomDiscovery(2)) // network 2 -> backendB -> default false
+        assertFalse(composite.supportsRoomDiscovery(3)) // ghost protocol -> no backend -> false
+
+        assertEquals(target, composite.roomTargetSyntax(1))
+        assertEquals(null, composite.roomTargetSyntax(2))
+        assertEquals(null, composite.roomTargetSyntax(3))
+
+        // The ghost network (no registered backend) must reach NEITHER backend at all -- unlike
+        // network 2 above, which correctly does reach sessionsB (proving routing, not just presence).
+        assertTrue(
+            (sessionsA.calls + sessionsB.calls).none {
+                it == "supportsRoomDiscovery:3" || it == "roomTargetSyntax:3"
+            },
+        )
     }
 
     @Test
