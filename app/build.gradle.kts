@@ -179,8 +179,20 @@ android {
 
     // Signing only when CI secrets are present; local/debug builds never fail on this.
     val keystorePath = System.getenv("MOTD_KEYSTORE_PATH")
-    if (keystorePath != null) {
-        signingConfigs {
+    signingConfigs {
+        // Checked-in debug key, deliberately not a secret: it is the conventional
+        // androiddebugkey/android pair and signs nothing that ships. Without it every machine,
+        // container and CI runner generates its own ~/.android/debug.keystore, so an APK built in
+        // one place cannot upgrade an install from another (INSTALL_FAILED_UPDATE_INCOMPATIBLE).
+        // Pinning it keeps in-place `adb install -r` working across all of them.
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storeType = "pkcs12"
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+        if (keystorePath != null) {
             create("release") {
                 storeFile = file(keystorePath)
                 storePassword = System.getenv("MOTD_KEYSTORE_PASSWORD")
