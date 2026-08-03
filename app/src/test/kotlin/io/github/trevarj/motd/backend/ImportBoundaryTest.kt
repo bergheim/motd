@@ -100,11 +100,24 @@ class ImportBoundaryTest {
                 "IrcSessions accessor; neutral capabilities arrive with the XMPP feedback loop.",
         ),
         Exemption(
+            "ui/onboarding/OnboardingBouncerOperations.kt",
+            "the onboarding wizard's bouncer LIST/ADD adapter: an IRC bouncer-protocol surface " +
+                "that already lives behind its own narrow interface and resolves sessions through " +
+                "the IRC-owned IrcSessions accessor; the wizard itself never sees an IrcClient. " +
+                "A neutral bouncer-administration capability arrives with the XMPP feedback loop.",
+        ),
+        Exemption(
             "agentwire/AgentwireViewModel.kt",
             "the Agentwire CTCP-tag/message-tags harness is an IRC feature surface embedded in " +
                 "shared UI, reached via the IRC-owned IrcSessions accessor like the WHOIS/moderation " +
                 "surfaces above; it consumes raw IrcClientState/IrcEvent directly because Agentwire " +
                 "has no neutral equivalent yet and arrives with the XMPP feedback loop.",
+        ),
+        Exemption(
+            "agentwire/AgentwireEventIngestor.kt",
+            "the Agentwire ViewModel's own IRC-event boundary: it decodes message-tag envelopes " +
+                "off SequencedIrcEvent for the harness above, so it shares that surface's " +
+                "exemption rather than pretending a neutral event contract exists yet.",
         ),
     ).associateBy { it.path }
 
