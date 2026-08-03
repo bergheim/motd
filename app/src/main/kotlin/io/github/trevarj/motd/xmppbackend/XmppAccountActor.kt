@@ -58,6 +58,16 @@ internal class XmppAccountActor(
         { _, _, _ -> },
     private val onMucOccupant: suspend (networkId: Long, event: XmppMucOccupantEvent) -> Unit = { _, _ -> },
     private val onRosterLoad: suspend (networkId: Long, load: XmppRosterLoad) -> Unit = { _, _ -> },
+    /**
+     * Invoked once [job] has completed — a fatal park, an invalid persisted configuration, or an
+     * explicit teardown — mirroring `:irc` `ConnectionActor.start`'s identical
+     * `invokeOnCompletion { onStopped(networkId) }`. [XmppConnectionManager] republishes
+     * `connectionActivity.progressing` from it: without this callback a parked actor would keep
+     * reporting [isAlive] = true forever to anything that only re-reads on a *state* change, and
+     * `ChatViewModel.entryHistoryReady` would wait on that network's chat entry indefinitely.
+     * Non-suspending because it runs from a completion handler (possibly during cancellation).
+     */
+    private val onStopped: (networkId: Long) -> Unit = {},
     private val random: () -> Double = { Random.nextDouble() },
 ) {
     @Volatile var connection: XmppSession? = null
@@ -71,7 +81,9 @@ internal class XmppAccountActor(
 
     fun start() {
         if (job?.isActive == true) return
-        job = scope.launch { loop() }
+        // invokeOnCompletion runs after the job has completed, so [isAlive] already reads false by
+        // the time [onStopped] observes it — the same ordering `:irc` ConnectionActor.start relies on.
+        job = scope.launch { loop() }.also { running -> running.invokeOnCompletion { onStopped(networkId) } }
     }
 
     /** Cancel the loop and tear down any live session. Idempotent; safe even if never started. */

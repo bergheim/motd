@@ -12,7 +12,9 @@ import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
 import io.github.trevarj.motd.data.db.TimelineAnchor
 import io.github.trevarj.motd.data.db.XmppAccountEntity
+import io.github.trevarj.motd.di.AppClock
 import io.github.trevarj.motd.service.ImmediateWireAcceptance
+import io.github.trevarj.motd.service.PendingChannelCloseCoordinator
 import io.github.trevarj.motd.service.RosterLoadState
 import io.github.trevarj.motd.service.SendAcceptance
 import io.github.trevarj.motd.service.SendRejectionReason
@@ -21,6 +23,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asExecutor
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -1077,5 +1080,158 @@ class XmppConnectionManagerTest {
         val updated = requireNotNull(db.bufferDao().observeById(buffer.id))
         assertEquals(row.serverTime, updated.localReadAnchorTime)
         assertEquals(row.id, updated.localReadAnchorEventId)
+    }
+
+    // -- connectionActivity (review fix, P1 finding: this manager published only connectionStates,
+    // which shared chat UI never reads -- ChatViewModel resolves a buffer's connection state
+    // exclusively from connectionManager.connectionActivity, so every XMPP buffer rendered as
+    // disconnected even while this manager's own map said Ready). --
+
+    @Test
+    fun connectionActivity_mirrorsConnectionStates_soChatUiSeesTheLiveSession() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+        connectReady(s1)
+
+        // ChatViewModel's own lookup: activity.states[networkId] ?: Disconnected.
+        assertEquals(
+            ConnectionState.Ready(selfHandle = selfJid, generation = 1L, negotiationRevision = 0),
+            manager.connectionActivity.value.states[nid],
+        )
+        assertEquals(manager.connectionStates.value, manager.connectionActivity.value.states)
+        // XMPP has no reconnect history catch-up in this baseline, so nothing is ever pending.
+        assertTrue(manager.connectionActivity.value.historyCatchUpPending.isEmpty())
+    }
+
+    @Test
+    fun connectionActivity_initializationCompletesOnlyAfterTheFirstReconcile() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+
+        assertFalse(manager.connectionActivity.value.initializationComplete)
+
+        manager.startAll()
+        advanceUntilIdle()
+
+        assertTrue(manager.connectionActivity.value.initializationComplete)
+        assertEquals(ConnectionState.Connecting, manager.connectionActivity.value.states[nid])
+    }
+
+    @Test
+    fun connectionActivity_progressingTracksActorLiveness_andClearsOnAFatalPark() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+
+        manager.startAll()
+        advanceUntilIdle()
+        assertEquals(true, manager.connectionActivity.value.progressing[nid])
+
+        // A fatal park ends the actor's loop for good. ChatViewModel.entryHistoryReady waits on
+        // `progressing[networkId] != true` for a Failed network, so a stale `true` here would hang
+        // chat entry on this network forever.
+        s1.completeConnect(XmppSessionState.Failed(XMPP_AUTH_FAILURE_REASON, fatal = true))
+        advanceUntilIdle()
+
+        assertTrue(manager.connectionActivity.value.states[nid] is ConnectionState.Failed)
+        assertEquals(false, manager.connectionActivity.value.progressing[nid])
+    }
+
+    // -- partChannelForClose (review fix, P2 finding: not overridden at all, so a durable channel
+    // close inherited the seam default -- "call partChannel, report true unless it threw" -- and no
+    // XMPP event ever completed it, leaving PendingChannelCloseCoordinator in AWAITING_CONFIRMATION
+    // forever while the hidden row was never deleted). --
+
+    @Test
+    fun partChannelForClose_completesTheDurableClose_sinceXmppHasNoSelfPartEcho() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+        connectReady(s1)
+        manager.joinChannel(nid, roomJid)
+        advanceUntilIdle()
+        s1.emitOccupantSnapshot(roomJid, listOf("me", "alice"))
+        advanceUntilIdle()
+        val buffer = requireNotNull(db.bufferDao().byName(nid, roomJid))
+        db.bufferDao().markPendingClose(buffer.id, 1_234L)
+
+        val accepted = manager.partChannelForClose(buffer.id)
+        advanceUntilIdle()
+
+        assertTrue(accepted)
+        assertEquals(listOf(roomJid), s1.leaveRoomCalls)
+        // Same end state IRC reaches from EventProcessor.onParted's self-PART branch: the hidden row
+        // and its history are gone, so the coordinator's next sweep finds nothing left to retry.
+        assertNull(db.bufferDao().rawById(buffer.id))
+        assertFalse(manager.memberLoadStates.value.containsKey(buffer.id))
+    }
+
+    @Test
+    fun channelClose_throughTheCoordinator_deletesTheHiddenRowInsteadOfRetryingForever() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+        connectReady(s1)
+        manager.joinChannel(nid, roomJid)
+        advanceUntilIdle()
+        s1.emitOccupantSnapshot(roomJid, listOf("me"))
+        advanceUntilIdle()
+        val buffer = requireNotNull(db.bufferDao().byName(nid, roomJid))
+        val coordinator = PendingChannelCloseCoordinator.forTest(
+            db = db,
+            connections = manager,
+            clock = AppClock { 1_234L },
+            scope = appScope,
+            // Any scheduled retry parks forever, so this asserts the close completed on the first
+            // attempt rather than being papered over by a later sweep.
+            retryWait = { awaitCancellation() },
+        )
+
+        coordinator.requestClose(buffer.id)
+        advanceUntilIdle()
+
+        assertEquals(listOf(roomJid), s1.leaveRoomCalls)
+        assertNull(db.bufferDao().rawById(buffer.id))
+    }
+
+    @Test
+    fun partChannelForClose_plainLeaveKeepsTheBufferAndItsHistory() = runTest {
+        // ChannelInfoViewModel.part() uses the same seam for a non-durable "leave channel", where
+        // pendingCloseAt is null: that must stay a leave, exactly like IRC's non-close self-PART.
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+        connectReady(s1)
+        manager.joinChannel(nid, roomJid)
+        advanceUntilIdle()
+        s1.emitOccupantSnapshot(roomJid, listOf("me"))
+        advanceUntilIdle()
+        val buffer = requireNotNull(db.bufferDao().byName(nid, roomJid))
+        assertTrue(requireNotNull(db.bufferDao().rawById(buffer.id)).joined)
+
+        val accepted = manager.partChannelForClose(buffer.id)
+        advanceUntilIdle()
+
+        assertTrue(accepted)
+        assertEquals(listOf(roomJid), s1.leaveRoomCalls)
+        val stillThere = requireNotNull(db.bufferDao().rawById(buffer.id))
+        assertFalse(stillThere.joined)
+    }
+
+    @Test
+    fun partChannelForClose_reportsFalse_whenThereIsNoLiveReadySession() = runTest {
+        val s1 = FakeXmppSession()
+        bootstrap(listOf(s1))
+        val bufferId = db.bufferDao().insert(
+            BufferEntity(
+                networkId = nid,
+                name = roomJid,
+                displayName = roomJid,
+                type = BufferType.CHANNEL,
+                joined = true,
+            ),
+        )
+        db.bufferDao().markPendingClose(bufferId, 1_234L)
+
+        // Never connected: the coordinator must retry, not treat the close as done and delete it.
+        assertFalse(manager.partChannelForClose(bufferId))
+        assertNotNull(db.bufferDao().rawById(bufferId))
+        assertTrue(s1.leaveRoomCalls.isEmpty())
     }
 }

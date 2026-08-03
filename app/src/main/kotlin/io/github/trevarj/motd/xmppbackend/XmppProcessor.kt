@@ -434,6 +434,32 @@ class XmppProcessor @Inject constructor(
     }
 
     /**
+     * Terminal half of a durable channel-close request (review fix, P2 finding): delete the hidden
+     * buffer once the MUC leave has actually been performed, returning true when a pending close was
+     * completed here and false when [bufferId] has no `pendingCloseAt` at all.
+     *
+     * Mirrors [io.github.trevarj.motd.data.sync.EventProcessor.onParted]'s `e.isSelf &&
+     * buffer.pendingCloseAt != null` branch exactly — the point in the IRC flow where the server's
+     * own self-PART echo confirms the leave and cascade-deleting local history finally becomes safe.
+     * XMPP has no such echo (see [onLeftRoom]: a voluntary leave produces no Smack callback), so the
+     * successful [XmppSession.leaveRoom] itself is this backend's acknowledgement and the deletion
+     * lands here instead of in an event handler. Without it,
+     * [io.github.trevarj.motd.service.PendingChannelCloseCoordinator] stays in AWAITING_CONFIRMATION
+     * forever: it re-leaves the room on every retry and the hidden row is never deleted.
+     *
+     * The `pendingCloseAt` guard is what keeps this distinct from a plain leave: shared UI reaches
+     * [io.github.trevarj.motd.service.ConnectionManager.partChannelForClose] for a non-durable
+     * "leave channel" too (`ChannelInfoViewModel.part`), and that must keep the buffer and its
+     * history, exactly as IRC's non-close self-PART branch does.
+     */
+    suspend fun completePendingClose(bufferId: Long): Boolean {
+        val buffer = db.bufferDao().rawById(bufferId) ?: return false
+        if (buffer.pendingCloseAt == null) return false
+        db.bufferDao().deleteBuffer(bufferId)
+        return true
+    }
+
+    /**
      * Roster (buddy-list) contacts loaded once per session (slice X5). Mirrors
      * [io.github.trevarj.motd.data.sync.EventProcessor]'s WHO/account idiom of upserting a shared
      * [UserEntity] row per identity through [io.github.trevarj.motd.data.db.UserDao] — the same

@@ -11,8 +11,10 @@ import io.github.trevarj.motd.data.db.TimelineEventId
 import io.github.trevarj.motd.data.db.XmppAccountEntity
 import io.github.trevarj.motd.di.ApplicationScope
 import io.github.trevarj.motd.service.CertPrompt
+import io.github.trevarj.motd.service.ConnectionActivitySnapshot
 import io.github.trevarj.motd.service.ConnectionManager
 import io.github.trevarj.motd.service.ImmediateWireAcceptance
+import io.github.trevarj.motd.service.MappedStateFlow
 import io.github.trevarj.motd.service.RosterLoadState
 import io.github.trevarj.motd.service.SendAcceptance
 import io.github.trevarj.motd.service.SendRejectionReason
@@ -70,7 +72,7 @@ private fun XmppSessionState.toConnectionState(generation: Long): ConnectionStat
  *
  * Every live session's [XmppSession.incomingMessages]/`incomingMucMessages`/`mucSubjects`/
  * `mucOccupants`/`rosterLoad` is wired to [XmppProcessor] through the actor it runs on
- * ([ensureActorLocked]); this manager itself only ever writes the in-memory [_connectionStates] and
+ * ([ensureActorLocked]); this manager itself only ever writes the in-memory [_connectionActivity] and
  * [_memberLoadStates] maps, never Room timeline/member/user state
  * (docs/backend-neutral-xmpp-rollout.md "Persistence and writer ownership").
  *
@@ -83,8 +85,8 @@ private fun XmppSessionState.toConnectionState(generation: Long): ConnectionStat
  * in the contract doc (see `service/ServiceSeam.kt`). This class now publishes genuine **MUC
  * member-list load state**, keyed by the room's buffer id, exactly analogous to IRC's channel NAMES
  * state — never the XMPP account roster, which stays entirely internal (see [XmppProcessor.onRosterLoad]'s
- * KDoc). [joinChannel]/[onMucOccupant]/[requestMembers]/[partChannel]/[publishState] are this map's
- * only writers; see each for its transition.
+ * KDoc). [joinChannel]/[onMucOccupant]/[requestMembers]/[partChannel]/[partChannelForClose]/
+ * [publishState] are this map's only writers; see each for its transition.
  */
 @Singleton
 class XmppConnectionManager @Inject constructor(
@@ -132,8 +134,60 @@ class XmppConnectionManager @Inject constructor(
     private val mutex = Mutex()
     private var reconcileJob: Job? = null
 
-    private val _connectionStates = MutableStateFlow<Map<Long, ConnectionState>>(emptyMap())
-    override val connectionStates: StateFlow<Map<Long, ConnectionState>> = _connectionStates.asStateFlow()
+    /**
+     * Atomically published connection state, actor liveness, and initial-reconcile readiness
+     * ([ConnectionManager.connectionActivity]). Review fix, P1 finding: this manager published only
+     * [connectionStates], but shared chat UI (`ChatViewModel`) reads connection state *exclusively*
+     * from `connectionActivity` (unioned per backend by `CompositeConnectionManager`), so leaving
+     * the seam's default empty snapshot in place rendered every XMPP buffer as disconnected — wrong
+     * subtitle, connection-dependent actions disabled — no matter what this manager's own state map
+     * said.
+     *
+     * Mirrors `service.ConnectionRegistry.publish`'s semantics rather than inventing new ones:
+     *  - [ConnectionActivitySnapshot.states] is the neutral per-network state map — the identical
+     *    value [connectionStates] exposes, which is why that flow is now a mapped view of this one
+     *    instead of a second, separately-updated map free to drift from it;
+     *  - [ConnectionActivitySnapshot.progressing] is per-network actor liveness
+     *    ([XmppAccountActor.isAlive]), exactly like the registry's `actors.mapValues { it.isAlive }`:
+     *    true while the reconnect loop still runs (connecting, Ready, or waiting out backoff), false
+     *    once a fatal failure parks it. `ChatViewModel.entryHistoryReady` reads exactly this to tell
+     *    "still retrying" from "given up", so [XmppAccountActor] reports its loop's completion back
+     *    here (its `onStopped` callback) instead of leaving a parked actor looking like it is still
+     *    making progress forever — which would hang chat entry on that network;
+     *  - [ConnectionActivitySnapshot.initializationComplete] stays false until the first reconcile
+     *    of XMPP rows has run (the registry's `initialReconcileComplete`), so shared code never
+     *    treats a still-empty state map as authoritative while this manager is settling;
+     *  - [ConnectionActivitySnapshot.historyCatchUpPending] is permanently empty: XMPP has no
+     *    reconnect history catch-up in this baseline (XEP-0313 MAM is on the deferred cross-device
+     *    list, docs/backend-neutral-xmpp-rollout.md), so no network is ever waiting for one.
+     */
+    private val _connectionActivity = MutableStateFlow(
+        ConnectionActivitySnapshot(initializationComplete = false),
+    )
+    override val connectionActivity: StateFlow<ConnectionActivitySnapshot> = _connectionActivity.asStateFlow()
+
+    override val connectionStates: StateFlow<Map<Long, ConnectionState>> =
+        MappedStateFlow(_connectionActivity) { it.states }
+
+    /** See [connectionActivity]; the registry's `initialReconcileComplete` for this manager. */
+    @Volatile private var initialReconcileComplete = false
+
+    /**
+     * The sole writer of [_connectionActivity], and therefore of [connectionStates]: every state-map
+     * mutation goes through here with the rest of the snapshot recomputed in the same atomic update,
+     * so the two flows can never disagree. [states] is pure (plain map arithmetic) because
+     * [MutableStateFlow.update] may retry it under contention.
+     */
+    private fun publishActivity(states: (Map<Long, ConnectionState>) -> Map<Long, ConnectionState> = { it }) {
+        _connectionActivity.update { current ->
+            current.copy(
+                states = states(current.states),
+                progressing = actors.mapValues { (_, actor) -> actor.isAlive },
+                initializationComplete = initialReconcileComplete,
+                // historyCatchUpPending stays at its empty default — see this field's KDoc.
+            )
+        }
+    }
 
     /**
      * MUC member-list load state per CHANNEL buffer id (slice X5; corrected after Branch-1 feedback
@@ -151,6 +205,10 @@ class XmppConnectionManager @Inject constructor(
     override suspend fun startAll() {
         mutex.withLock {
             if (reconcileJob?.isActive == true) return@withLock
+            // Mirrors the registry's BeginStart: a fresh start is "settling" again until its first
+            // reconcile lands (see [connectionActivity]).
+            initialReconcileComplete = false
+            publishActivity()
             reconcileJob = scope.launch {
                 observeXmppNetworks().collect { rows -> reconcile(rows) }
             }
@@ -165,7 +223,11 @@ class XmppConnectionManager @Inject constructor(
             actors.clear()
             actorFingerprints.clear()
             userIntents.clear()
-            _connectionStates.value = emptyMap()
+            // Mirrors the registry's Stop, which also flips initialReconcileComplete back to true: a
+            // stopped subsystem is not "still settling", and callers waiting on it must not block
+            // forever on a manager that has nothing left to reconcile.
+            initialReconcileComplete = true
+            publishActivity { emptyMap() }
             _memberLoadStates.value = emptyMap()
         }
     }
@@ -183,6 +245,9 @@ class XmppConnectionManager @Inject constructor(
             // instead of only reconcile ever noticing.
             ensureActorLocked(row, forceRebuild = existing == null || !existing.isAlive)
         }
+        // A newly (re)built actor changes connectionActivity.progressing even before it publishes
+        // its first state.
+        publishActivity()
     }
 
     override suspend fun disconnect(networkId: Long) {
@@ -192,7 +257,7 @@ class XmppConnectionManager @Inject constructor(
         mutex.withLock {
             actors.remove(networkId)?.stopAndJoin()
             actorFingerprints.remove(networkId)
-            _connectionStates.update { it - networkId }
+            publishActivity { it - networkId }
             clearMemberLoadStatesForNetwork(networkId)
         }
     }
@@ -226,7 +291,7 @@ class XmppConnectionManager @Inject constructor(
                 if (id !in wantedIds) {
                     actors.remove(id)?.stopAndJoin()
                     actorFingerprints.remove(id)
-                    _connectionStates.update { it - id }
+                    publishActivity { it - id }
                     clearMemberLoadStatesForNetwork(id)
                 }
             }
@@ -234,6 +299,10 @@ class XmppConnectionManager @Inject constructor(
                 if (row.id !in wantedIds) continue
                 ensureActorLocked(row)
             }
+            // Mirrors the registry's Reconcile, which sets initialReconcileComplete once the wanted
+            // set has been applied: only now is this manager's state map authoritative.
+            initialReconcileComplete = true
+            publishActivity()
         }
     }
 
@@ -279,6 +348,8 @@ class XmppConnectionManager @Inject constructor(
             // only drives XmppProcessor's UserEntity upserts and never touches the seam — see
             // XmppProcessor.onRosterLoad's KDoc — so this is a bare pass-through, not a manager wrapper.
             onRosterLoad = processor::onRosterLoad,
+            // A parked/torn-down actor is no longer "progressing"; see [connectionActivity].
+            onStopped = { publishActivity() },
         )
         actors[row.id] = actor
         actorFingerprints[row.id] = fingerprint
@@ -286,7 +357,7 @@ class XmppConnectionManager @Inject constructor(
     }
 
     /**
-     * [_connectionStates] always gets a fresh value per network id here. [_memberLoadStates] only
+     * [connectionStates] always gets a fresh value per network id here. [_memberLoadStates] only
      * ever loses entries here — a non-Ready transition ("the session drops", in [memberLoadStates]'
      * KDoc terms) means every one of this network's CHANNEL buffers stops receiving MUC presence, so
      * their member-list state can no longer be trusted. [joinChannel]/[onMucOccupant]/[requestMembers]
@@ -294,7 +365,7 @@ class XmppConnectionManager @Inject constructor(
      * a room is actually joined again.
      */
     private suspend fun publishState(networkId: Long, state: XmppSessionState, generation: Long) {
-        _connectionStates.update { it + (networkId to state.toConnectionState(generation)) }
+        publishActivity { it + (networkId to state.toConnectionState(generation)) }
         if (state is XmppSessionState.Ready) {
             rejoinPersistedChannels(networkId)
         } else {
@@ -350,7 +421,7 @@ class XmppConnectionManager @Inject constructor(
     /** Every CHANNEL buffer of [networkId] stops being trusted as "loaded": used both for an
      *  observed session drop ([publishState]) and an explicit teardown ([connect]/[disconnect]/
      *  [reconcile], none of which route through [publishState] — cancelling an actor's job unwinds
-     *  past its final [XmppAccountActor.loop] state publication, exactly like [_connectionStates]
+     *  past its final [XmppAccountActor.loop] state publication, exactly like [connectionStates]
      *  already has to handle at each of those call sites). */
     private suspend fun clearMemberLoadStatesForNetwork(networkId: Long) {
         val channelIds = db.bufferDao().channelIds(networkId)
@@ -471,7 +542,7 @@ class XmppConnectionManager @Inject constructor(
     ): SendAcceptance = withContext(NonCancellable) {
         val eventIds = listOf(eventId)
         val session = actors[buffer.networkId]?.connection
-        val ready = _connectionStates.value[buffer.networkId] as? ConnectionState.Ready
+        val ready = _connectionActivity.value.states[buffer.networkId] as? ConnectionState.Ready
         if (session == null || ready == null) {
             db.messageDao().failPending(eventIds)
             return@withContext SendAcceptance.Accepted(eventIds, ImmediateWireAcceptance.DISCONNECTED)
@@ -532,7 +603,7 @@ class XmppConnectionManager @Inject constructor(
      *  `connectionGenerations[networkId]` (never consulted by [CanonicalTimelineStore]'s own
      *  reconciliation, which identifies solely through aliases). */
     private fun currentGeneration(networkId: Long): Long? =
-        (_connectionStates.value[networkId] as? ConnectionState.Ready)?.generation
+        (_connectionActivity.value.states[networkId] as? ConnectionState.Ready)?.generation
 
     /**
      * Map the seam's IRC-shaped typing vocabulary (`:irc` `IrcClient.sendTyping`'s `+typing` tag
@@ -615,6 +686,52 @@ class XmppConnectionManager @Inject constructor(
         session.leaveRoom(buffer.displayName)
         processor.onLeftRoom(bufferId)
         _memberLoadStates.update { it - bufferId }
+    }
+
+    /**
+     * Leave seam for durable channel-close requests (review fix, P2 finding: this was not overridden
+     * at all, so it fell through to [ConnectionManager.partChannelForClose]'s default — "call
+     * [partChannel], report true unless it threw" — and the close never completed).
+     *
+     * True means the same thing it does for `:irc` `ConnectionManagerImpl.partChannelForClose`: the
+     * live transport accepted the leave. The strict Ready-plus-live-session check mirrors IRC's
+     * `writeChannelPartIfReady`, so a session that disappeared between
+     * [io.github.trevarj.motd.service.PendingChannelCloseCoordinator]'s Ready snapshot and this
+     * write reports false and is retried instead of being mistaken for a completed close.
+     *
+     * The end state differs from IRC's only in *where* it is reached, never in what it is. IRC
+     * returns true and waits: `EventProcessor.onParted` deletes the hidden buffer when the server
+     * echoes the self-PART (or answers 403/442). XMPP has no such event — [XmppSession.leaveRoom] is
+     * acknowledged only by returning normally — so the successful leave *is* the acknowledgement and
+     * [XmppProcessor.completePendingClose] performs the identical deletion here. Left to the
+     * inherited default, the coordinator sat in AWAITING_CONFIRMATION forever, re-leaving the room on
+     * every retry while the hidden row was never deleted.
+     *
+     * A buffer with no `pendingCloseAt` is a plain leave (shared UI reaches this seam for
+     * `ChannelInfoViewModel.part` too), so it keeps its history and only becomes unjoined — exactly
+     * what [partChannel] does, and exactly what IRC's non-close self-PART branch does. [reason] is
+     * accepted for seam compatibility and unused, like [partChannel]'s: this baseline's MUC leave
+     * carries no status message.
+     */
+    override suspend fun partChannelForClose(bufferId: Long, reason: String?): Boolean {
+        val buffer = db.bufferDao().rawById(bufferId) ?: return false
+        if (buffer.type != BufferType.CHANNEL) return false
+        if (_connectionActivity.value.states[buffer.networkId] !is ConnectionState.Ready) return false
+        val session = actors[buffer.networkId]?.connection ?: return false
+        try {
+            session.leaveRoom(buffer.displayName)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return false
+        }
+        _memberLoadStates.update { it - bufferId }
+        // NonCancellable for the same reason writeAndTrack uses it: once the room has actually been
+        // left, a cancelled caller must not leave the durable close half-finished and unresolvable.
+        withContext(NonCancellable) {
+            if (!processor.completePendingClose(bufferId)) processor.onLeftRoom(bufferId)
+        }
+        return true
     }
 
     /**

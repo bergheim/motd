@@ -241,6 +241,55 @@ class ConfigurationBackupRepositoryTest {
         assertEquals("bob-pw", accountsByJid.getValue("bob@example.org").password)
     }
 
+    /**
+     * XMPP account creation deliberately permits several accounts on the same JID (nothing in
+     * `xmpp_accounts` or the account UI forbids it), and those rows are identical on every field
+     * matching looks at — placeholder identity, protocol, role, JID. Review fix, P2 finding: the
+     * non-consuming `firstOrNull` match therefore resolved every one of them to the same single
+     * local candidate, so importing over an existing database overwrote that one row repeatedly and
+     * (in REPLACE) deleted the other as "not imported", collapsing two accounts into one.
+     */
+    @Test
+    fun duplicateJidAccountsSurviveAReplaceRoundTrip_insteadOfCollapsingOntoOneRow() = runTest {
+        val database = inMemoryDb()
+        val repository = repository(database)
+        val workId = database.networkDao().insert(xmppNetwork("work"))
+        database.xmppAccountDao().upsert(
+            XmppAccountEntity(networkId = workId, jid = "me@example.org", password = "pw-work", resource = "laptop"),
+        )
+        val phoneId = database.networkDao().insert(xmppNetwork("phone"))
+        database.xmppAccountDao().upsert(
+            XmppAccountEntity(networkId = phoneId, jid = "me@example.org", password = "pw-phone", resource = "phone"),
+        )
+
+        val raw = repository.exportToString(
+            mode = BackupExportMode.ENCRYPTED_WITH_CREDENTIALS,
+            password = "correct horse battery",
+            nowEpochMillis = 1_000L,
+        )
+
+        val preview = repository.preview(
+            raw,
+            password = "correct horse battery",
+            importMode = BackupImportMode.REPLACE,
+        )
+        assertEquals(2, preview.updatedNetworks)
+        assertEquals(0, preview.addedNetworks)
+        assertEquals(0, preview.removedNetworks)
+
+        repository.import(raw, password = "correct horse battery", importMode = BackupImportMode.REPLACE)
+
+        assertEquals(2, database.networkDao().allNow().size)
+        val accounts = database.xmppAccountDao().allNow()
+        assertEquals(2, accounts.size)
+        assertEquals(
+            setOf("laptop" to "pw-work", "phone" to "pw-phone"),
+            accounts.map { it.resource to it.password }.toSet(),
+        )
+        assertEquals(setOf("me@example.org"), accounts.map { it.jid }.toSet())
+        database.close()
+    }
+
     private fun xmppNetwork(name: String): NetworkEntity = NetworkEntity(
         name = name,
         role = NetworkRole.DIRECT,
