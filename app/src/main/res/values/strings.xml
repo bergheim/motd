@@ -656,6 +656,21 @@
     <string name="add_network_retry">Retry</string>
     <string name="add_network_failed">Couldn\'t connect — %1$s</string>
 
+    <!-- Backend-neutral account entry points (docs/backend-neutral-xmpp-rollout.md) -->
+    <string name="protocol_picker_title">Add account</string>
+    <string name="protocol_xmpp_label">XMPP account</string>
+
+    <!-- XMPP account create/edit (docs/backend-neutral-xmpp-rollout.md baseline account UI) -->
+    <string name="xmpp_account_create_title">Add XMPP account</string>
+    <string name="xmpp_account_edit_title">XMPP account</string>
+    <string name="xmpp_account_details_section">Account details</string>
+    <string name="xmpp_account_display_name">Account name</string>
+    <string name="xmpp_account_jid">JID</string>
+    <string name="xmpp_account_jid_error">Enter a full JID, like user@example.org</string>
+    <string name="xmpp_account_password">Password</string>
+    <string name="xmpp_account_resource">Resource (optional)</string>
+    <string name="xmpp_account_resource_desc">Leave blank to let the server assign one.</string>
+
     <!-- soju bound-network manager (WP-V2, §5.5) -->
     <string name="bouncer_control_title">Soju Control Center</string>
     <string name="bouncer_connect">Connect</string>

@@ -21,17 +21,23 @@ class ImportBoundaryTest {
     private val packageRootPath = packageRoot.replace('.', '/')
     private val forbiddenSubstring = "smack"
     private val forbiddenSubstringReason =
-        "XMPP/Smack must not exist before PR 2 (docs/backend-neutral-xmpp-rollout.md)."
+        "Smack stays inside the XMPP adapter packages (docs/backend-neutral-xmpp-rollout.md)."
 
-    /** "FORBIDDEN import prefixes anywhere in app/src/main" — no adapter-owned exception applies. */
+    /**
+     * XMPP-adapter-owned package directories: the only places Smack/XMPP library imports may
+     * exist. Everything else in app/src/main treats them exactly as PR 1 did — forbidden.
+     */
+    private val xmppAdapterDirs = setOf("xmppbackend", "xmpp")
+
+    /** "FORBIDDEN import prefixes" outside [xmppAdapterDirs] — no other exception applies. */
     private val forbiddenPrefixes = listOf(
         ForbiddenPrefix(
             "org.jivesoftware",
-            "XMPP/Smack must not exist before PR 2 (docs/backend-neutral-xmpp-rollout.md).",
+            "Smack stays inside the XMPP adapter packages (docs/backend-neutral-xmpp-rollout.md).",
         ),
         ForbiddenPrefix(
             "org.igniterealtime",
-            "XMPP/Smack must not exist before PR 2 (docs/backend-neutral-xmpp-rollout.md).",
+            "Smack stays inside the XMPP adapter packages (docs/backend-neutral-xmpp-rollout.md).",
         ),
     )
 
@@ -161,25 +167,26 @@ class ImportBoundaryTest {
         packageRelativePath.substringBefore('/') in adapterOwnedDirs
 
     @Test
-    fun `main sources contain no XMPP library imports`() {
+    fun `XMPP library imports stay inside the XMPP adapter packages`() {
         val root = sourceRoot()
         val violations = mutableListOf<String>()
 
         ktFiles(root).forEach { file ->
             val relativePath = packageRelativePath(root, file)
+            if (relativePath.substringBefore('/') in xmppAdapterDirs) return@forEach
             file.readLines().forEachIndexed { index, line ->
                 val fq = importedFqName(line) ?: return@forEachIndexed
                 val reason = forbiddenPrefixes.firstOrNull { fq.startsWith(it.prefix) }?.reason
                     ?: forbiddenSubstringReason.takeIf { fq.lowercase().contains(forbiddenSubstring) }
                     ?: return@forEachIndexed
                 violations += "$relativePath:${index + 1}: `$fq` — $reason " +
-                    "Fix: remove the XMPP/Smack dependency; PR 1 contains no XMPP source " +
-                    "(docs/backend-neutral-xmpp-rollout.md)."
+                    "Fix: move the code into the XMPP adapter packages or consume a neutral " +
+                    "contract (docs/backend-neutral-xmpp-rollout.md)."
             }
         }
 
         assertTrue(
-            "Forbidden XMPP/Smack imports found in app/src/main (PR 1 must contain zero XMPP source):\n" +
+            "Smack/XMPP imports found outside the XMPP adapter packages:\n" +
                 violations.joinToString("\n"),
             violations.isEmpty(),
         )

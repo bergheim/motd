@@ -1820,3 +1820,24 @@ interface AppStateDao {
     @Query("DELETE FROM app_state WHERE `key` = :key")
     suspend fun delete(key: String)
 }
+
+@Dao
+interface XmppAccountDao {
+    @Query("SELECT * FROM xmpp_accounts WHERE networkId = :networkId")
+    suspend fun byNetwork(networkId: Long): XmppAccountEntity?
+
+    @Query("SELECT * FROM xmpp_accounts WHERE networkId = :networkId")
+    fun observe(networkId: Long): Flow<XmppAccountEntity?>
+
+    /** Snapshot of every XMPP account row, keyed by its owning network id by
+     *  [io.github.trevarj.motd.data.backup.ConfigurationBackupRepositoryImpl] to export/import the
+     *  satellite alongside its [NetworkEntity] row — the table is tiny, so a full scan is cheap. */
+    @Query("SELECT * FROM xmpp_accounts")
+    suspend fun allNow(): List<XmppAccountEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(account: XmppAccountEntity)
+
+    @Query("DELETE FROM xmpp_accounts WHERE networkId = :networkId")
+    suspend fun delete(networkId: Long)
+}

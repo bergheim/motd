@@ -12,6 +12,7 @@ import io.github.trevarj.motd.data.db.MotdDatabase
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
 import io.github.trevarj.motd.data.db.ObfsMode
+import io.github.trevarj.motd.data.db.XmppAccountEntity
 import io.github.trevarj.motd.data.prefs.AppearanceConfig
 import io.github.trevarj.motd.data.prefs.AppearancePrefs
 import io.github.trevarj.motd.data.prefs.BouncerKindPrefs
@@ -175,31 +176,37 @@ class ConfigurationBackupRepositoryImpl @Inject constructor(
         applySettings(decoded.payload.settings)
         val idMap = mutableMapOf<String, Long>()
         val importedIds = mutableSetOf<Long>()
+        val includeSecrets = decoded.envelope.mode == BackupEnvelopeMode.ENCRYPTED_WITH_CREDENTIALS
         db.withTransaction {
             val current = db.networkDao().allNow()
+            // XMPP satellite rows, keyed by their owning network id, for the same retain-on-merge /
+            // missing-credential logic the shared saslPassword/serverPassword/obfsLink fields already
+            // get (see PortableXmppAccount.toEntity and PortableNetwork.missingRequirements), and for
+            // LocalNetworkMatcher's JID-based disambiguation below.
+            val localXmppAccounts = db.xmppAccountDao().allNow().associateBy { it.networkId }
+            val matcher = LocalNetworkMatcher(current, localXmppAccounts)
             val rootsAndDirect = decoded.payload.networks.filter { it.role != NetworkRole.BOUNCER_CHILD }
                 .sortedBy { it.ordering }
             rootsAndDirect.forEach { portable ->
+                val local = matcher.matchTopLevel(portable)
                 val resolved = portable.toEntity(
-                    includeSecrets = decoded.envelope.mode == BackupEnvelopeMode.ENCRYPTED_WITH_CREDENTIALS,
+                    includeSecrets = includeSecrets,
                     parentId = null,
-                    local = matchTopLevel(portable, current),
+                    local = local,
+                    localXmppAccount = localXmppAccounts[local?.id],
                 )
                 val id = upsertResolvedNetwork(resolved)
                 idMap[portable.exportId] = id
                 importedIds += id
+                upsertXmppSatellite(portable, id, includeSecrets, localXmppAccounts[local?.id])
             }
             decoded.payload.networks.filter { it.role == NetworkRole.BOUNCER_CHILD }
                 .sortedBy { it.ordering }
                 .forEach { portable ->
                     val parentId = idMap[portable.parentExportId] ?: return@forEach
-                    val local = current.firstOrNull {
-                        it.role == NetworkRole.BOUNCER_CHILD &&
-                            it.parentId == parentId &&
-                            it.bouncerNetId == portable.bouncerNetId
-                    }
+                    val local = matcher.matchChild(portable, parentId)
                     val resolved = portable.toEntity(
-                        includeSecrets = decoded.envelope.mode == BackupEnvelopeMode.ENCRYPTED_WITH_CREDENTIALS,
+                        includeSecrets = includeSecrets,
                         parentId = parentId,
                         local = local,
                     )
@@ -223,10 +230,22 @@ class ConfigurationBackupRepositoryImpl @Inject constructor(
         )
     }
 
+    /** [portable.xmppAccount] is null for every non-XMPP network, making this a safe no-op call for them. */
+    private suspend fun upsertXmppSatellite(
+        portable: PortableNetwork,
+        networkId: Long,
+        includeSecrets: Boolean,
+        localAccount: XmppAccountEntity?,
+    ) {
+        val account = portable.xmppAccount ?: return
+        db.xmppAccountDao().upsert(account.toEntity(networkId, includeSecrets, localAccount))
+    }
+
     private suspend fun snapshotPayload(includeSecrets: Boolean): BackupPayload {
         val networks = db.networkDao().allNow().sortedWith(compareBy<NetworkEntity> { it.parentId ?: 0L }.thenBy { it.ordering })
         val exportIds = networks.associate { it.id to "network-${it.id}" }
         val zncIds = bouncerKindPrefs.zncNetworkIds.first()
+        val xmppAccounts = db.xmppAccountDao().allNow().associateBy { it.networkId }
         val selfAvatars = networks.mapNotNull { network ->
             val setting = avatarPrefs.selfSetting(network.id).first()
             if (setting == SelfAvatarSetting.Unmanaged) null else PortableSelfAvatar(
@@ -235,7 +254,7 @@ class ConfigurationBackupRepositoryImpl @Inject constructor(
             )
         }
         return BackupPayload(
-            networks = networks.map { it.toPortable(exportIds, includeSecrets, zncIds) },
+            networks = networks.map { it.toPortable(exportIds, includeSecrets, zncIds, xmppAccounts[it.id]) },
             settings = PortableSettings(
                 general = settingsRepository.settings.first(),
                 appearance = appearancePrefs.config.first(),
@@ -295,47 +314,51 @@ class ConfigurationBackupRepositoryImpl @Inject constructor(
             }
             network.wsUrl?.let { require(it.startsWith("wss://")) { "Backup contains an invalid WebSocket URL." } }
             network.proxyPort?.let { require(it in 1..65535) { "Backup contains an invalid proxy port." } }
+            if (network.protocol == XMPP_PROTOCOL_ID) {
+                require(network.xmppAccount != null && network.xmppAccount.jid.isNotBlank()) {
+                    "Backup contains an XMPP network without an account."
+                }
+            }
         }
     }
 
     private suspend fun planImport(payload: BackupPayload, importMode: BackupImportMode): ImportPlan {
         val current = db.networkDao().allNow()
+        val localXmppAccounts = db.xmppAccountDao().allNow().associateBy { it.networkId }
+        // Same consuming matcher, driven in the same order as import's own loops below, so the
+        // preview's added/updated/removed counts describe exactly the import that will follow.
+        val matcher = LocalNetworkMatcher(current, localXmppAccounts)
         val matched = mutableSetOf<Long>()
         var added = 0
         var updated = 0
         var retainedLocalCredentials = 0
         var missingCredentialNetworks = 0
         val parentMatches = mutableMapOf<String, Long>()
-        payload.networks.filter { it.role != NetworkRole.BOUNCER_CHILD }.forEach { portable ->
-            val local = matchTopLevel(portable, current)
-            if (local == null) added++ else {
-                updated++
-                matched += local.id
-                parentMatches[portable.exportId] = local.id
-                if (portable.retainsAnyLocalSecret(local)) retainedLocalCredentials++
+        payload.networks.filter { it.role != NetworkRole.BOUNCER_CHILD }
+            .sortedBy { it.ordering }
+            .forEach { portable ->
+                val local = matcher.matchTopLevel(portable)
+                if (local == null) added++ else {
+                    updated++
+                    matched += local.id
+                    parentMatches[portable.exportId] = local.id
+                    if (portable.retainsAnyLocalSecret(local, localXmppAccounts[local.id])) retainedLocalCredentials++
+                }
+                if (portable.missingCredentials(local, localXmppAccounts[local?.id])) missingCredentialNetworks++
             }
-            if (portable.missingCredentials(local)) missingCredentialNetworks++
-        }
-        payload.networks.filter { it.role == NetworkRole.BOUNCER_CHILD }.forEach { portable ->
-            val parentId = parentMatches[portable.parentExportId]
-            val local = current.firstOrNull {
-                parentId != null && it.role == NetworkRole.BOUNCER_CHILD &&
-                    it.parentId == parentId && it.bouncerNetId == portable.bouncerNetId
+        payload.networks.filter { it.role == NetworkRole.BOUNCER_CHILD }
+            .sortedBy { it.ordering }
+            .forEach { portable ->
+                val local = matcher.matchChild(portable, parentMatches[portable.parentExportId])
+                if (local == null) added++ else {
+                    updated++
+                    matched += local.id
+                    if (portable.retainsAnyLocalSecret(local, localXmppAccounts[local.id])) retainedLocalCredentials++
+                }
+                if (portable.missingCredentials(local, localXmppAccounts[local?.id])) missingCredentialNetworks++
             }
-            if (local == null) added++ else {
-                updated++
-                matched += local.id
-                if (portable.retainsAnyLocalSecret(local)) retainedLocalCredentials++
-            }
-            if (portable.missingCredentials(local)) missingCredentialNetworks++
-        }
         val removed = if (importMode == BackupImportMode.REPLACE) current.count { it.id !in matched } else 0
         return ImportPlan(added, updated, removed, retainedLocalCredentials, missingCredentialNetworks)
-    }
-
-    private fun matchTopLevel(portable: PortableNetwork, current: List<NetworkEntity>): NetworkEntity? {
-        val probe = portable.toEntity(includeSecrets = true, parentId = null, local = null)
-        return current.firstOrNull { it.role == portable.role && it.role != NetworkRole.BOUNCER_CHILD && networkIdentityKey(it) == networkIdentityKey(probe) }
     }
 
     private suspend fun upsertResolvedNetwork(network: NetworkEntity): Long {
@@ -554,9 +577,89 @@ private data class PortableNetwork(
     val znc: Boolean = false,
     /** Backend discriminator; defaults to IRC so backups written before it existed still decode. */
     val protocol: String = "irc",
+    /** Present only for [protocol] == "xmpp" — the `xmpp_accounts` satellite row for this network
+     *  (docs/backend-neutral-xmpp-rollout.md "Persistence and writer ownership": a backend persists
+     *  its own account/protocol detail in its own per-protocol table, not nullable columns on the
+     *  shared row, and that split carries through to its backup representation too). */
+    val xmppAccount: PortableXmppAccount? = null,
 ) {
     override fun toString(): String =
         "PortableNetwork(exportId=$exportId, name=$name, role=$role, host=$host:$port)"
+}
+
+/** Portable form of [XmppAccountEntity] (review fix: the backup used to serialize only
+ *  [NetworkEntity], so an XMPP account's JID/password/resource — which live exclusively in this
+ *  satellite table — never round-tripped through export/import at all). [password] follows the
+ *  exact same include-secrets policy [PortableNetwork.saslPassword]/[hadSaslPassword] already do. */
+@Serializable
+private data class PortableXmppAccount(
+    val jid: String,
+    val password: String? = null,
+    val hadPassword: Boolean = false,
+    val resource: String? = null,
+) {
+    override fun toString(): String = "PortableXmppAccount(jid=$jid)"
+}
+
+/** Must match [io.github.trevarj.motd.xmppbackend.XmppChatBackend.XMPP_PROTOCOL]'s value. Not
+ *  imported directly from the XMPP adapter package to keep this shared backup file free of any
+ *  adapter dependency; see this file's satellite-handling KDocs for why it has one anyway. */
+private const val XMPP_PROTOCOL_ID = "xmpp"
+
+/**
+ * Resolves each portable network to the local row it should update, consuming candidates so a local
+ * row backs **at most one** portable row per import.
+ *
+ * [networkIdentityKey] alone is not enough to tell two XMPP accounts apart: every XMPP row shares
+ * the identical inert IRC-shaped placeholder identity
+ * ([io.github.trevarj.motd.ui.settings.xmpp.buildXmppNetworkEntity]'s KDoc — same host, port, and
+ * nick for every account), so [matchTopLevel] also compares the satellite `xmpp_accounts` JID:
+ * without it, importing a backup containing two XMPP accounts onto a device that already has one
+ * configured matched BOTH incoming accounts to that one local row, clobbering it twice instead of
+ * adding the second as its own network. `protocol` is compared first as a general safeguard against
+ * a coincidental cross-protocol key collision, even though today's IRC-shaped key makes that
+ * vanishingly unlikely on its own.
+ *
+ * Consumption closes the remaining half of the same defect (review fix, P2 finding): XMPP account
+ * creation deliberately permits several accounts on the same JID, and those rows are identical on
+ * every field matching looks at, so a non-consuming `firstOrNull` collapsed them all onto the first
+ * local candidate — overwriting one row repeatedly and, under [BackupImportMode.REPLACE], deleting
+ * the others as "not imported". Taking each candidate out of the pool makes duplicate multiplicity
+ * survive a round trip: the second portable row falls through to the second local row, or (with no
+ * candidate left) is inserted as a new network. The same rule guards duplicate IRC identities and
+ * duplicate bouncer children ([matchChild]) — both structurally possible, neither prevented by a
+ * schema constraint.
+ *
+ * Order matters once matching consumes, so both callers drive the same instance in the same order
+ * (top level sorted by `ordering`, then children), keeping the preview's counts and the import's
+ * writes in agreement.
+ */
+private class LocalNetworkMatcher(
+    current: List<NetworkEntity>,
+    private val localXmppAccounts: Map<Long, XmppAccountEntity>,
+) {
+    private val available = current.toMutableList()
+
+    fun matchTopLevel(portable: PortableNetwork): NetworkEntity? {
+        val probe = portable.toEntity(includeSecrets = true, parentId = null, local = null)
+        return take { candidate ->
+            candidate.role == portable.role && candidate.role != NetworkRole.BOUNCER_CHILD &&
+                candidate.protocol == portable.protocol &&
+                networkIdentityKey(candidate) == networkIdentityKey(probe) &&
+                (portable.xmppAccount == null || localXmppAccounts[candidate.id]?.jid == portable.xmppAccount.jid)
+        }
+    }
+
+    /** [parentId] is the already-resolved local id of this child's parent; null means unmatched. */
+    fun matchChild(portable: PortableNetwork, parentId: Long?): NetworkEntity? = take { candidate ->
+        parentId != null && candidate.role == NetworkRole.BOUNCER_CHILD &&
+            candidate.parentId == parentId && candidate.bouncerNetId == portable.bouncerNetId
+    }
+
+    private fun take(predicate: (NetworkEntity) -> Boolean): NetworkEntity? {
+        val index = available.indexOfFirst(predicate)
+        return if (index < 0) null else available.removeAt(index)
+    }
 }
 
 private data class DecodedDocument(
@@ -576,6 +679,7 @@ private fun NetworkEntity.toPortable(
     exportIds: Map<Long, String>,
     includeSecrets: Boolean,
     zncIds: Set<Long>,
+    xmppAccount: XmppAccountEntity?,
 ): PortableNetwork = PortableNetwork(
     exportId = exportIds.getValue(id),
     name = name,
@@ -606,20 +710,31 @@ private fun NetworkEntity.toPortable(
     obfsLink = obfsLink.takeIf { includeSecrets },
     hadObfsLink = !obfsLink.isNullOrBlank(),
     znc = id in zncIds,
+    xmppAccount = xmppAccount?.toPortable(includeSecrets),
+)
+
+private fun XmppAccountEntity.toPortable(includeSecrets: Boolean): PortableXmppAccount = PortableXmppAccount(
+    jid = jid,
+    password = password.takeIf { includeSecrets },
+    hadPassword = password.isNotBlank(),
+    resource = resource,
 )
 
 private fun PortableNetwork.toEntity(
     includeSecrets: Boolean,
     parentId: Long?,
     local: NetworkEntity?,
+    localXmppAccount: XmppAccountEntity? = null,
 ): NetworkEntity {
     val retainedSasl = if (!includeSecrets && saslPassword == null) local?.saslPassword else saslPassword
     val retainedServerPassword = if (!includeSecrets && serverPassword == null) local?.serverPassword else serverPassword
     val retainedObfsLink = if (!includeSecrets && obfsLink == null) local?.obfsLink else obfsLink
+    val retainedXmppPassword = xmppAccount?.retainedPassword(includeSecrets, localXmppAccount)
     val requirements = missingRequirements(
         localSaslPassword = retainedSasl,
         localServerPassword = retainedServerPassword,
         localObfsLink = retainedObfsLink,
+        localXmppPassword = retainedXmppPassword,
     )
     return NetworkEntity(
         id = local?.id ?: 0L,
@@ -652,27 +767,54 @@ private fun PortableNetwork.toEntity(
     )
 }
 
-private fun PortableNetwork.retainsAnyLocalSecret(local: NetworkEntity): Boolean =
+/** The password [PortableXmppAccount.toEntity] would resolve to, without building a full
+ *  [XmppAccountEntity] — shared by [PortableNetwork.toEntity]'s missing-requirements check so the
+ *  two stay in exact agreement about what the imported account's password will actually be. */
+private fun PortableXmppAccount.retainedPassword(includeSecrets: Boolean, local: XmppAccountEntity?): String? =
+    if (!includeSecrets && password == null) local?.password else password
+
+/** Resolve the [XmppAccountEntity] to upsert for this network id, following the identical
+ *  include-secrets retention policy [PortableNetwork.toEntity]'s `retainedSasl`/etc. already use:
+ *  an excluded-secrets import falls back to whatever this same network already has locally, rather
+ *  than blanking out a real, already-present password. */
+private fun PortableXmppAccount.toEntity(
+    networkId: Long,
+    includeSecrets: Boolean,
+    local: XmppAccountEntity?,
+): XmppAccountEntity = XmppAccountEntity(
+    networkId = networkId,
+    jid = jid,
+    password = retainedPassword(includeSecrets, local).orEmpty(),
+    resource = resource,
+)
+
+private fun PortableNetwork.retainsAnyLocalSecret(local: NetworkEntity, localXmppAccount: XmppAccountEntity?): Boolean =
     (hadSaslPassword && saslPassword == null && !local.saslPassword.isNullOrBlank()) ||
         (hadServerPassword && serverPassword == null && !local.serverPassword.isNullOrBlank()) ||
-        (hadObfsLink && obfsLink == null && !local.obfsLink.isNullOrBlank())
+        (hadObfsLink && obfsLink == null && !local.obfsLink.isNullOrBlank()) ||
+        (xmppAccount?.hadPassword == true && xmppAccount.password == null && !localXmppAccount?.password.isNullOrBlank())
 
-private fun PortableNetwork.missingCredentials(local: NetworkEntity?): Boolean =
+private fun PortableNetwork.missingCredentials(local: NetworkEntity?, localXmppAccount: XmppAccountEntity?): Boolean =
     missingRequirements(
         localSaslPassword = local?.saslPassword,
         localServerPassword = local?.serverPassword,
         localObfsLink = local?.obfsLink,
+        localXmppPassword = localXmppAccount?.password,
     ).isNotEmpty()
 
 private fun PortableNetwork.missingRequirements(
     localSaslPassword: String?,
     localServerPassword: String?,
     localObfsLink: String?,
+    localXmppPassword: String? = null,
 ): List<String> = buildList {
     if (hadSaslPassword && saslPassword.isNullOrBlank() && localSaslPassword.isNullOrBlank()) add("saslPassword")
     if (hadServerPassword && serverPassword.isNullOrBlank() && localServerPassword.isNullOrBlank()) add("serverPassword")
     if (hadObfsLink && obfsLink.isNullOrBlank() && localObfsLink.isNullOrBlank()) add("obfsLink")
     if (hadClientCertificate) add("clientCertificate")
+    if (xmppAccount?.hadPassword == true && xmppAccount.password.isNullOrBlank() && localXmppPassword.isNullOrBlank()) {
+        add("xmppPassword")
+    }
 }
 
 private fun SelfAvatarSetting.toPortable(): PortableSelfAvatarSetting = when (this) {

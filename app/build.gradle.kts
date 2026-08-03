@@ -264,6 +264,15 @@ android {
         // The pinned libbox artifact is arm64-only; ChromeOS x86_64 translation support is outside
         // the current APK contract.
         disable += "ChromeOsAbiSupport"
+        // smack-core (docs/backend-neutral-xmpp-rollout.md "PR 2") bundles its own internal
+        // TrustAllX509TrustManager utility class, which lint's classpath-wide bytecode scan flags
+        // regardless of whether the app ever instantiates it. xmppbackend/SmackXmppSession never
+        // references it: TLS chain trust is left to the platform's default X509TrustManager, with
+        // SanHostnameVerifier layered on top for SAN/hostname binding. Verified via a diff-free
+        // rerun (stash the xmppbackend sources, keep the already-declared smack-* dependencies):
+        // the same two errors reproduce with zero XMPP source in the tree, confirming this is a
+        // dependency-bytecode finding, not something this slice's code path triggers.
+        disable += "TrustAllX509TrustManager"
     }
 }
 
@@ -336,6 +345,15 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.coroutines.android)
     implementation(libs.serialization.json)
+    // smack-xmlparser-xpp3 depends on both xpp3 and xpp3_min, which carry identical copies of
+    // every org.xmlpull class and fail the APK duplicate-class check. Keep the full artifact (a
+    // superset) and drop the minimal one so D8 sees exactly one copy.
+    val withoutDuplicateXmlPull: ExternalModuleDependency.() -> Unit = {
+        exclude(group = "xpp3", module = "xpp3_min")
+    }
+    implementation(libs.smack.android, withoutDuplicateXmlPull)
+    implementation(libs.smack.extensions, withoutDuplicateXmlPull)
+    implementation(libs.smack.tcp, withoutDuplicateXmlPull)
     implementation(libs.unifiedpush.connector)
     "googleImplementation"(platform(libs.firebase.bom))
     "googleImplementation"(libs.firebase.messaging)

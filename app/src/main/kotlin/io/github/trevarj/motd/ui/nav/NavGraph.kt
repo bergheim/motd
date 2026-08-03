@@ -11,8 +11,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
@@ -41,8 +43,12 @@ import io.github.trevarj.motd.ui.settings.NetworksSettingsScreen
 import io.github.trevarj.motd.ui.settings.NickListKind
 import io.github.trevarj.motd.ui.settings.SettingsScreen
 import io.github.trevarj.motd.ui.settings.addnetwork.AddNetworkScreen
+import io.github.trevarj.motd.ui.settings.addnetwork.ProtocolPickerScreen
 import io.github.trevarj.motd.ui.settings.bouncer.BouncerNetworksScreen
+import io.github.trevarj.motd.ui.settings.xmpp.XmppAccountScreen
 import io.github.trevarj.motd.ui.theme.MotdMotion
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 
 /**
  * App navigation graph. Routes come from [Routes.kt] (frozen). Each destination is wired to its
@@ -60,6 +66,12 @@ fun MotdNavGraph(
     notificationTarget: NotificationTarget? = null,
     onNotificationTargetHandled: () -> Unit = {},
 ) {
+    // Registry-driven account-entry dispatch (docs/backend-neutral-xmpp-rollout.md): resolves
+    // protocol -> route for both the add-account entry point and existing-row "network settings"
+    // navigation, so this graph names no protocol beyond the route types it registers below.
+    val accountRouting: AccountRoutingViewModel = hiltViewModel()
+    val accountRoutingScope = rememberCoroutineScope()
+
     // Route a notification tap to ChatRoute so the existing jump path (local resolve → CHATHISTORY
     // AROUND fallback) scrolls to and highlights the message. Runs for both cold start (target
     // seeded before first composition) and warm start (target updated by onNewIntent). Clearing the
@@ -125,6 +137,8 @@ fun MotdNavGraph(
                 listPane = { twoPane ->
                     ChatListPane(
                         navController = navController,
+                        accountRouting = accountRouting,
+                        accountRoutingScope = accountRoutingScope,
                         onDefaultBufferAvailable = { bufferId ->
                             if (twoPane && !openedDefault) {
                                 openedDefault = true
@@ -141,6 +155,8 @@ fun MotdNavGraph(
                 listPane = {
                     ChatListPane(
                         navController = navController,
+                        accountRouting = accountRouting,
+                        accountRoutingScope = accountRoutingScope,
                         selectedBufferId = route.bufferId,
                         replaceCurrentChat = true,
                     )
@@ -220,8 +236,11 @@ fun MotdNavGraph(
         composable<NetworksSettingsRoute> {
             NetworksSettingsScreen(
                 onBack = { navController.popBackStack() },
-                onOpenNetwork = { navController.navigate(NetworkSettingsRoute(it)) },
-                onOpenAddNetwork = { navController.navigate(AddNetworkRoute) },
+                // Registry-driven, mirroring ChatListRoute's drawer entry points above.
+                onOpenNetwork = { id ->
+                    accountRoutingScope.launch { navController.navigate(accountRouting.editRouteFor(id)) }
+                },
+                onOpenAddNetwork = { navController.navigate(accountRouting.createDestination()) },
             )
         }
         composable<BackupRestoreRoute> {
@@ -298,6 +317,27 @@ fun MotdNavGraph(
                 },
             )
         }
+        // Backend-neutral account entry points (docs/backend-neutral-xmpp-rollout.md): the picker
+        // is reached only when accountRouting.createDestination() resolves to it (2+ backends
+        // registered); each choice's route is one of this graph's other destinations.
+        composable<AccountPickerRoute> {
+            ProtocolPickerScreen(
+                choices = accountRouting.createChoices,
+                onBack = { navController.popBackStack() },
+                onChoose = { route ->
+                    navController.navigate(route) {
+                        popUpTo<AccountPickerRoute> { inclusive = true }
+                    }
+                },
+            )
+        }
+        composable<XmppAccountRoute> { entry ->
+            val route = entry.toRoute<XmppAccountRoute>()
+            XmppAccountScreen(
+                networkId = route.networkId,
+                onBack = { navController.popBackStack() },
+            )
+        }
         composable<BouncerNetworksRoute> { entry ->
             val route = entry.toRoute<BouncerNetworksRoute>()
             BouncerNetworksScreen(
@@ -318,6 +358,8 @@ fun MotdNavGraph(
 @Composable
 private fun ChatListPane(
     navController: NavHostController,
+    accountRouting: AccountRoutingViewModel,
+    accountRoutingScope: CoroutineScope,
     selectedBufferId: Long? = null,
     replaceCurrentChat: Boolean = false,
     onDefaultBufferAvailable: (Long) -> Unit = {},
@@ -340,8 +382,12 @@ private fun ChatListPane(
         onOpenSettings = { navController.navigate(SettingsRoute) },
         onOpenSearch = { navController.navigate(SearchRoute()) },
         onOpenOnboarding = { navController.navigate(OnboardingRoute) },
-        onOpenNetworkSettings = { navController.navigate(NetworkSettingsRoute(it)) },
-        onOpenAddNetwork = { navController.navigate(AddNetworkRoute) },
+        // Registry-driven (docs/backend-neutral-xmpp-rollout.md), mirroring NetworksSettingsRoute
+        // below instead of hardcoding IRC's routes.
+        onOpenNetworkSettings = { id ->
+            accountRoutingScope.launch { navController.navigate(accountRouting.editRouteFor(id)) }
+        },
+        onOpenAddNetwork = { navController.navigate(accountRouting.createDestination()) },
         onOpenChannelList = { navController.navigate(ChannelListRoute(it)) },
         selectedBufferId = selectedBufferId,
         onDefaultBufferAvailable = onDefaultBufferAvailable,
