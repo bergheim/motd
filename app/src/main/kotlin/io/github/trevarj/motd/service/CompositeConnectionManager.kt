@@ -52,6 +52,21 @@ class CompositeConnectionManager @Inject constructor(
     override val connectionStates: StateFlow<Map<Long, ConnectionState>> by lazy {
         CombinedStateFlow(sessionList.map { it.connectionStates }, ::union)
     }
+    // Every seam member must be dispatched here. Anything left unoverridden silently resolves to
+    // the interface default (empty flow / false), which reads as "nothing is connected" or "the
+    // write failed" rather than failing loudly — that is how this one was missed.
+    override val connectionActivity: StateFlow<ConnectionActivitySnapshot> by lazy {
+        CombinedStateFlow(sessionList.map { it.connectionActivity }) { snapshots ->
+            ConnectionActivitySnapshot(
+                states = union(snapshots.map { it.states }),
+                progressing = union(snapshots.map { it.progressing }),
+                // Startup is only complete once every backend has finished its initial reconcile;
+                // a backend still settling must not let callers treat the set as authoritative.
+                initializationComplete = snapshots.all { it.initializationComplete },
+                historyCatchUpPending = snapshots.flatMapTo(mutableSetOf()) { it.historyCatchUpPending },
+            )
+        }
+    }
     override val memberLoadStates: StateFlow<Map<Long, RosterLoadState>> by lazy {
         CombinedStateFlow(sessionList.map { it.memberLoadStates }, ::union)
     }
@@ -147,6 +162,9 @@ class CompositeConnectionManager @Inject constructor(
 
     override suspend fun partChannelForClose(bufferId: Long, reason: String?): Boolean =
         sessionsForBuffer(bufferId)?.partChannelForClose(bufferId, reason) ?: false
+
+    override suspend fun setChannelTopic(bufferId: Long, topic: String): Boolean =
+        sessionsForBuffer(bufferId)?.setChannelTopic(bufferId, topic) ?: false
 
     override suspend fun requestMembers(bufferId: Long, force: Boolean) {
         sessionsForBuffer(bufferId)?.requestMembers(bufferId, force)
