@@ -1,8 +1,10 @@
 package io.github.trevarj.motd.service
 
-import io.github.trevarj.motd.irc.client.IrcClient
-import io.github.trevarj.motd.irc.event.IrcClientState
-import io.github.trevarj.motd.irc.event.IrcEvent
+import io.github.trevarj.motd.backend.ConnectionState
+import io.github.trevarj.motd.backend.ProtocolCommands
+import io.github.trevarj.motd.backend.ReactionCapability
+import io.github.trevarj.motd.backend.RoomTargetSyntax
+import io.github.trevarj.motd.irc.client.HistoryAvailability
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 import io.github.trevarj.motd.data.db.TimelineAnchor
 import io.github.trevarj.motd.data.db.TimelineEventId
@@ -39,6 +41,12 @@ enum class RosterLoadState { NOT_LOADED, LOADING, LOADED, FAILED }
 enum class PresenceState { UNKNOWN, ONLINE, OFFLINE }
 data class PresenceKey(val networkId: Long, val normalizedNick: String)
 
+/** Stable, casemapping-invariant name for a network's per-network SERVER buffer
+ *  ([ConnectionManager.ensureServerBuffer]) — shared so every backend (IRC's `ConnectionManagerImpl`,
+ *  XMPP's `XmppConnectionManager`) resolves/creates the identical buffer identity for a network's
+ *  "server messages" timeline rather than each backend inventing its own convention. */
+const val SERVER_BUFFER_NAME = "*"
+
 /** Ephemeral, target-keyed server rejection for a browser-initiated JOIN. */
 sealed interface ChannelJoinOutcome {
     data class Rejected(
@@ -48,41 +56,26 @@ sealed interface ChannelJoinOutcome {
     ) : ChannelJoinOutcome
 }
 
-private val JOIN_FAILURE_NUMERICS = setOf("403", "405", "471", "473", "474", "475", "476")
-
-/** Extracts only JOIN-specific numeric and IRCv3 FAIL replies; unrelated server errors stay inert. */
-internal fun channelJoinOutcome(
-    networkId: Long,
-    event: IrcEvent,
-    identityRules: IrcIdentityRules,
-): ChannelJoinOutcome.Rejected? {
-    val (params, reason) = when (event) {
-        is IrcEvent.ServerError -> if (event.code in JOIN_FAILURE_NUMERICS) {
-            event.params to event.text.ifBlank { event.code }
-        } else {
-            return null
-        }
-        is IrcEvent.StandardReply -> {
-            if (event.severity != IrcEvent.StandardReplySeverity.FAIL ||
-                !event.commandName.equals("JOIN", ignoreCase = true)
-            ) return null
-            event.context to event.description.ifBlank { event.code }
-        }
-        else -> return null
-    }
-    val channel = params.firstOrNull(identityRules::isChannel) ?: return null
-    return ChannelJoinOutcome.Rejected(networkId, channel, reason)
-}
-
 internal fun rosterStateAfterNames(explicitRefreshInFlight: Boolean): RosterLoadState =
     if (explicitRefreshInFlight) RosterLoadState.LOADING else RosterLoadState.LOADED
 
 internal fun rosterStateAfterExplicitRefresh(completed: Boolean): RosterLoadState =
     if (completed) RosterLoadState.LOADED else RosterLoadState.FAILED
 
-private val EMPTY_ROSTER_STATES: StateFlow<Map<Long, RosterLoadState>> = MutableStateFlow(emptyMap())
+private val EMPTY_MEMBER_LOAD_STATES: StateFlow<Map<Long, RosterLoadState>> = MutableStateFlow(emptyMap())
 private val EMPTY_PRESENCE_STATES: StateFlow<Map<PresenceKey, PresenceState>> = MutableStateFlow(emptyMap())
 private val EMPTY_LAG_STATES: StateFlow<Map<Long, Long?>> = MutableStateFlow(emptyMap())
+data class ConnectionActivitySnapshot(
+    val states: Map<Long, ConnectionState> = emptyMap(),
+    val progressing: Map<Long, Boolean> = emptyMap(),
+    val initializationComplete: Boolean = true,
+    val historyCatchUpPending: Set<Long> = emptySet(),
+)
+
+private val EMPTY_CONNECTION_ACTIVITY = MutableStateFlow(ConnectionActivitySnapshot())
+private val EMPTY_SERVER_PUSH: StateFlow<Boolean> = MutableStateFlow(false)
+private val EMPTY_ATTACHMENT_ENDPOINTS: StateFlow<Map<Long, String>> = MutableStateFlow(emptyMap())
+private val EMPTY_REACTION_CAPABILITIES: StateFlow<Map<Long, ReactionCapability>> = MutableStateFlow(emptyMap())
 
 /**
  * A pending TOFU cert-trust decision surfaced to the UI (plans/12). Published when a TLS handshake
@@ -102,16 +95,78 @@ data class CertPrompt(
 )
 
 interface ConnectionManager {
-    /** Connection state per network row id. */
-    val connectionStates: StateFlow<Map<Long, IrcClientState>>
-    val rosterStates: StateFlow<Map<Long, RosterLoadState>> get() = EMPTY_ROSTER_STATES
+    /** Connection state per network row id, in the backend-neutral lifecycle vocabulary. */
+    val connectionStates: StateFlow<Map<Long, ConnectionState>>
+    /** Atomically published connection state, actor liveness, and initial-reconcile readiness. */
+    val connectionActivity: StateFlow<ConnectionActivitySnapshot> get() = EMPTY_CONNECTION_ACTIVITY
+
+    /**
+     * Member-list load state per BUFFER row id — IRC channel NAMES, XMPP MUC occupants. Never
+     * keyed by network id: the map's keyspace is buffer ids across every backend, unioned by the
+     * composite (pinned after Branch-2 feedback, docs/backend-neutral-xmpp-rollout.md).
+     */
+    val memberLoadStates: StateFlow<Map<Long, RosterLoadState>> get() = EMPTY_MEMBER_LOAD_STATES
     val presenceStates: StateFlow<Map<PresenceKey, PresenceState>> get() = EMPTY_PRESENCE_STATES
     /** Latest PING/PONG round-trip latency (ms) per network id; null = unknown/disconnected (#34). */
     val lagStates: StateFlow<Map<Long, Long?>> get() = EMPTY_LAG_STATES
     val channelJoinOutcomes: Flow<ChannelJoinOutcome> get() = emptyFlow()
 
-    /** Live client for a connected network, null otherwise. */
-    fun clientFor(networkId: Long): IrcClient?
+    /** True while any connected network accepts server-side push registration. */
+    val serverPushAvailable: StateFlow<Boolean> get() = EMPTY_SERVER_PUSH
+
+    /** networkId -> attachment upload endpoint, present only while the network offers one. */
+    val attachmentUploadEndpoints: StateFlow<Map<Long, String>> get() = EMPTY_ATTACHMENT_ENDPOINTS
+
+    /** networkId -> reaction sendability; absent means reactions are unavailable right now. */
+    val reactionCapabilities: StateFlow<Map<Long, ReactionCapability>> get() = EMPTY_REACTION_CAPABILITIES
+
+    /**
+     * Live negotiated identity rules for a network, null when no live session exists. Callers keep
+     * their persisted fallback so offline normalization behavior never changes
+     * (docs/backend-neutral-xmpp-rollout.md). The value type stays [IrcIdentityRules] until the
+     * canonical participant-identity model is neutralized.
+     */
+    fun liveIdentityRules(networkId: Long): IrcIdentityRules? = null
+
+    /**
+     * Live server-history availability for a network, null when no live session exists. The
+     * :irc [HistoryAvailability] shape (reference types, page limit) stays on this contract only
+     * until the neutral history boundary lands (docs/backend-neutral-xmpp-rollout.md).
+     */
+    fun historyAvailability(networkId: Long): HistoryAvailability? = null
+
+    /**
+     * Optional per-network capability for protocol-defined chat commands, participant lookup, and
+     * moderation (docs/backend-neutral-xmpp-rollout.md "Remove the client escape hatch"). Null when
+     * there is no live session for the network, or the backend has no such capability at all. See
+     * [ProtocolCommands] for the exact operations and their behavior contract.
+     */
+    fun protocolCommands(networkId: Long): ProtocolCommands? = null
+
+    /**
+     * Optional per-network capability describing how free-form "join channel" user input maps onto
+     * this backend's own room-target wire syntax (docs/backend-neutral-xmpp-rollout.md capability
+     * list example "room-target syntax"; review fix — shared UI used to hardcode an IRC-shaped
+     * `#`-prefix transform itself, so entering a bare XMPP room JID like `room@conference.example.org`
+     * tried to join `#room@conference.example.org` instead). Independent of live connection state —
+     * unlike [protocolCommands]/[historyAvailability], a user should be able to type a join target
+     * whether or not the network happens to be connected right now. Null means the backend has no
+     * such transform and shared UI must use the trimmed input verbatim (XMPP's baseline: a bare room
+     * JID has no channel-name convention to add).
+     */
+    suspend fun roomTargetSyntax(networkId: Long): RoomTargetSyntax? = null
+
+    /**
+     * Whether this network's backend can browse/discover rooms at all (docs/backend-neutral-xmpp-rollout.md
+     * capability list example "room discovery"; review fix — shared UI's channel browser used to
+     * reach for an IRC-owned live-session accessor unconditionally, so opening it for an XMPP network
+     * always waited out its poll timeout and settled on a misleading "try again" error). Independent
+     * of live connection state — false means the backend has no such capability at all, never merely
+     * "not connected right now" (which shared UI already distinguishes through [connectionStates]).
+     * Default false; only a backend that actually implements discovery (IRC's LIST/ELIST) overrides
+     * this to true.
+     */
+    suspend fun supportsRoomDiscovery(networkId: Long): Boolean = false
 
     /** Start/stop the whole subsystem (invoked by service / delivery-mode changes). */
     suspend fun startAll()
@@ -170,6 +225,14 @@ interface ConnectionManager {
         false
     }
 
+    /**
+     * Write a channel TOPIC command. True means the live transport accepted the write; it does
+     * not mean the server authorized or echoed the change. Room is updated only by the IRC echo.
+     * The default is deliberately conservative so lightweight fakes remain disconnected unless
+     * they opt into an accepted write.
+     */
+    suspend fun setChannelTopic(bufferId: Long, topic: String): Boolean = false
+
     /** Find-or-create a QUERY buffer for a DM (name Isupport-normalized); returns bufferId. */
     suspend fun ensureQueryBuffer(networkId: Long, nick: String): Long
 
@@ -196,26 +259,15 @@ interface ConnectionManager {
     fun dismissCertPrompt(prompt: CertPrompt)
 }
 
-/** Sole IRC→Room write path. Implemented by EventProcessor (WP5); ConnectionManager delegates
- *  its pending-send insert here; push (WP9) feeds decrypted lines through it. WP1 stub-binds. */
-interface IrcEventSink {
-    suspend fun process(networkId: Long, event: io.github.trevarj.motd.irc.event.IrcEvent)
-
-    /** Persist a push-delivered event without treating it as live IRC session state. */
-    suspend fun processPush(networkId: Long, event: io.github.trevarj.motd.irc.event.IrcEvent)
-
-    /** Persist one completed protocol page together with its exact primary-message boundaries. */
-    suspend fun persistHistoryPage(
-        networkId: Long,
-        request: io.github.trevarj.motd.irc.client.ChatHistoryRequest,
-        response: io.github.trevarj.motd.irc.client.ChatHistoryResponse.Messages,
-        expectedRoomId: Long? = null,
-    ): Long
-}
-
-/** In-memory typing state. Written by EventProcessor (WP5), read by ChatViewModel (WP7). */
+/**
+ * In-memory typing state. Read by ChatViewModel; written by each backend's processor through the
+ * neutral write contract (pinned after Branch-2 feedback, docs/backend-neutral-xmpp-rollout.md).
+ */
 interface TypingTracker {
     fun typingNicks(bufferId: Long): StateFlow<List<String>>
+
+    /** Apply a typing state ("active" | "paused" | "done") for [actor] in [bufferId]. */
+    fun onTyping(bufferId: Long, actor: String, state: String)
 }
 
 /** Buffer currently visible in the foreground UI. Set by ChatViewModel (WP7), read by the

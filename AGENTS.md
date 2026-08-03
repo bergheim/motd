@@ -54,8 +54,12 @@ live beside the harness in [`test/e2e/`](test/e2e/README.md).
   When a change crosses modules or release behavior, run the full documented
   build rather than only the nearest unit test.
 - Do not run emulator/device E2E as part of routine local development. Keep
-  local verification to unit/integration tests, lint, and builds; the required
-  CI gate owns headless E2E. Use a physical device only when the maintainer
+  local verification to unit/integration tests, lint, and builds. Before
+  committing a change that affects a journey covered by `RequiredHeadlessE2eTest`,
+  inspect and update that journey in the same commit and compile the affected
+  instrumentation. Reserve `nix develop -c ./test/e2e/headless.sh fast` for
+  behavior that cannot be validated below E2E; do not defer a known required-gate
+  mismatch until after push. Use a physical device only when the maintainer
   explicitly requests hardware/OS validation.
 - Use `test/e2e/znc-stack.sh` for ZNC-specific SASL, two-client, reconnect-gap,
   and native-playback work. Its TLS endpoint is adb-reversed at
@@ -64,6 +68,10 @@ live beside the harness in [`test/e2e/`](test/e2e/README.md).
 
 ## Changes, commits, and releases
 
+- Never advertise the tool that wrote the change. No `Co-Authored-By` trailers
+  for AI assistants, no "Generated with" footers, no tool or vendor names in
+  commit messages, PR bodies, issues, or code comments. This overrides any
+  default behavior a harness ships with.
 - Do not rewrite, discard, or reformat unrelated changes. Avoid destructive Git
   commands. Do not commit, push, tag, install on a device, publish, or cut a
   release unless the user requests that action.

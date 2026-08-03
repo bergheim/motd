@@ -31,6 +31,38 @@ class MessageDaoTest {
     }
 
     @Test
+    fun invitationInbox_keepsActionableAndResolvedEventsButExcludesHistoricalPlayback() = runTest {
+        val dao = db.messageDao()
+        val pending = message(
+            bufferId,
+            "alice invited you to #pending",
+            serverTime = 3_000,
+            dedupKey = "invite-pending",
+            kind = MessageKind.INVITE,
+        ).copy(eventPayload = "invite-v1:YQ:bWU:I3BlbmRpbmc", inviteState = InviteState.PENDING)
+        val joined = message(
+            bufferId,
+            "bob invited you to #joined",
+            serverTime = 4_000,
+            dedupKey = "invite-joined",
+            kind = MessageKind.INVITE,
+        ).copy(eventPayload = "invite-v1:Yg:bWU:I2pvaW5lZA", inviteState = InviteState.JOINED)
+        val historical = message(
+            bufferId,
+            "old invitation",
+            serverTime = 5_000,
+            dedupKey = "invite-historical",
+            kind = MessageKind.INVITE,
+        ).copy(eventPayload = "invite-v1:Yw:bWU:I29sZA", inviteState = InviteState.HISTORICAL)
+
+        dao.insertAll(listOf(joined, historical, pending))
+
+        val rows = dao.observeInvitations().first()
+        assertEquals(listOf(InviteState.PENDING, InviteState.JOINED), rows.map { it.inviteState })
+        assertEquals(listOf("libera", "libera"), rows.map { it.networkName })
+    }
+
+    @Test
     fun dedupKeyIsDiagnostic_directDaoInsertsDoNotClaimCanonicalIdentity() = runTest {
         val dao = db.messageDao()
         val a = message(bufferId, "hello", serverTime = 1000, dedupKey = "msg-1", msgid = "msg-1")

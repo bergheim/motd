@@ -38,11 +38,16 @@ e2e_capture_native_stack_artifacts() {
 }
 
 e2e_pull_required_e2e_artifacts() {
-  local output_dir="$1"
+  local output_dir="$1" media_root
   mkdir -p "$output_dir"
-  # The instrumentation package owns these files. Unlike shared external storage, its internal
-  # files directory is always mounted; run-as keeps the pull scoped to the debuggable test APK.
+  # Older runners may use the instrumentation package's internal files directory.
   e2e_adb exec-out run-as "$FAST_E2E_TEST_PACKAGE" tar -C files -cf - required-e2e 2>/dev/null \
+    | tar -C "$output_dir" -xf - 2>/dev/null || true
+  # AndroidX PlatformTestStorage writes direct-instrumentation output under the target package's
+  # app-specific media directory. Pull it explicitly so post-start failures are classified once
+  # and pass through the same privacy audit as managed/connected Gradle output.
+  media_root="/sdcard/Android/media/$FAST_E2E_TARGET_PACKAGE/additionalTestOutputDir"
+  e2e_adb exec-out tar -C "$media_root" -cf - required-e2e 2>/dev/null \
     | tar -C "$output_dir" -xf - 2>/dev/null || true
 }
 

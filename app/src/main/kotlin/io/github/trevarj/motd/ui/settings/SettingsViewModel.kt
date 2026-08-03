@@ -177,6 +177,11 @@ class SettingsViewModel @Inject constructor(
         runCatching { pushDistributorController.retry() }
     }
 
+    /** Refresh the app-notification setting after Delivery Settings resumes from Android Settings. */
+    fun refreshNotificationPermission() {
+        pushAvailability.refreshNotificationPermission()
+    }
+
     // Round 4 (plans/13): appearance/chat/people settings.
     fun setLayoutDensity(density: LayoutDensity) = viewModelScope.launch {
         settingsRepository.setLayoutDensity(density)

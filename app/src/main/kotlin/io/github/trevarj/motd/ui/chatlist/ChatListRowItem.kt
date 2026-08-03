@@ -67,6 +67,9 @@ internal data class ChatListBadgeState(
     val mutedActivity: Int? = null,
     val mentions: Int? = null,
     val unread: Int? = null,
+    val mutedActivityIncomplete: Boolean = false,
+    val mentionsIncomplete: Boolean = false,
+    val unreadIncomplete: Boolean = false,
 )
 
 internal enum class ChatListRowVisualState { DEFAULT, UNREAD, ACTIVE, SELECTED }
@@ -94,11 +97,16 @@ internal fun chatListRowContainer(
 
 internal fun chatListBadgeState(row: ChatListRow): ChatListBadgeState =
     if (row.muted) {
-        ChatListBadgeState(mutedActivity = row.unreadCount.takeIf { it > 0 })
+        ChatListBadgeState(
+            mutedActivity = row.unreadCount.takeIf { it > 0 },
+            mutedActivityIncomplete = row.unreadCountIncomplete,
+        )
     } else {
         ChatListBadgeState(
             mentions = row.mentionCount.takeIf { it > 0 },
             unread = row.unreadCount.takeIf { it > 0 },
+            mentionsIncomplete = row.mentionCountIncomplete,
+            unreadIncomplete = row.unreadCountIncomplete,
         )
     }
 
@@ -115,6 +123,15 @@ internal fun chatListMessagePreview(text: String?): ChatListMessagePreview {
     }
     return voice?.let { ChatListMessagePreview.Voice(it.durationMs) }
         ?: ChatListMessagePreview.Text(value)
+}
+
+internal fun chatListPreviewSender(
+    type: BufferType,
+    messageText: String?,
+    sender: String?,
+): String? = sender?.takeIf {
+    // System events use an empty sender, which must not leave an empty label chip.
+    type == BufferType.CHANNEL && messageText != null && it.isNotBlank()
 }
 
 /**
@@ -275,8 +292,7 @@ fun ChatListRowItem(
                 // with nick mentions in the message text); queries read cleaner without it.
                 val lastMessage = row.lastMessageText
                 val preview = chatListMessagePreview(lastMessage)
-                val sender = row.lastMessageSender
-                    ?.takeIf { row.type == BufferType.CHANNEL && lastMessage != null }
+                val sender = chatListPreviewSender(row.type, lastMessage, row.lastMessageSender)
                 if (sender != null) {
                     SenderLabel(
                         sender = sender,
@@ -341,14 +357,23 @@ fun ChatListRowItem(
                 badges.mutedActivity?.let { count ->
                     MutedActivityBadge(
                         count = count,
+                        lowerBound = badges.mutedActivityIncomplete,
                         modifier = Modifier.testTag("chatlist_row_muted_activity_badge"),
                     )
                 }
                 badges.mentions?.let { count ->
-                    MentionBadge(count = count, modifier = Modifier.testTag("chatlist_row_mention_badge"))
+                    MentionBadge(
+                        count = count,
+                        lowerBound = badges.mentionsIncomplete,
+                        modifier = Modifier.testTag("chatlist_row_mention_badge"),
+                    )
                 }
                 badges.unread?.let { count ->
-                    UnreadBadge(count = count, modifier = Modifier.testTag("chatlist_row_unread_badge"))
+                    UnreadBadge(
+                        count = count,
+                        lowerBound = badges.unreadIncomplete,
+                        modifier = Modifier.testTag("chatlist_row_unread_badge"),
+                    )
                 }
             }
         }

@@ -4,6 +4,7 @@ import androidx.paging.PagingData
 import androidx.paging.RemoteMediator
 import io.github.trevarj.motd.data.db.BufferEntity
 import io.github.trevarj.motd.data.db.ChatListRow
+import io.github.trevarj.motd.data.db.InvitationEventRow
 import io.github.trevarj.motd.data.db.MemberEntity
 import io.github.trevarj.motd.data.db.MessageEntity
 import io.github.trevarj.motd.data.db.NetworkBufferToolRow
@@ -11,7 +12,9 @@ import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkIgnoreEntity
 import io.github.trevarj.motd.data.db.ReactionEntity
 import io.github.trevarj.motd.data.db.SearchHit
+import io.github.trevarj.motd.data.db.TimelineAnchor
 import io.github.trevarj.motd.data.visibility.MessageVisibilitySpec
+import io.github.trevarj.motd.data.visibility.MessageWindowBounds
 import io.github.trevarj.motd.data.prefs.LayoutDensity
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
@@ -50,6 +53,8 @@ object NoopNetworkIgnoreRepository : NetworkIgnoreRepository {
 
 interface BufferRepository {
     fun observeChatList(): Flow<List<ChatListRow>>
+    /** Canonical live invitation events, including resolved rows retained for user context. */
+    fun observeInvitations(): Flow<List<InvitationEventRow>> = flowOf(emptyList())
     /** Normalized CHANNEL names confirmed by EventProcessor self-JOIN persistence. */
     fun observeJoinedChannelNames(networkId: Long): Flow<Set<String>> = flowOf(emptySet())
     fun observeBuffer(id: Long): Flow<BufferEntity?>
@@ -72,6 +77,26 @@ interface BufferRepository {
 interface MessageRepository {
     /** Each visibility spec creates a distinct, positionally correct Pager generation. */
     fun messages(bufferId: Long, visibility: MessageVisibilitySpec): Flow<PagingData<MessageEntity>>
+    fun messages(
+        bufferId: Long,
+        visibility: MessageVisibilitySpec,
+        focus: HistoryWindowFocus,
+    ): Flow<PagingData<MessageEntity>> = messages(bufferId, visibility)
+
+    /**
+     * As [messages], but seeds the Pager's first source load around [initialKey] (a 0-based
+     * timeline offset into the same focus/visibility query the PagingSource uses). Supplied for a
+     * large open-at-first-unread entry whose anchor sits beyond the default newest load, so the
+     * initial refresh materializes the entry row directly instead of forcing a scroll to an
+     * unloaded placeholder at the older paging boundary (which would drive a boundary APPEND and
+     * churn the generation before the row can compose). A null key preserves the newest-first load.
+     */
+    fun messages(
+        bufferId: Long,
+        visibility: MessageVisibilitySpec,
+        focus: HistoryWindowFocus,
+        initialKey: Int?,
+    ): Flow<PagingData<MessageEntity>> = messages(bufferId, visibility, focus)
     fun reactions(bufferId: Long, msgids: List<String>): Flow<List<ReactionEntity>>
     /** Canonical event-id lookup used by notification and restored-scroll anchors. */
     suspend fun byId(id: Long): MessageEntity? = null
@@ -92,15 +117,45 @@ interface MessageRepository {
         id: Long,
         visibility: MessageVisibilitySpec,
     ): Int
+    suspend fun countNewerThan(
+        bufferId: Long,
+        serverTime: Long,
+        id: Long,
+        visibility: MessageVisibilitySpec,
+        focus: HistoryWindowFocus,
+    ): Int = countNewerThan(bufferId, serverTime, id, visibility)
+    /** Exact bounds used by the Pager generation for focus-relative viewport queries. */
+    suspend fun historyWindowBounds(
+        bufferId: Long,
+        focus: HistoryWindowFocus,
+    ): MessageWindowBounds = MessageWindowBounds()
+    fun observeHistoryWindowBounds(
+        bufferId: Long,
+        focus: HistoryWindowFocus,
+    ): Flow<MessageWindowBounds> = flowOf(MessageWindowBounds())
     /** Delete a locally-stored failed row by id, repairing any exact local read anchor. */
     suspend fun deleteMessage(id: Long)
+}
+
+/** The contiguous local history segment rendered by one Pager generation. */
+sealed interface HistoryWindowFocus {
+    /** Paint the newest contiguous local island; Paging3 APPEND drives older history over the wire. */
+    data object Recent : HistoryWindowFocus
+
+    data class Around(
+        val serverTime: Long,
+        val eventId: Long = Long.MIN_VALUE,
+        val timelineOrder: Long = eventId,
+    ) : HistoryWindowFocus {
+        val anchor: TimelineAnchor get() = TimelineAnchor(serverTime, eventId, timelineOrder)
+    }
 }
 
 /** WP4 injects this to build its Pager; WP1 stub-binds a no-op (immediate endOfPagination),
  *  WP5 provides the real CHATHISTORY-backed implementation, WP10 rebinds. */
 @OptIn(androidx.paging.ExperimentalPagingApi::class) // RemoteMediator is experimental; annotation does not alter the frozen signature
 fun interface ChatHistoryMediatorFactory {
-    fun create(bufferId: Long): RemoteMediator<Int, MessageEntity>
+    fun create(bufferId: Long, focus: HistoryWindowFocus): RemoteMediator<Int, MessageEntity>
 }
 
 interface SearchRepository {

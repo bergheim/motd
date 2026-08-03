@@ -8,7 +8,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -46,14 +46,15 @@ class ChatHistorySyncIndicatorUiTest {
                 )
             }
         }
+        compose.waitForIdle()
 
         compose.onAllNodesWithTag(CHAT_HISTORY_SYNC_INDICATOR_TAG).assertCountEquals(0)
         compose.mainClock.advanceTimeBy(HISTORY_SYNC_INDICATOR_DELAY_MS - 1)
         compose.onAllNodesWithTag(CHAT_HISTORY_SYNC_INDICATOR_TAG).assertCountEquals(0)
         compose.mainClock.advanceTimeBy(1)
-        compose.mainClock.advanceTimeByFrame()
+        compose.mainClock.advanceTimeBy(500)
         compose.onNodeWithTag(CHAT_HISTORY_SYNC_INDICATOR_TAG).assertIsDisplayed()
-        compose.onNodeWithText("Syncing messages…").assertIsDisplayed()
+        compose.onNodeWithText("Finding first unread…").assertExists()
     }
 
     @Test
@@ -69,10 +70,12 @@ class ChatHistorySyncIndicatorUiTest {
                 )
             }
         }
+        compose.waitForIdle()
 
         compose.mainClock.advanceTimeBy(EMPTY_HISTORY_LOADING_INDICATOR_DELAY_MS)
-        compose.mainClock.advanceTimeByFrame()
-        compose.onNodeWithText("Loading messages…").assertIsDisplayed()
+        compose.mainClock.advanceTimeBy(500)
+        compose.onNodeWithTag(CHAT_HISTORY_SYNC_INDICATOR_TAG).assertIsDisplayed()
+        compose.onNodeWithText("Loading messages…").assertExists()
     }
 
     @Test

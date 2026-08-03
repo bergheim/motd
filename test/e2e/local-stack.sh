@@ -31,7 +31,7 @@
 #   ./test/e2e/local-stack.sh tls-fingerprint # lowercase SHA-256 of fixture certificate
 #   ./test/e2e/local-stack.sh control-check # BouncerServ admin/non-admin and mutation proof
 #   ./test/e2e/local-stack.sh read-marker-check # two-client marker broadcast/reconnect proof
-#   ./test/e2e/local-stack.sh invite-check # direct sender -> soju downstream INVITE proof
+#   ./test/e2e/local-stack.sh invite-check [CHANNEL] # direct sender -> soju downstream INVITE proof
 #   ./test/e2e/local-stack.sh ready-up   # start scripted IRCv3 Ready fixture + soju network
 #   ./test/e2e/local-stack.sh ready-check # direct and soju wire proofs for Ready features
 #   ./test/e2e/local-stack.sh ready-down # remove scripted fixture network + process
@@ -64,6 +64,9 @@ export MOTD_STACK_PROFILE="$STACK_PROFILE"
 ERGO_PORT="${MOTD_ERGO_PORT:-6667}"
 SOJU_PORT="${MOTD_SOJU_PORT:-6697}"
 SOJU_HTTP_PORT="${MOTD_SOJU_HTTP_PORT:-6696}"
+# FILEHOST base host advertised in upload URLs. Default matches the adb-reverse topology; set
+# 10.0.2.2 to mirror the hosted hermetic stack, where the emulator reaches the host directly.
+SOJU_HTTP_INGRESS_HOST="${MOTD_SOJU_HTTP_INGRESS_HOST:-127.0.0.1}"
 export ERGO_HOST=127.0.0.1
 export ERGO_PORT
 export SOJU_PORT
@@ -75,6 +78,7 @@ else
   export MOTD_SHOWCASE_CHANNELS=''
   export TEST_CHANNEL="${MOTD_STACK_CHANNEL:-##motdtest}"
 fi
+export BROWSER_CHANNEL="${MOTD_BROWSER_CHANNEL:-#motd-browser}"
 export APP_NICK=motdadb
 export UP_ACCOUNT=motd
 export UP_PASS=motdupstream
@@ -216,7 +220,7 @@ message-store db
 file-upload fs $RUN/soju/uploads
 listen ircs://:$SOJU_PORT
 listen https://:$SOJU_HTTP_PORT
-http-ingress https://127.0.0.1:$SOJU_HTTP_PORT
+http-ingress https://$SOJU_HTTP_INGRESS_HOST:$SOJU_HTTP_PORT
 tls $RUN/soju/tls/cert.pem $RUN/soju/tls/key.pem
 listen unix+admin://$ADMIN_SOCK
 EOF
@@ -452,11 +456,13 @@ soju_read_marker_check() {
 }
 
 invite_check() {
+  local channel="${1:-##motdinvite}"
   [ -S "$ADMIN_SOCK" ] || die "soju admin socket not found; run '$0 up' first"
   log "running direct Ergo sender -> soju downstream invitation proof"
   python3 "$REPO/test/e2e/fixtures/invite-delivery-probe.py" \
     --ergo-port "$ERGO_PORT" --soju-port "$SOJU_PORT" \
-    --username "$SOJU_USER/$NETWORK_NAME" --password "$SOJU_PASS" --target "$APP_NICK"
+    --username "$SOJU_USER/$NETWORK_NAME" --password "$SOJU_PASS" --target "$APP_NICK" \
+    --channel "$channel"
 }
 
 ready_up() {
@@ -939,7 +945,7 @@ case "$CMD" in
   tls-fingerprint) tls_fingerprint ;;
   read-marker-check) read_marker_check ;;
   soju-read-marker-check) soju_read_marker_check ;;
-  invite-check) invite_check ;;
+  invite-check) invite_check "${2:-}" ;;
   ready-up) ready_up ;;
   ready-check) ready_check ;;
   ready-down) ready_down ;;

@@ -52,7 +52,7 @@ import androidx.compose.ui.unit.dp
 import io.github.trevarj.motd.R
 import io.github.trevarj.motd.data.db.NetworkRole
 import io.github.trevarj.motd.data.prefs.AvatarStyle
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.ui.components.IrcNetworkBadge
 import io.github.trevarj.motd.ui.components.MentionBadge
 import io.github.trevarj.motd.ui.components.UnreadBadge
@@ -71,6 +71,8 @@ fun ServerDrawerContent(
     selectedNetworkId: Long?,
     allUnread: Int,
     allMentions: Int,
+    allUnreadIncomplete: Boolean = false,
+    allMentionsIncomplete: Boolean = false,
     scopedUnreadCount: Int,
     allOffline: Boolean,
     onSelectNetwork: (Long?) -> Unit,
@@ -107,6 +109,8 @@ fun ServerDrawerContent(
             NetworksHeader(
                 totalUnread = allUnread,
                 totalMentions = allMentions,
+                unreadIncomplete = allUnreadIncomplete,
+                mentionsIncomplete = allMentionsIncomplete,
                 scoped = selectedNetworkId != null,
                 onClearFilter = { onSelectNetwork(null) },
             )
@@ -184,6 +188,8 @@ fun ServerDrawerContent(
 private fun NetworksHeader(
     totalUnread: Int,
     totalMentions: Int,
+    unreadIncomplete: Boolean,
+    mentionsIncomplete: Boolean,
     scoped: Boolean,
     onClearFilter: () -> Unit,
 ) {
@@ -211,8 +217,8 @@ private fun NetworksHeader(
         } else {
             // Unscoped: surface the aggregate unread/mention rollup where "All chats" used to.
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                if (totalMentions > 0) MentionBadge(totalMentions)
-                if (totalUnread > 0) UnreadBadge(totalUnread)
+                if (totalMentions > 0) MentionBadge(totalMentions, lowerBound = mentionsIncomplete)
+                if (totalUnread > 0) UnreadBadge(totalUnread, lowerBound = unreadIncomplete)
             }
         }
     }
@@ -249,7 +255,7 @@ private fun DrawerNetworkItem(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             if (LocalAvatarStyle.current == AvatarStyle.IRC_SPRITE) {
-                val connected = row.state is IrcClientState.Ready
+                val connected = row.state is ConnectionState.Ready
                 val statusDescription = stringResource(
                     if (connected) R.string.drawer_state_connected
                     else R.string.drawer_state_disconnected,
@@ -281,7 +287,7 @@ private fun DrawerNetworkItem(
                 Text(
                     text = subtitleFor(row.state, row.nick),
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (row.state is IrcClientState.Failed) {
+                    color = if (row.state is ConnectionState.Failed) {
                         MaterialTheme.colorScheme.error
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant
@@ -290,12 +296,12 @@ private fun DrawerNetworkItem(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            if (row.mentions > 0) MentionBadge(row.mentions)
-            if (row.unread > 0) UnreadBadge(row.unread)
+            if (row.mentions > 0) MentionBadge(row.mentions, lowerBound = row.mentionsIncomplete)
+            if (row.unread > 0) UnreadBadge(row.unread, lowerBound = row.unreadIncomplete)
         }
 
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-            val live = row.state.let { it !is IrcClientState.Disconnected && it !is IrcClientState.Failed }
+            val live = row.state.let { it !is ConnectionState.Disconnected && it !is ConnectionState.Failed }
             if (live) {
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.drawer_disconnect)) },
@@ -306,7 +312,7 @@ private fun DrawerNetworkItem(
                     text = {
                         Text(
                             stringResource(
-                                if (row.state is IrcClientState.Failed) {
+                                if (row.state is ConnectionState.Failed) {
                                     R.string.drawer_reconnect
                                 } else {
                                     R.string.drawer_connect
@@ -330,12 +336,12 @@ private fun DrawerNetworkItem(
 }
 
 @Composable
-private fun subtitleFor(state: IrcClientState, nick: String?): String = when (state) {
-    is IrcClientState.Ready -> nick ?: stringResource(R.string.drawer_state_registering)
-    IrcClientState.Connecting -> stringResource(R.string.drawer_state_connecting)
-    IrcClientState.Registering -> stringResource(R.string.drawer_state_registering)
-    is IrcClientState.Failed -> state.reason
-    IrcClientState.Disconnected -> stringResource(R.string.drawer_state_disconnected)
+private fun subtitleFor(state: ConnectionState, nick: String?): String = when (state) {
+    is ConnectionState.Ready -> nick ?: stringResource(R.string.drawer_state_registering)
+    ConnectionState.Connecting -> stringResource(R.string.drawer_state_connecting)
+    ConnectionState.Authenticating -> stringResource(R.string.drawer_state_registering)
+    is ConnectionState.Failed -> state.reason
+    ConnectionState.Disconnected -> stringResource(R.string.drawer_state_disconnected)
 }
 
 @Preview
@@ -346,16 +352,16 @@ private fun ServerDrawerPreview() {
             drawerRows = listOf(
                 DrawerRow(
                     networkId = 1, name = "Libera", role = NetworkRole.DIRECT, depth = 0,
-                    state = IrcClientState.Ready("me", emptySet(), emptyMap()),
+                    state = ConnectionState.Ready("me"),
                     nick = "me", unread = 5, mentions = 1,
                 ),
                 DrawerRow(
                     networkId = 2, name = "soju", role = NetworkRole.BOUNCER_ROOT, depth = 0,
-                    state = IrcClientState.Connecting, nick = null, unread = 3, mentions = 0,
+                    state = ConnectionState.Connecting, nick = null, unread = 3, mentions = 0,
                 ),
                 DrawerRow(
                     networkId = 3, name = "OFTC", role = NetworkRole.BOUNCER_CHILD, depth = 1,
-                    state = IrcClientState.Failed("SASL failed", fatal = true),
+                    state = ConnectionState.Failed("SASL failed", fatal = true),
                     nick = null, unread = 3, mentions = 0,
                 ),
             ),

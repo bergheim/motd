@@ -8,7 +8,9 @@ import io.github.trevarj.motd.data.prefs.CertTrustStore
 import io.github.trevarj.motd.data.repo.BufferRepository
 import io.github.trevarj.motd.data.repo.NetworkRepository
 import io.github.trevarj.motd.data.repo.SearchRepository
+import io.github.trevarj.motd.ircbackend.IrcSessions
 import io.github.trevarj.motd.service.ConnectionManager
+import io.github.trevarj.motd.service.HistoryResyncController
 
 /** Access to existing production seams for out-of-process instrumentation. */
 @EntryPoint
@@ -19,5 +21,7 @@ interface RequiredE2eEntryPoint {
     fun search(): SearchRepository
     fun certTrust(): CertTrustStore
     fun connections(): ConnectionManager
+    fun history(): HistoryResyncController
+    fun ircSessions(): IrcSessions
     fun voiceMessages(): VoiceMessageSender
 }

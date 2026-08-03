@@ -24,6 +24,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         EventRedirectEntity::class,
         EventObservationEntity::class,
         HistoryCursorEntity::class,
+        HistoryGapEntity::class,
         NetworkHistoryCursorEntity::class,
         ConnectionGenerationEntity::class,
         AppStateEntity::class,
@@ -32,7 +33,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         MemberEntity::class,
         DccTransferEntity::class,
     ],
-    version = 21,
+    version = 24,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -50,6 +51,7 @@ abstract class MotdDatabase : RoomDatabase() {
     abstract fun canonicalTimelineDao(): CanonicalTimelineDao
     abstract fun roomAliasDao(): RoomAliasDao
     abstract fun historyCursorDao(): HistoryCursorDao
+    abstract fun historyGapDao(): HistoryGapDao
     abstract fun connectionGenerationDao(): ConnectionGenerationDao
     abstract fun appStateDao(): AppStateDao
 }
@@ -657,6 +659,67 @@ val MIGRATION_20_21 = object : Migration(20, 21) {
             "CREATE INDEX IF NOT EXISTS index_messages_bufferId_serverTime_timelineOrder " +
                 "ON messages(bufferId, serverTime, timelineOrder)",
         )
+    }
+}
+
+/**
+ * v21 -> v22 records unresolved intervals between independently fetched history windows. Existing
+ * v21 timelines were published as complete extents, so migration creates no speculative gaps.
+ */
+val MIGRATION_21_22 = object : Migration(21, 22) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """CREATE TABLE IF NOT EXISTS `history_gaps` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `roomId` INTEGER NOT NULL,
+                `olderMsgid` TEXT,
+                `olderServerTime` INTEGER NOT NULL,
+                `newerMsgid` TEXT,
+                `newerServerTime` INTEGER NOT NULL,
+                `recoverable` INTEGER NOT NULL DEFAULT 1,
+                `olderEventId` INTEGER,
+                `olderTimelineOrder` INTEGER,
+                `newerEventId` INTEGER,
+                `newerTimelineOrder` INTEGER,
+                FOREIGN KEY(`roomId`) REFERENCES `buffers`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+            )""",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_history_gaps_roomId_olderServerTime` " +
+                "ON `history_gaps` (`roomId`, `olderServerTime`)",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_history_gaps_roomId_newerServerTime` " +
+                "ON `history_gaps` (`roomId`, `newerServerTime`)",
+        )
+    }
+}
+
+/**
+ * v22 -> v23 repairs legacy `recoverable = 0` poison on `history_gaps`. Builds before commit
+ * 7f27e550 misused the flag: a saturated timestamp-only CHATHISTORY page (no older msgid) wrongly
+ * set recoverable = 0, permanently clamping the timeline so scrolling to the top of that buffer
+ * fetched nothing. The new semantics reserve recoverable = 0 for server-proven-empty intervals
+ * only, but a poisoned legacy row is indistinguishable from a genuinely empty one, so this
+ * data-only migration lifts every unrecoverable gap back to recoverable = 1. This is safe and
+ * self-healing: re-probing a truly empty interval fetches 0 rows, proves it empty, and re-marks it
+ * unrecoverable under the new rule, while a wrongly-poisoned interval is finally allowed to page.
+ */
+val MIGRATION_22_23 = object : Migration(22, 23) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("UPDATE history_gaps SET recoverable = 1 WHERE recoverable = 0")
+    }
+}
+
+/**
+ * v23 -> v24: add the backend-neutral protocol discriminator on `networks`
+ * (docs/backend-neutral-xmpp-rollout.md). Additive and non-destructive; every pre-v24 row is IRC
+ * by definition, so existing rows take the "irc" default and the value set stays open for future
+ * backends. The version tracks whatever main holds at freeze time, never a fixed number.
+ */
+val MIGRATION_23_24 = object : Migration(23, 24) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE networks ADD COLUMN protocol TEXT NOT NULL DEFAULT 'irc'")
     }
 }
 

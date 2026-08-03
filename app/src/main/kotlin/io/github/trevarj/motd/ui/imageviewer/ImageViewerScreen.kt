@@ -1,18 +1,17 @@
 package io.github.trevarj.motd.ui.imageviewer
 
-import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.os.Build
-import android.provider.MediaStore
-import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animate
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Download
@@ -26,8 +25,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -36,29 +35,39 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.SemanticsPropertyKey
+import androidx.compose.ui.semantics.SemanticsPropertyReceiver
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.IntSize
-import androidx.compose.foundation.Image
+import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImagePainter
 import coil.compose.rememberAsyncImagePainter
 import coil.request.ImageRequest
 import io.github.trevarj.motd.R
 import io.github.trevarj.motd.ui.theme.MotdMotion
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.net.URL
 
-private const val MAX_SCALE = 5f
 private const val DOUBLE_TAP_SCALE = 2.5f
-private const val SAVE_TIMEOUT_MS = 15_000
+internal const val IMAGE_VIEWER_IMAGE_TAG = "image_viewer_image"
+internal const val IMAGE_VIEWER_SAVE_BUTTON_TAG = "image_viewer_save_button"
+internal const val IMAGE_VIEWER_SAVE_FEEDBACK_TAG = "image_viewer_save_feedback"
+internal val ImageViewerTransformKey = SemanticsPropertyKey<ImageTransform>("ImageViewerTransform")
+private var SemanticsPropertyReceiver.imageViewerTransform by ImageViewerTransformKey
 
 /**
  * Full-screen image viewer (plans/07): black background, Coil image, hand-rolled pinch-zoom/pan via
@@ -74,29 +83,62 @@ fun ImageViewerScreen(
     onBack: () -> Unit = {},
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var chromeVisible by remember { mutableStateOf(true) }
-
-    // Zoom/pan transform state; clamped so the image cannot be shrunk below 1x.
-    var scale by remember { mutableFloatStateOf(1f) }
-    var offsetX by remember { mutableFloatStateOf(0f) }
-    var offsetY by remember { mutableFloatStateOf(0f) }
-    var transformAnimationJob by remember { mutableStateOf<Job?>(null) }
-    // Container size in px; used to clamp pan to the scaled bounds.
-    var boxSize by remember { mutableStateOf(IntSize.Zero) }
-
-    // Clamp pan so the (scaled) image edges never move inside the viewport.
-    fun clampOffsets() {
-        val maxX = ((scale - 1f) * boxSize.width / 2f).coerceAtLeast(0f)
-        val maxY = ((scale - 1f) * boxSize.height / 2f).coerceAtLeast(0f)
-        offsetX = offsetX.coerceIn(-maxX, maxX)
-        offsetY = offsetY.coerceIn(-maxY, maxY)
-    }
-
     val painter = rememberAsyncImagePainter(
         model = ImageRequest.Builder(context).data(url).crossfade(true).build(),
     )
     val imageState = painter.state
+
+    ImageViewerContent(
+        painter = painter,
+        imageReady = imageState is AsyncImagePainter.State.Success,
+        imageState = imageState,
+        imageIdentity = url,
+        onBack = onBack,
+        onShare = { shareImage(context, url) },
+        onSave = { saveImage(context, url) },
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun ImageViewerContent(
+    painter: Painter,
+    imageReady: Boolean,
+    imageState: AsyncImagePainter.State?,
+    imageIdentity: Any,
+    onBack: () -> Unit,
+    onShare: () -> Unit,
+    onSave: suspend () -> ImageSaveFeedback,
+) {
+    val scope = rememberCoroutineScope()
+    var chromeVisible by remember { mutableStateOf(true) }
+    var transform by remember { mutableStateOf(ImageTransform()) }
+    var transformAnimationJob by remember { mutableStateOf<Job?>(null) }
+    var viewportSize by remember { mutableStateOf(IntSize.Zero) }
+    var saveFeedback by remember { mutableStateOf<ImageSaveFeedback?>(null) }
+    var saveInProgress by remember { mutableStateOf(false) }
+    val bounds = if (imageReady) imageTransformBounds(painter.intrinsicSize, viewportSize) else null
+
+    fun applyTransform(candidate: ImageTransform) {
+        transform = clampImageTransform(candidate, bounds)
+    }
+
+    // A newly loaded image must never inherit a previous image's transform. Layout changes retain
+    // the current focal position where possible, but always re-clamp it to the new fitted bounds.
+    LaunchedEffect(imageIdentity, painter, imageReady) {
+        if (imageReady) {
+            transformAnimationJob?.cancel()
+            transformAnimationJob = null
+            applyTransform(ImageTransform())
+        }
+    }
+    LaunchedEffect(bounds) {
+        // Animation frames capture the bounds from their launch composition. Stop them before a
+        // viewport or intrinsic-size change so no stale frame can write an out-of-bounds value.
+        transformAnimationJob?.cancel()
+        transformAnimationJob = null
+        applyTransform(transform)
+    }
 
     val contentDesc = stringResource(R.string.image_viewer_content_description)
 
@@ -104,7 +146,7 @@ fun ImageViewerScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .onSizeChanged { boxSize = it },
+            .onSizeChanged { viewportSize = it },
         contentAlignment = Alignment.Center,
     ) {
         Image(
@@ -114,79 +156,79 @@ fun ImageViewerScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer(
-                    scaleX = scale,
-                    scaleY = scale,
-                    translationX = offsetX,
-                    translationY = offsetY,
+                    scaleX = transform.scale,
+                    scaleY = transform.scale,
+                    translationX = transform.offsetX,
+                    translationY = transform.offsetY,
                 )
-                .pointerInput(Unit) {
+                .semantics { imageViewerTransform = transform }
+                .testTag(IMAGE_VIEWER_IMAGE_TAG)
+                .pointerInput(bounds) {
                     detectTransformGestures { centroid, pan, zoom, _ ->
                         // A direct gesture takes ownership of transform state immediately. Without
                         // cancelling the double-tap animation, both paths can write scale/offsets.
                         transformAnimationJob?.cancel()
                         transformAnimationJob = null
-                        val newScale = (scale * zoom).coerceIn(1f, MAX_SCALE)
+                        val current = transform
+                        val newScale = (current.scale * zoom).coerceIn(1f, MAX_IMAGE_SCALE)
                         if (newScale > 1f) {
                             // Anchor the zoom on the gesture centroid relative to the box center.
                             val focusX = centroid.x - size.width / 2f
                             val focusY = centroid.y - size.height / 2f
-                            val factor = newScale / scale
-                            offsetX = (offsetX + pan.x - focusX) * factor + focusX
-                            offsetY = (offsetY + pan.y - focusY) * factor + focusY
+                            val factor = newScale / current.scale
+                            applyTransform(
+                                ImageTransform(
+                                    scale = newScale,
+                                    offsetX = (current.offsetX + pan.x - focusX) * factor + focusX,
+                                    offsetY = (current.offsetY + pan.y - focusY) * factor + focusY,
+                                ),
+                            )
                         } else {
-                            offsetX = 0f
-                            offsetY = 0f
+                            applyTransform(ImageTransform())
                         }
-                        scale = newScale
-                        clampOffsets()
                     }
                 }
-                .pointerInput(Unit) {
+                .pointerInput(bounds) {
                     detectTapGestures(
                         onTap = { chromeVisible = !chromeVisible },
                         onDoubleTap = { tap ->
-                            val targetScale: Float
-                            val targetOffsetX: Float
-                            val targetOffsetY: Float
-                            if (scale > 1f) {
-                                targetScale = 1f
-                                targetOffsetX = 0f
-                                targetOffsetY = 0f
+                            val initial = transform
+                            val target = if (initial.scale > 1f) {
+                                ImageTransform()
                             } else {
                                 // Zoom toward the tapped point, not the center (plans/15 #26).
                                 val focusX = tap.x - size.width / 2f
                                 val focusY = tap.y - size.height / 2f
-                                targetScale = DOUBLE_TAP_SCALE
-                                targetOffsetX = -focusX * (DOUBLE_TAP_SCALE - 1f)
-                                targetOffsetY = -focusY * (DOUBLE_TAP_SCALE - 1f)
+                                ImageTransform(
+                                    scale = DOUBLE_TAP_SCALE,
+                                    offsetX = -focusX * (DOUBLE_TAP_SCALE - 1f),
+                                    offsetY = -focusY * (DOUBLE_TAP_SCALE - 1f),
+                                )
                             }
-                            val maxTargetX = ((targetScale - 1f) * boxSize.width / 2f).coerceAtLeast(0f)
-                            val maxTargetY = ((targetScale - 1f) * boxSize.height / 2f).coerceAtLeast(0f)
-                            val clampedTargetOffsetX = targetOffsetX.coerceIn(-maxTargetX, maxTargetX)
-                            val clampedTargetOffsetY = targetOffsetY.coerceIn(-maxTargetY, maxTargetY)
+                            val clampedTarget = clampImageTransform(target, bounds)
                             transformAnimationJob?.cancel()
                             transformAnimationJob = scope.launch {
                                 coroutineScope {
                                     launch {
                                         animate(
-                                            initialValue = scale,
-                                            targetValue = targetScale,
+                                            initialValue = initial.scale,
+                                            targetValue = clampedTarget.scale,
                                             animationSpec = MotdMotion.softSpring,
-                                        ) { value, _ -> scale = value }
+                                        ) { value, _ -> applyTransform(transform.copy(scale = value)) }
                                     }
                                     launch {
                                         animate(
-                                            initialValue = offsetX,
-                                            targetValue = clampedTargetOffsetX,
+                                            initialValue = initial.offsetX,
+                                            targetValue = clampedTarget.offsetX,
                                             animationSpec = MotdMotion.softSpring,
-                                        ) { value, _ -> offsetX = value }
+                                        ) { value, _ -> applyTransform(transform.copy(offsetX = value)) }
                                     }
                                     launch {
                                         animate(
-                                            initialValue = offsetY,
-                                            targetValue = clampedTargetOffsetY,
+                                            initialValue = initial.offsetY,
+                                            targetValue = clampedTarget.offsetY,
                                             animationSpec = MotdMotion.softSpring,
-                                        ) { value, _ -> offsetY = value }
+                                        ) { value, _ -> applyTransform(transform.copy(offsetY = value)) }
                                     }
                                 }
                             }
@@ -224,7 +266,7 @@ fun ImageViewerScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { shareImage(context, url) }) {
+                    IconButton(onClick = onShare) {
                         Icon(
                             Icons.Filled.Share,
                             contentDescription = stringResource(R.string.image_viewer_share),
@@ -234,7 +276,25 @@ fun ImageViewerScreen(
                     // MediaStore RELATIVE_PATH is API 29+; pre-29 would need WRITE_EXTERNAL_STORAGE,
                     // so hide Save there rather than request a legacy permission (plans/15 #26).
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        IconButton(onClick = { scope.launch { saveImage(context, url) } }) {
+                        IconButton(
+                            enabled = !saveInProgress,
+                            onClick = {
+                                saveFeedback = null
+                                saveInProgress = true
+                                scope.launch {
+                                    try {
+                                        saveFeedback = onSave()
+                                    } catch (cancelled: CancellationException) {
+                                        throw cancelled
+                                    } catch (_: Exception) {
+                                        saveFeedback = ImageSaveFeedback.FAILED
+                                    } finally {
+                                        saveInProgress = false
+                                    }
+                                }
+                            },
+                            modifier = Modifier.testTag(IMAGE_VIEWER_SAVE_BUTTON_TAG),
+                        ) {
                             Icon(
                                 Icons.Filled.Download,
                                 contentDescription = stringResource(R.string.image_viewer_save),
@@ -244,6 +304,24 @@ fun ImageViewerScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
+            )
+        }
+
+        saveFeedback?.let { feedback ->
+            Text(
+                text = stringResource(
+                    if (feedback == ImageSaveFeedback.SAVED) R.string.image_viewer_saved
+                    else R.string.image_viewer_save_failed,
+                ),
+                color = Color.White,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(24.dp)
+                    .background(Color.Black.copy(alpha = 0.72f), MaterialTheme.shapes.small)
+                    .padding(horizontal = 16.dp, vertical = 10.dp)
+                    .semantics { liveRegion = LiveRegionMode.Polite }
+                    .testTag(IMAGE_VIEWER_SAVE_FEEDBACK_TAG),
             )
         }
     }
@@ -261,45 +339,18 @@ private fun shareImage(context: Context, url: String) {
 }
 
 /**
- * Download the image bytes and insert them into the shared Pictures collection via MediaStore.
- * Only called on API 29+ (the caller hides Save below Q). A read timeout bounds a stalled fetch.
+ * Stream the image into a pending MediaStore row. The result is shown only after finalization.
+ * Only called on API 29+ (the caller hides Save below Q).
  */
 @androidx.annotation.RequiresApi(Build.VERSION_CODES.Q)
-private suspend fun saveImage(context: Context, url: String) {
-    val ok = withContext(Dispatchers.IO) {
-        runCatching {
-            val bytes = URL(url).openConnection().apply {
-                connectTimeout = SAVE_TIMEOUT_MS
-                readTimeout = SAVE_TIMEOUT_MS
-            }.getInputStream().use { it.readBytes() }
-            val name = url.substringAfterLast('/').substringBefore('?').ifEmpty { "image" }
-            val values = ContentValues().apply {
-                put(MediaStore.Images.Media.DISPLAY_NAME, name)
-                put(MediaStore.Images.Media.MIME_TYPE, mimeFor(name))
-                put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/motd")
-            }
-            val resolver = context.contentResolver
-            val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-                ?: return@runCatching false
-            resolver.openOutputStream(uri)?.use { it.write(bytes) } ?: return@runCatching false
-            true
-        }.getOrDefault(false)
+private suspend fun saveImage(context: Context, url: String): ImageSaveFeedback {
+    val result = withContext(Dispatchers.IO) {
+        ImageSaveOperation(
+            connectionFactory = UrlConnectionImageSaveConnectionFactory(),
+            store = MediaStoreImageSaveStore(context.contentResolver),
+        ).save(url)
     }
-    withContext(Dispatchers.Main) {
-        Toast.makeText(
-            context,
-            if (ok) context.getString(R.string.image_viewer_saved)
-            else context.getString(R.string.image_viewer_save_failed),
-            Toast.LENGTH_SHORT,
-        ).show()
-    }
-}
-
-private fun mimeFor(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
-    "png" -> "image/png"
-    "gif" -> "image/gif"
-    "webp" -> "image/webp"
-    else -> "image/jpeg"
+    return result.feedback()
 }
 
 @Preview

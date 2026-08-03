@@ -1,6 +1,8 @@
 package io.github.trevarj.motd.ui.chatlist
 
+import io.github.trevarj.motd.data.db.BufferType
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class ChatListMessagePreviewTest {
@@ -34,6 +36,29 @@ class ChatListMessagePreviewTest {
         assertEquals(
             ChatListMessagePreview.Text("hello from IRC"),
             chatListMessagePreview("hello from IRC"),
+        )
+    }
+
+    @Test
+    fun `mode change with empty sender does not render a sender label`() {
+        assertNull(
+            chatListPreviewSender(
+                type = BufferType.CHANNEL,
+                messageText = "mode +o alice",
+                sender = "",
+            ),
+        )
+    }
+
+    @Test
+    fun `channel message with a sender retains its sender label`() {
+        assertEquals(
+            "alice",
+            chatListPreviewSender(
+                type = BufferType.CHANNEL,
+                messageText = "hello from IRC",
+                sender = "alice",
+            ),
         )
     }
 }

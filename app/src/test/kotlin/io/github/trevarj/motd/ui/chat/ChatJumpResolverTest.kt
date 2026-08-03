@@ -9,12 +9,17 @@ import io.github.trevarj.motd.data.db.ReactionEntity
 import io.github.trevarj.motd.data.repo.MessageRepository
 import io.github.trevarj.motd.data.visibility.MessageVisibilitySpec
 import io.github.trevarj.motd.irc.client.ChatHistoryRequest
+import io.github.trevarj.motd.irc.client.ChatHistoryReference
 import io.github.trevarj.motd.irc.client.ChatHistoryResponse
 import io.github.trevarj.motd.irc.client.HistoryAvailability
 import io.github.trevarj.motd.irc.client.HistoryReferenceType
 import io.github.trevarj.motd.irc.client.IrcCommandException
 import io.github.trevarj.motd.irc.client.IrcDisconnectedException
 import io.github.trevarj.motd.irc.client.IrcTimeoutException
+import io.github.trevarj.motd.irc.event.IrcEvent
+import io.github.trevarj.motd.irc.event.MessageContext
+import io.github.trevarj.motd.irc.event.messageContextOrNull
+import io.github.trevarj.motd.irc.proto.Prefix
 import java.io.IOException
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.Flow
@@ -22,6 +27,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -119,11 +125,21 @@ class ChatJumpResolverTest {
     }
 
     @Test fun `ordinary unresolved entry does not present the not-loaded snackbar`() {
-        assertTrue(!shouldPresentUnresolvedEntrySnackbar(entryMessageUnavailable = false))
+        assertTrue(
+            !shouldPresentUnresolvedEntrySnackbar(
+                EntryPositionState.Unresolved(messageUnavailable = false),
+            ),
+        )
+        assertTrue(!shouldPresentUnresolvedEntrySnackbar(EntryPositionState.Pending))
+        assertTrue(!shouldPresentUnresolvedEntrySnackbar(EntryPositionState.Settled))
     }
 
     @Test fun `explicit unresolved message jump presents the not-loaded snackbar`() {
-        assertTrue(shouldPresentUnresolvedEntrySnackbar(entryMessageUnavailable = true))
+        assertTrue(
+            shouldPresentUnresolvedEntrySnackbar(
+                EntryPositionState.Unresolved(messageUnavailable = true),
+            ),
+        )
     }
 
     @Test fun `restored in-flight deep jump resolves again`() {
@@ -133,8 +149,11 @@ class ChatJumpResolverTest {
             needsDeepJumpResolution(
                 hasDeepJump = true,
                 jumpConsumed = restored.get<Boolean>("jump_consumed") == true,
-                entryPositionSettled = restored.get<Boolean>("entry_position_settled") == true,
-                entryPositionUnresolved = restored.get<Boolean>("entry_position_unresolved") == true,
+                entryState = restoredEntryPositionState(
+                    settled = restored.get<Boolean>("entry_position_settled") == true,
+                    unresolved = restored.get<Boolean>("entry_position_unresolved") == true,
+                    messageUnavailable = restored.get<Boolean>("entry_message_unavailable") == true,
+                ),
             ),
         )
     }
@@ -148,10 +167,36 @@ class ChatJumpResolverTest {
             !needsDeepJumpResolution(
                 hasDeepJump = true,
                 jumpConsumed = restored.get<Boolean>("jump_consumed") == true,
-                entryPositionSettled = restored.get<Boolean>("entry_position_settled") == true,
-                entryPositionUnresolved = restored.get<Boolean>("entry_position_unresolved") == true,
+                entryState = restoredEntryPositionState(
+                    settled = restored.get<Boolean>("entry_position_settled") == true,
+                    unresolved = restored.get<Boolean>("entry_position_unresolved") == true,
+                    messageUnavailable = restored.get<Boolean>("entry_message_unavailable") == true,
+                ),
             ),
         )
+    }
+
+    @Test fun `entry SavedState round-trips through the sealed state in both directions`() {
+        // Restore direction: a settled flag wins even when unresolved is also persisted.
+        assertEquals(
+            EntryPositionState.Settled,
+            restoredEntryPositionState(settled = true, unresolved = true, messageUnavailable = true),
+        )
+        assertEquals(
+            EntryPositionState.Pending,
+            restoredEntryPositionState(false, false, false),
+        )
+
+        // Write direction: the flags a transition persists restore back to the same state.
+        val states = listOf(
+            EntryPositionState.Settled,
+            EntryPositionState.Unresolved(messageUnavailable = false),
+            EntryPositionState.Unresolved(messageUnavailable = true),
+        )
+        for (state in states) {
+            val (settled, unresolved, messageUnavailable) = entryPositionSavedFlags(state)
+            assertEquals(state, restoredEntryPositionState(settled, unresolved, messageUnavailable))
+        }
     }
 
     @Test fun `empty refresh waits for a loading append then accepts its target rows`() {
@@ -286,6 +331,47 @@ class ChatJumpResolverTest {
         )
 
         assertEquals(null, loaded)
+    }
+
+    @Test fun `dropped viewport hint is re-requested until the target materializes`() = runTest {
+        // Paging can drop the single items[index] hint when it races the generation's initial
+        // prepend/refresh, leaving a quiescent unloaded placeholder viewport with no further
+        // snapshot changes. The await loop must re-issue the idempotent request instead of sitting
+        // until the outer cap (deep-jump stall observed on the notification-entry journey).
+        val expected = msg(324, 7, 1, "target")
+        var hints = 0
+
+        val loaded = requestAndAwaitTarget(
+            index = 260,
+            request = { hints++; true },
+            snapshots = flow {
+                emit(TargetMaterialization<MessageEntity>(null, loading = false, generation = 1))
+                if (hints >= 2) {
+                    emit(TargetMaterialization(expected, loading = false, generation = 1))
+                } else {
+                    awaitCancellation()
+                }
+            },
+        )
+
+        assertEquals(expected, loaded)
+        assertEquals(2, hints)
+    }
+
+    @Test fun `completed snapshot stream without a terminal state stays unresolved`() = runTest {
+        val requested = mutableListOf<Int>()
+
+        val loaded = requestAndAwaitTarget<MessageEntity>(
+            index = 9,
+            request = { requested += it; true },
+            snapshots = flow {
+                emit(TargetMaterialization(null, loading = false, generation = 1))
+            },
+        )
+
+        assertEquals(null, loaded)
+        // A finished stream must bail out instead of re-requesting in a hot loop.
+        assertEquals(listOf(9), requested)
     }
 
     @Test fun local_hit_returns_index_and_highlight() = runTest {
@@ -451,6 +537,144 @@ class ChatJumpResolverTest {
             requests.map { it.bound1 },
         )
         assertEquals(requests.last(), persisted)
+    }
+
+    @Test fun `around fetch bounds server overdelivery before persistence`() = runTest {
+        var persisted: ChatHistoryResponse.Messages? = null
+        val events = (1..100).map { index ->
+            IrcEvent.ChatMessage(
+                ctx = MessageContext("m$index", index.toLong(), null, "batch", null),
+                kind = IrcEvent.ChatKind.PRIVMSG,
+                source = Prefix("alice"),
+                target = "#chan",
+                text = "m$index",
+                isSelf = false,
+                replyToMsgid = null,
+            )
+        }
+        val page = ChatHistoryResponse.Messages(
+            events = events,
+            oldest = ChatHistoryReference("m1", 1),
+            newest = ChatHistoryReference("m100", 100),
+            endOfHistory = true,
+            primaryMessageCount = events.size,
+        )
+
+        val completed = fetchAroundHistoryPage(
+            target = "#chan",
+            msgid = "m50",
+            timeMs = 50,
+            limit = 2,
+            availability = HistoryAvailability.Ready(
+                setOf(HistoryReferenceType.MSGID, HistoryReferenceType.TIMESTAMP),
+                pageLimit = 100,
+            ),
+            requestPage = { page },
+            persistPage = { _, bounded -> persisted = bounded },
+        )
+
+        assertTrue(completed)
+        assertEquals(2, persisted?.primaryMessageCount)
+        assertEquals(listOf("m49", "m50"), persisted?.events?.mapNotNull { it.messageContextOrNull()?.msgid })
+        assertFalse(persisted?.endOfHistory ?: true)
+    }
+
+    @Test fun `timestamp fallback still centers overdelivery on the requested msgid`() = runTest {
+        var attempts = 0
+        var persisted: ChatHistoryResponse.Messages? = null
+        val events = (1..100).map { index ->
+            IrcEvent.ChatMessage(
+                ctx = MessageContext("m$index", 50, null, "batch", null),
+                kind = IrcEvent.ChatKind.PRIVMSG,
+                source = Prefix("alice"),
+                target = "#chan",
+                text = "m$index",
+                isSelf = false,
+                replyToMsgid = null,
+            )
+        }
+        val page = ChatHistoryResponse.Messages(
+            events = events,
+            oldest = ChatHistoryReference("m1", 50),
+            newest = ChatHistoryReference("m100", 50),
+            endOfHistory = true,
+            primaryMessageCount = events.size,
+        )
+
+        fetchAroundHistoryPage(
+            target = "#chan",
+            msgid = "m90",
+            timeMs = 50,
+            limit = 2,
+            availability = HistoryAvailability.Ready(
+                setOf(HistoryReferenceType.MSGID, HistoryReferenceType.TIMESTAMP),
+                pageLimit = 100,
+            ),
+            requestPage = {
+                attempts++
+                if (attempts == 1) {
+                    throw IrcCommandException("CHATHISTORY", "INVALID_MSGREFTYPE", "no msgid")
+                }
+                page
+            },
+            persistPage = { _, bounded -> persisted = bounded },
+        )
+
+        assertEquals(2, attempts)
+        assertEquals(
+            listOf("m89", "m90"),
+            persisted?.events?.mapNotNull { it.messageContextOrNull()?.msgid },
+        )
+    }
+
+    @Test fun `resolver still finds exact target after around overdelivery is bounded`() = runTest {
+        val repo = FakeMessageRepository()
+        val events = (1..100).map { index ->
+            IrcEvent.ChatMessage(
+                ctx = MessageContext("m$index", index.toLong(), null, "batch", null),
+                kind = IrcEvent.ChatKind.PRIVMSG,
+                source = Prefix("alice"),
+                target = "#chan",
+                text = "m$index",
+                isSelf = false,
+                replyToMsgid = null,
+            )
+        }
+        val response = ChatHistoryResponse.Messages(
+            events,
+            ChatHistoryReference("m1", 1),
+            ChatHistoryReference("m100", 100),
+            endOfHistory = true,
+            primaryMessageCount = events.size,
+        )
+        val resolver = ChatJumpResolver(repo) { target, msgid, time, limit ->
+            fetchAroundHistoryPage(
+                target,
+                msgid,
+                time,
+                limit = 2.coerceAtMost(limit),
+                availability = HistoryAvailability.Ready(
+                    setOf(HistoryReferenceType.MSGID, HistoryReferenceType.TIMESTAMP),
+                    pageLimit = 100,
+                ),
+                requestPage = { response },
+                persistPage = { _, bounded ->
+                    bounded.events.mapNotNull { it.messageContextOrNull() }.forEachIndexed { offset, context ->
+                        repo.store += msg(
+                            id = (offset + 1).toLong(),
+                            bufferId = 7,
+                            serverTime = context.serverTime,
+                            msgid = checkNotNull(context.msgid),
+                        )
+                    }
+                },
+            )
+        }
+
+        val result = resolver.resolve(7, "m50", 50, "#chan")
+
+        assertTrue(result is ChatJumpResolver.Result.Resolved)
+        assertEquals("m50", (result as ChatJumpResolver.Result.Resolved).target.expectedMsgid)
     }
 
     @Test fun `around non-reference failures do not retry with timestamp`() = runTest {

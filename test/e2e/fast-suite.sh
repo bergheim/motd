@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Canonical launcher for exactly three isolated @FastHeadlessE2e methods.
+# Canonical launcher for exactly four isolated @FastHeadlessE2e methods.
 set -euo pipefail
 
 E2E_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -38,6 +38,10 @@ instrumentation_args=(
   "-Pandroid.testInstrumentationRunnerArguments.sojuPassword=$FAST_E2E_SOJU_PASSWORD"
   "-Pandroid.testInstrumentationRunnerArguments.nick=$FAST_E2E_NICK"
   "-Pandroid.testInstrumentationRunnerArguments.channel=$FAST_E2E_CHANNEL"
+  "-Pandroid.testInstrumentationRunnerArguments.ergoPort=$FAST_E2E_ERGO_PORT"
+  "-Pandroid.testInstrumentationRunnerArguments.ergoUser=$FAST_E2E_ERGO_USER"
+  "-Pandroid.testInstrumentationRunnerArguments.ergoPassword=$FAST_E2E_ERGO_PASSWORD"
+  "-Pandroid.testInstrumentationRunnerArguments.secondNick=$FAST_E2E_SECOND_NICK"
   "-Pandroid.testInstrumentationRunnerArguments.sojuTlsSha256=$TLS_SHA256"
   "-Pandroid.testInstrumentationRunnerArguments.e2eRunId=$FAST_E2E_RUN_ID"
 )
@@ -63,11 +67,11 @@ run_gradle_suite() {
   return "$rc"
 }
 
-assert_three_gradle_results() {
+assert_required_gradle_results() {
   local count
   count="$(find "$REPO/app/build/outputs/androidTest-results" -type f -name '*.xml' -mmin -15 -print0 2>/dev/null \
     | xargs -0 -r grep -ho '<testcase ' | wc -l | tr -d ' ')"
-  [ "$count" = 3 ] || { echo "required fast suite must report exactly 3 cases; got ${count:-0}" >&2; return 1; }
+  [ "$count" = 4 ] || { echo "required fast suite must report exactly 4 cases; got ${count:-0}" >&2; return 1; }
 }
 
 discover_direct_methods() {
@@ -85,20 +89,24 @@ run_direct_suite() {
   local -a methods
   app_apk="${FAST_E2E_APP_APK:-$REPO/app/build/outputs/apk/foss/e2e/app-foss-e2e.apk}"
   test_apk="${FAST_E2E_TEST_APK:-$REPO/app/build/outputs/apk/androidTest/foss/e2e/app-foss-e2e-androidTest.apk}"
-  "$REPO/gradlew" :app:assembleFossE2e :app:assembleFossE2eAndroidTest --stacktrace --no-daemon --max-workers=1
+  # Daemon on for warm rebuilds; --max-workers=2 because the emulator + native
+  # stack are already resident and competing for the 14 GiB box's RAM.
+  "$REPO/gradlew" :app:assembleFossE2e :app:assembleFossE2eAndroidTest --stacktrace --max-workers=2
   e2e_adb install -r -g "$app_apk" >/dev/null
   e2e_adb install -r "$test_apk" >/dev/null
   runner="$(e2e_adb shell pm list instrumentation | sed -n "s#^instrumentation:\([^ ]*\) (target=${FAST_E2E_TARGET_PACKAGE})#\1#p" | head -1 | tr -d '\r')"
   [ -n "$runner" ] || return 1
   channel_arg="'$FAST_E2E_CHANNEL'"
   mapfile -t methods < <(discover_direct_methods "$runner")
-  [ "${#methods[@]}" -eq 3 ] || { echo "required fast suite must discover exactly 3 Class#method cases" >&2; return 1; }
+  [ "${#methods[@]}" -eq 4 ] || { echo "required fast suite must discover exactly 4 Class#method cases" >&2; return 1; }
   for method in "${methods[@]}"; do
     e2e_adb shell pm clear "$FAST_E2E_TARGET_PACKAGE" >/dev/null
     instrument_output="$(e2e_adb shell am instrument -w -r -e class "$method" \
       -e sojuHost "$FAST_E2E_SOJU_HOST" -e sojuPort "$FAST_E2E_SOJU_PORT" \
       -e sojuUser "$FAST_E2E_SOJU_USER" -e sojuPassword "$FAST_E2E_SOJU_PASSWORD" \
       -e nick "$FAST_E2E_NICK" -e channel "$channel_arg" \
+      -e ergoPort "$FAST_E2E_ERGO_PORT" -e ergoUser "$FAST_E2E_ERGO_USER" \
+      -e ergoPassword "$FAST_E2E_ERGO_PASSWORD" -e secondNick "$FAST_E2E_SECOND_NICK" \
       -e sojuTlsSha256 "$TLS_SHA256" -e e2eRunId "$FAST_E2E_RUN_ID" "$runner" 2>&1)" || rc=$?
     if [ "$rc" -eq 0 ]; then
       printf '%s\n' "$instrument_output" | tr -d '\r' | grep -qx 'INSTRUMENTATION_CODE: -1' || rc=1
@@ -126,7 +134,7 @@ rc=0
 run_attempt "$@" || rc=$?
 e2e_collect_gradle_required_e2e_artifacts "$OUT_DIR"
 e2e_pull_required_e2e_artifacts "$OUT_DIR"
-if [ "$MODE" != direct ] && [ "$rc" -eq 0 ]; then assert_three_gradle_results || rc=1; fi
+if [ "$MODE" != direct ] && [ "$rc" -eq 0 ]; then assert_required_gradle_results || rc=1; fi
 declared="$(pretest_classification)"
 classification="$(e2e_classify_attempt "$OUT_DIR" "$declared")"
 started=false
@@ -141,7 +149,7 @@ if [ "$rc" -ne 0 ] && [ "$started" = false ] && e2e_retry_allowed "$classificati
   run_attempt "$@" || rc=$?
   e2e_collect_gradle_required_e2e_artifacts "$OUT_DIR"
   e2e_pull_required_e2e_artifacts "$OUT_DIR"
-  if [ "$MODE" != direct ] && [ "$rc" -eq 0 ]; then assert_three_gradle_results || rc=1; fi
+  if [ "$MODE" != direct ] && [ "$rc" -eq 0 ]; then assert_required_gradle_results || rc=1; fi
   classification="$(e2e_classify_attempt "$OUT_DIR" "$(pretest_classification)")"
   e2e_attempt_started "$OUT_DIR" && started=true
 fi

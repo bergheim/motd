@@ -7,8 +7,7 @@ import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
 import io.github.trevarj.motd.data.db.inMemoryDb
 import io.github.trevarj.motd.di.AppClock
-import io.github.trevarj.motd.irc.client.IrcClient
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -191,14 +190,13 @@ class PendingChannelCloseCoordinatorTest {
     )
 
     private class FakeConnections : ConnectionManager {
-        val states = MutableStateFlow<Map<Long, IrcClientState>>(emptyMap())
+        val states = MutableStateFlow<Map<Long, ConnectionState>>(emptyMap())
         val parts = mutableListOf<Long>()
         val partAttempted = CompletableDeferred<Unit>()
         val secondPartAttempted = CompletableDeferred<Unit>()
         var failPart = false
         var reportPartSuccess = true
-        override val connectionStates: StateFlow<Map<Long, IrcClientState>> = states
-        override fun clientFor(networkId: Long): IrcClient? = null
+        override val connectionStates: StateFlow<Map<Long, ConnectionState>> = states
         override suspend fun startAll() = Unit
         override suspend fun stopAll() = Unit
         override suspend fun connect(networkId: Long) = Unit
@@ -253,5 +251,5 @@ class PendingChannelCloseCoordinatorTest {
         type = BufferType.CHANNEL,
     )
 
-    private fun ready() = IrcClientState.Ready("me", emptySet(), emptyMap())
+    private fun ready() = ConnectionState.Ready("me")
 }

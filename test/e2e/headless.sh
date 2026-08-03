@@ -78,8 +78,13 @@ boot_emulator() {
   fi
   ensure_avd
   log "booting $AVD_NAME as $SERIAL"
+  # Quickboot: load the named snapshot when present and save it on the clean
+  # `adb emu kill` in down(). The first boot has no snapshot and cold-boots (the
+  # 120s wait below still guards); every boot after a reboot or `down` restores
+  # the snapshot instead of paying a full cold boot. App state is irrelevant to
+  # the snapshot because fast-suite reinstalls the APKs and pm-clears per method.
   setsid emulator "@$AVD_NAME" -port "$EMULATOR_PORT" -no-window -noaudio \
-    -no-boot-anim -gpu swiftshader_indirect >"$LOG_FILE" 2>&1 &
+    -no-boot-anim -gpu swiftshader_indirect -snapshot default-boot >"$LOG_FILE" 2>&1 &
   printf '%s\n' "$!" >"$PID_FILE"
   printf '%s\n' "$SERIAL" >"$SERIAL_FILE"
 
@@ -117,6 +122,7 @@ configure_emulator() {
 ensure_stack() {
   if stack_alive; then
     log "native soju/ergo stack already running"
+    adb_e reverse "tcp:$ERGO_PORT" "tcp:$ERGO_PORT" >/dev/null
     adb_e reverse "tcp:$SOJU_PORT" "tcp:$SOJU_PORT" >/dev/null
     adb_e reverse "tcp:$SOJU_HTTP_PORT" "tcp:$SOJU_HTTP_PORT" >/dev/null
     return
@@ -126,6 +132,8 @@ ensure_stack() {
     MOTD_STACK_PROFILE="${MOTD_STACK_PROFILE:-default}" \
     MOTD_ERGO_PORT="$ERGO_PORT" MOTD_SOJU_PORT="$SOJU_PORT" MOTD_SOJU_HTTP_PORT="$SOJU_HTTP_PORT" \
     "$E2E_DIR/local-stack.sh" up
+  # The instrumentation fixture client talks directly to Ergo to create a deterministic gap.
+  adb_e reverse "tcp:$ERGO_PORT" "tcp:$ERGO_PORT" >/dev/null
 }
 
 ensure_seed_member() {
@@ -165,7 +173,7 @@ fast() {
     FAST_E2E_SOJU_HOST=127.0.0.1 FAST_E2E_SOJU_PORT="$SOJU_PORT" \
     FAST_E2E_SOJU_TLS_SHA256="$tls_sha256" \
     FAST_E2E_STACK_KIND=native FAST_E2E_NATIVE_STACK_DIR="$STACK_DIR" \
-    FAST_E2E_NATIVE_ERGO_PORT="$ERGO_PORT" \
+    FAST_E2E_NATIVE_ERGO_PORT="$ERGO_PORT" FAST_E2E_ERGO_PORT="$ERGO_PORT" \
     nix develop "$REPO" -c "$E2E_DIR/fast-suite.sh" direct; then
     :
   else
@@ -179,14 +187,16 @@ full() {
   up
   log "building shell-runbook E2E APK"
   nix develop "$REPO" -c ./gradlew :app:assembleFossE2e \
-    --stacktrace --no-daemon --max-workers=1
+    --stacktrace --max-workers=2
   ANDROID_SERIAL="$SERIAL" SERIAL="$SERIAL" \
     MOTD_PKG=io.github.trevarj.motd.debug \
     MOTD_APK="$REPO/app/build/outputs/apk/foss/e2e/app-foss-e2e.apk" \
     MOTD_SOJU_HOST=127.0.0.1 MOTD_SOJU_PORT="$SOJU_PORT" \
     MOTD_SOJU_USER=motd MOTD_SOJU_PASS=motdtest \
     MOTD_NICK=motdadb MOTD_TEST_CHANNEL='##motdtest' MOTD_SECOND_NICK=motdadb2 \
-    E2E_PHASES="${E2E_PHASES:-a b c d e f g h i}" \
+    MOTD_RECONNECT_STACK_KIND=native MOTD_STACK_DIR="$STACK_DIR" \
+    MOTD_ERGO_PORT="$ERGO_PORT" MOTD_SOJU_HTTP_PORT="$SOJU_HTTP_PORT" \
+    E2E_PHASES="${E2E_PHASES:-a b c d e f g h j v r i}" \
     nix develop "$REPO" -c "$E2E_DIR/runbook.sh"
 }
 
@@ -201,7 +211,7 @@ showcase() {
   up
   log "building showcase E2E APK"
   nix develop "$REPO" -c ./gradlew :app:assembleFossE2e \
-    --stacktrace --no-daemon --max-workers=1
+    --stacktrace --max-workers=2
   log "capturing public showcase screenshots into $screenshot_dir"
   ANDROID_SERIAL="$SERIAL" SERIAL="$SERIAL" \
     MOTD_PKG=io.github.trevarj.motd.debug \
@@ -210,6 +220,8 @@ showcase() {
     MOTD_SOJU_USER=motd MOTD_SOJU_PASS=motdtest \
     MOTD_NICK=motdadb MOTD_TEST_CHANNEL='#guix' MOTD_SECOND_NICK=motdadb2 \
     MOTD_STACK_PROFILE=showcase E2E_SCREENSHOT_DIR="$screenshot_dir" \
+    MOTD_RECONNECT_STACK_KIND=native MOTD_STACK_DIR="$STACK_DIR" \
+    MOTD_ERGO_PORT="$ERGO_PORT" MOTD_SOJU_HTTP_PORT="$SOJU_HTTP_PORT" \
     E2E_OUT_DIR="$STATE_DIR/showcase-artifacts" \
     E2E_PHASES="${E2E_PHASES:-a s}" \
     nix develop "$REPO" -c "$E2E_DIR/runbook.sh"

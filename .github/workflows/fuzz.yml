@@ -1,4 +1,4 @@
-name: Deterministic fuzz campaigns
+name: Nightly fuzz
 
 on:
   workflow_dispatch:

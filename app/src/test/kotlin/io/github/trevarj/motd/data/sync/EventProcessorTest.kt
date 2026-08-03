@@ -8,6 +8,8 @@ import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.db.DccTransferState
 import io.github.trevarj.motd.data.db.InviteState
 import io.github.trevarj.motd.data.db.HistoryCursorEntity
+import io.github.trevarj.motd.data.db.HistoryGapEntity
+import io.github.trevarj.motd.data.db.MessageEntity
 import io.github.trevarj.motd.data.db.MessageKind
 import io.github.trevarj.motd.data.db.MotdDatabase
 import io.github.trevarj.motd.data.db.TimelineEventEntity
@@ -279,12 +281,13 @@ class EventProcessorTest {
             db,
             TypingTrackerImpl(),
             object : MessageNotifier {
-                override suspend fun onIncoming(
+                override suspend fun onCanonicalIncoming(
                     networkId: Long,
                     bufferId: Long,
                     type: BufferType,
                     hasMention: Boolean,
-                    message: IrcEvent.ChatMessage,
+                    eventId: Long,
+                    message: MessageEntity,
                 ) {
                     notifications++
                 }
@@ -1249,12 +1252,13 @@ class EventProcessorTest {
     fun replyToOwnKnownParent_notifiesExactlyOnce() = runTest {
         var notifications = 0
         val notifying = EventProcessor(db, TypingTrackerImpl(), object : MessageNotifier {
-            override suspend fun onIncoming(
+            override suspend fun onCanonicalIncoming(
                 networkId: Long,
                 bufferId: Long,
                 type: BufferType,
                 hasMention: Boolean,
-                message: IrcEvent.ChatMessage,
+                eventId: Long,
+                message: MessageEntity,
             ) {
                 notifications++
                 assertTrue(hasMention)
@@ -1282,12 +1286,13 @@ class EventProcessorTest {
             db = db,
             typing = TypingTrackerImpl(),
             notifier = object : MessageNotifier {
-                override suspend fun onIncoming(
+                override suspend fun onCanonicalIncoming(
                     networkId: Long,
                     bufferId: Long,
                     type: BufferType,
                     hasMention: Boolean,
-                    message: IrcEvent.ChatMessage,
+                    eventId: Long,
+                    message: MessageEntity,
                 ) {
                     notifications++
                 }
@@ -1296,7 +1301,7 @@ class EventProcessorTest {
                 override suspend fun onIncoming(
                     bufferId: Long,
                     type: BufferType,
-                    message: IrcEvent.ChatMessage,
+                    message: MessageEntity,
                 ) {
                     error("audio service unavailable")
                 }
@@ -1332,12 +1337,13 @@ class EventProcessorTest {
             db = db,
             typing = TypingTrackerImpl(),
             notifier = object : MessageNotifier {
-                override suspend fun onIncoming(
+                override suspend fun onCanonicalIncoming(
                     networkId: Long,
                     bufferId: Long,
                     type: BufferType,
                     hasMention: Boolean,
-                    message: IrcEvent.ChatMessage,
+                    eventId: Long,
+                    message: MessageEntity,
                 ) {
                     notifications++
                 }
@@ -1346,7 +1352,7 @@ class EventProcessorTest {
                 override suspend fun onIncoming(
                     bufferId: Long,
                     type: BufferType,
-                    message: IrcEvent.ChatMessage,
+                    message: MessageEntity,
                 ) {
                     sounds++
                 }
@@ -1957,12 +1963,13 @@ class EventProcessorTest {
     fun readMarker_notifiesOnlyForKnownTimestampedTarget() = runTest {
         val observed = mutableListOf<Pair<Long, io.github.trevarj.motd.data.db.TimelineAnchor>>()
         val notifying = EventProcessor(db, TypingTrackerImpl(), object : MessageNotifier {
-            override suspend fun onIncoming(
+            override suspend fun onCanonicalIncoming(
                 networkId: Long,
                 bufferId: Long,
                 type: BufferType,
                 hasMention: Boolean,
-                message: IrcEvent.ChatMessage,
+                eventId: Long,
+                message: MessageEntity,
             ) = Unit
 
             override suspend fun onRead(
@@ -2234,7 +2241,7 @@ class EventProcessorTest {
         // A recording notifier; a motd line containing our nick must not fire.
         var fired = false
         val recProcessor = EventProcessor(db, TypingTrackerImpl(), object : MessageNotifier {
-            override suspend fun onIncoming(networkId: Long, bufferId: Long, type: BufferType, hasMention: Boolean, message: IrcEvent.ChatMessage) {
+            override suspend fun onCanonicalIncoming(networkId: Long, bufferId: Long, type: BufferType, hasMention: Boolean, eventId: Long, message: MessageEntity) {
                 fired = true
             }
         })
@@ -2253,14 +2260,15 @@ class EventProcessorTest {
     fun rootBouncerServ_privmsg_isPersistedSeenWithoutNotification_butNoticeRemainsOrdinary() = runTest {
         val direct = db.networkDao().byId(networkId)!!
         db.networkDao().update(direct.copy(role = NetworkRole.BOUNCER_ROOT))
-        val notifiedKinds = mutableListOf<IrcEvent.ChatKind>()
+        val notifiedKinds = mutableListOf<MessageKind>()
         val recording = EventProcessor(db, TypingTrackerImpl(), object : MessageNotifier {
-            override suspend fun onIncoming(
+            override suspend fun onCanonicalIncoming(
                 networkId: Long,
                 bufferId: Long,
                 type: BufferType,
                 hasMention: Boolean,
-                message: IrcEvent.ChatMessage,
+                eventId: Long,
+                message: MessageEntity,
             ) {
                 notifiedKinds += message.kind
             }
@@ -2282,7 +2290,7 @@ class EventProcessorTest {
             source = Prefix("BouncerServ"), target = "me", text = "detached relay",
             isSelf = false, replyToMsgid = null,
         ))
-        assertEquals(listOf(IrcEvent.ChatKind.NOTICE), notifiedKinds)
+        assertEquals(listOf(MessageKind.NOTICE), notifiedKinds)
     }
 
     @Test
@@ -2950,12 +2958,13 @@ class EventProcessorTest {
         val notified = mutableListOf<Triple<Long, Long, Long>>()
         val resolved = mutableListOf<Long>()
         val recording = EventProcessor(db, TypingTrackerImpl(), object : MessageNotifier {
-            override suspend fun onIncoming(
+            override suspend fun onCanonicalIncoming(
                 networkId: Long,
                 bufferId: Long,
                 type: BufferType,
                 hasMention: Boolean,
-                message: IrcEvent.ChatMessage,
+                eventId: Long,
+                message: MessageEntity,
             ) = Unit
 
             override suspend fun onInvitation(networkId: Long, bufferId: Long, messageId: Long) {
@@ -3001,12 +3010,13 @@ class EventProcessorTest {
     fun dccFileOffer_createsQueryTimelineRow_transferState_andNotification() = runTest {
         val notified = mutableListOf<Triple<Long, Long, Long>>()
         val recording = EventProcessor(db, TypingTrackerImpl(), object : MessageNotifier {
-            override suspend fun onIncoming(
+            override suspend fun onCanonicalIncoming(
                 networkId: Long,
                 bufferId: Long,
                 type: BufferType,
                 hasMention: Boolean,
-                message: IrcEvent.ChatMessage,
+                eventId: Long,
+                message: MessageEntity,
             ) = Unit
 
             override suspend fun onDccTransferOffer(networkId: Long, bufferId: Long, messageId: Long) {
@@ -3095,12 +3105,13 @@ class EventProcessorTest {
             db,
             TypingTrackerImpl(),
             object : MessageNotifier {
-                override suspend fun onIncoming(
+                override suspend fun onCanonicalIncoming(
                     networkId: Long,
                     bufferId: Long,
                     type: BufferType,
                     hasMention: Boolean,
-                    message: IrcEvent.ChatMessage,
+                    eventId: Long,
+                    message: MessageEntity,
                 ) = Unit
 
                 override suspend fun onInvitation(networkId: Long, bufferId: Long, messageId: Long) {
@@ -3256,9 +3267,15 @@ class EventProcessorTest {
             IrcEvent.ChatMessage(ctx(msgid = "h2"), IrcEvent.ChatKind.PRIVMSG, Prefix("alice"), "#chan", "two", false, null),
         ))
         processor.process(networkId, batch)
-        processor.process(networkId, batch) // replay overlap → IGNORE
         val buffer = db.bufferDao().byName(networkId, "#chan")!!
+        val pagingSource = db.messageDao().pagingSource(buffer.id)
+        pagingSource.load(
+            androidx.paging.PagingSource.LoadParams.Refresh(null, 100, true),
+        )
+        processor.process(networkId, batch) // replay overlap → IGNORE
         assertEquals(2, pagingList(buffer.id).size)
+        // A no-op replay must not replace the visible Paging generation with placeholders.
+        assertFalse(pagingSource.invalid)
     }
 
     @Test
@@ -3489,12 +3506,13 @@ class EventProcessorTest {
     fun historyBatch_persistsMentionsAndDms_withoutNotifications() = runTest {
         val notifications = mutableListOf<String>()
         val recording = EventProcessor(db, TypingTrackerImpl(), object : MessageNotifier {
-            override suspend fun onIncoming(
+            override suspend fun onCanonicalIncoming(
                 networkId: Long,
                 bufferId: Long,
                 type: BufferType,
                 hasMention: Boolean,
-                message: IrcEvent.ChatMessage,
+                eventId: Long,
+                message: MessageEntity,
             ) {
                 notifications += message.text
             }
@@ -3554,12 +3572,13 @@ class EventProcessorTest {
         val resolvedInvites = mutableListOf<Long>()
         val typing = TypingTrackerImpl()
         val recording = EventProcessor(db, typing, object : MessageNotifier {
-            override suspend fun onIncoming(
+            override suspend fun onCanonicalIncoming(
                 networkId: Long,
                 bufferId: Long,
                 type: BufferType,
                 hasMention: Boolean,
-                message: IrcEvent.ChatMessage,
+                eventId: Long,
+                message: MessageEntity,
             ) {
                 notifications += message.text
             }
@@ -3813,6 +3832,472 @@ class EventProcessorTest {
     }
 
     @Test
+    fun terminalDirectionalPageMarksUnreachedRemainderUnrecoverable() = runTest {
+        val room = BufferStore(db).getOrCreate(networkId, "#gap", "#gap", BufferType.CHANNEL)
+        db.historyGapDao().insert(
+            HistoryGapEntity(0, room.id, "m100", 100, "m900", 900),
+        )
+        processor.persistHistoryPage(
+            networkId,
+            ChatHistoryRequest(
+                ChatHistoryRequest.Subcommand.AFTER,
+                "#gap",
+                bound1 = "msgid=m100",
+                limit = 50,
+            ),
+            ChatHistoryResponse.Messages(
+                events = emptyList(),
+                oldest = null,
+                newest = null,
+                endOfHistory = true,
+                primaryMessageCount = 0,
+            ),
+            expectedRoomId = room.id,
+        )
+
+        assertFalse(db.historyGapDao().forRoom(room.id).single().recoverable)
+
+        db.historyGapDao().deleteForRoom(room.id)
+        db.historyGapDao().insert(
+            HistoryGapEntity(0, room.id, "m100", 100, "m900", 900),
+        )
+        val terminal = IrcEvent.ChatMessage(
+            ctx("m150", 150), IrcEvent.ChatKind.PRIVMSG, Prefix("alice"),
+            "#gap", "terminal", false, null,
+        )
+        processor.persistHistoryPage(
+            networkId,
+            ChatHistoryRequest(
+                ChatHistoryRequest.Subcommand.AFTER,
+                "#gap",
+                bound1 = "msgid=m100",
+                limit = 50,
+            ),
+            ChatHistoryResponse.Messages(
+                events = listOf(terminal),
+                oldest = ChatHistoryReference("m150", 150),
+                newest = ChatHistoryReference("m150", 150),
+                endOfHistory = true,
+                primaryMessageCount = 1,
+            ),
+            expectedRoomId = room.id,
+        )
+
+        val remainder = db.historyGapDao().forRoom(room.id).single()
+        assertEquals("m150", remainder.olderMsgid)
+        assertEquals(150L, remainder.olderServerTime)
+        assertFalse(remainder.recoverable)
+    }
+
+    @Test
+    fun saturatedTimestampOnlyLatestRecordsARecoverableCatchUpGap() = runTest {
+        // Timestamp-only wire (soju advertises MSGREFTYPES=timestamp): boundary references carry no
+        // msgids and the reconnect catch-up LATEST page is saturated (primary == limit). The gap
+        // between the previous newest row and the page's oldest row must still be born RECOVERABLE:
+        // recoverable=false is reserved for server-proven-empty intervals, and per-fetch
+        // equal-timestamp ambiguity is the loader's per-page concern, not a reason to permanently
+        // block gap fill. (Regression pin: the old saturation rule made every soju catch-up gap
+        // unrecoverable, so opening an unread channel could never page older history.)
+        processor.process(
+            networkId,
+            IrcEvent.ChatMessage(
+                ctx(null, 10), IrcEvent.ChatKind.PRIVMSG, Prefix("alice"),
+                "#ts-only", "marker", false, null,
+            ),
+        )
+        val room = checkNotNull(db.bufferDao().byName(networkId, "#ts-only"))
+        val page = (212..261).map { time ->
+            IrcEvent.ChatMessage(
+                ctx(null, time.toLong()), IrcEvent.ChatKind.PRIVMSG, Prefix("alice"),
+                "#ts-only", "row$time", false, null,
+            )
+        }
+
+        processor.persistHistoryPage(
+            networkId,
+            ChatHistoryRequest(ChatHistoryRequest.Subcommand.LATEST, "#ts-only", limit = 50),
+            ChatHistoryResponse.Messages(
+                events = page,
+                oldest = ChatHistoryReference(null, 212),
+                newest = ChatHistoryReference(null, 261),
+                endOfHistory = false,
+                primaryMessageCount = 50,
+            ),
+            expectedRoomId = room.id,
+        )
+
+        val gap = db.historyGapDao().forRoom(room.id).single()
+        assertTrue(gap.recoverable)
+        assertEquals(10L, gap.olderServerTime)
+        assertEquals(212L, gap.newerServerTime)
+    }
+
+    @Test
+    fun saturatedTimestampOnlyGapFillKeepsTheRecededRemainderRecoverable() = runTest {
+        // Filling a recoverable gap with a saturated msgid-less BEFORE page recedes its newer edge
+        // and must keep the remainder RECOVERABLE so the next APPEND can continue toward the marker.
+        val room = BufferStore(db).getOrCreate(networkId, "#ts-fill", "#ts-fill", BufferType.CHANNEL)
+        val gapId = db.historyGapDao().insert(
+            HistoryGapEntity(0, room.id, null, 10, null, 212),
+        )
+        val page = (162..211).map { time ->
+            IrcEvent.ChatMessage(
+                ctx(null, time.toLong()), IrcEvent.ChatKind.PRIVMSG, Prefix("alice"),
+                "#ts-fill", "row$time", false, null,
+            )
+        }
+
+        processor.persistHistoryPageResult(
+            networkId = networkId,
+            request = ChatHistoryRequest(
+                ChatHistoryRequest.Subcommand.BEFORE,
+                "#ts-fill",
+                bound1 = "timestamp=1970-01-01T00:00:00.212Z",
+                limit = 50,
+            ),
+            response = ChatHistoryResponse.Messages(
+                events = page,
+                oldest = ChatHistoryReference(null, 162),
+                newest = ChatHistoryReference(null, 211),
+                endOfHistory = false,
+                primaryMessageCount = 50,
+            ),
+            expectedRoomId = room.id,
+            historyGapId = gapId,
+        )
+
+        val remainder = db.historyGapDao().forRoom(room.id).single()
+        assertTrue(remainder.recoverable)
+        assertEquals(10L, remainder.olderServerTime)
+        assertEquals(162L, remainder.newerServerTime)
+    }
+
+    @Test
+    fun saturatedTimestampOnlySeedRecordsNoDegenerateGap() = runTest {
+        // Source-level invariant for the fresh-buffer seed on a timestamp-only wire: the page is
+        // saturated (primary == limit) and msgid-less with no prior newest boundary and no focused
+        // gap, which used to write a ZERO-WIDTH `recoverable = false` gap on the page's oldest row.
+        // Both claims were false — an interval whose edges name the same row cannot hold a message,
+        // and recoverable=false is reserved for server-proven-empty intervals — and the row poisoned
+        // paging (an unrecoverable focused gap is terminal for APPEND) and the Recent window (it
+        // clamps at the edge row). Nothing missing was observed, so nothing is recorded; the cursor
+        // and historyComplete=false carry "there may be more" on their own.
+        val room = BufferStore(db).getOrCreate(networkId, "#ts-seed", "#ts-seed", BufferType.CHANNEL)
+        val page = (212..261).map { time ->
+            IrcEvent.ChatMessage(
+                ctx(null, time.toLong()), IrcEvent.ChatKind.PRIVMSG, Prefix("alice"),
+                "#ts-seed", "row$time", false, null,
+            )
+        }
+
+        processor.persistHistoryPage(
+            networkId,
+            ChatHistoryRequest(ChatHistoryRequest.Subcommand.LATEST, "#ts-seed", limit = 50),
+            ChatHistoryResponse.Messages(
+                events = page,
+                oldest = ChatHistoryReference(null, 212),
+                newest = ChatHistoryReference(null, 261),
+                endOfHistory = false,
+                primaryMessageCount = 50,
+            ),
+            expectedRoomId = room.id,
+        )
+
+        assertTrue(db.historyGapDao().forRoom(room.id).isEmpty())
+        // The page is still not proof of completeness, so older paging stays open.
+        assertFalse(checkNotNull(db.bufferDao().observeById(room.id)).historyComplete)
+        assertEquals(212L, checkNotNull(db.historyCursorDao().byRoom(room.id)).oldestServerTime)
+    }
+
+    @Test
+    fun saturatedTimestampOnlyBeforePageRecordsNoDegenerateGap() = runTest {
+        // Same invariant for the cursor-driven BEFORE page (no focused gap). Every page of a soju
+        // backfill ladder is saturated and msgid-less, so the old rule would have written one
+        // unrecoverable zero-width gap per page — each of which permanently ends older paging.
+        val room = BufferStore(db).getOrCreate(networkId, "#ts-before", "#ts-before", BufferType.CHANNEL)
+        val page = (162..211).map { time ->
+            IrcEvent.ChatMessage(
+                ctx(null, time.toLong()), IrcEvent.ChatKind.PRIVMSG, Prefix("alice"),
+                "#ts-before", "row$time", false, null,
+            )
+        }
+
+        processor.persistHistoryPage(
+            networkId,
+            ChatHistoryRequest(
+                ChatHistoryRequest.Subcommand.BEFORE,
+                "#ts-before",
+                bound1 = "timestamp=1970-01-01T00:00:00.212Z",
+                limit = 50,
+            ),
+            ChatHistoryResponse.Messages(
+                events = page,
+                oldest = ChatHistoryReference(null, 162),
+                newest = ChatHistoryReference(null, 211),
+                endOfHistory = false,
+                primaryMessageCount = 50,
+            ),
+            expectedRoomId = room.id,
+        )
+
+        assertTrue(db.historyGapDao().forRoom(room.id).isEmpty())
+        assertFalse(checkNotNull(db.bufferDao().observeById(room.id)).historyComplete)
+    }
+
+    @Test
+    fun emptyGapFillResponseStillMarksTheGapUnrecoverable() = runTest {
+        // The one legitimate route to recoverable=false: the server PROVED the interval empty by
+        // returning zero primary messages for the gap-directed request.
+        val room = BufferStore(db).getOrCreate(networkId, "#ts-empty", "#ts-empty", BufferType.CHANNEL)
+        val gapId = db.historyGapDao().insert(
+            HistoryGapEntity(0, room.id, null, 10, null, 212),
+        )
+
+        processor.persistHistoryPageResult(
+            networkId = networkId,
+            request = ChatHistoryRequest(
+                ChatHistoryRequest.Subcommand.BEFORE,
+                "#ts-empty",
+                bound1 = "timestamp=1970-01-01T00:00:00.212Z",
+                limit = 50,
+            ),
+            response = ChatHistoryResponse.Messages(emptyList(), null, null, false, 0),
+            expectedRoomId = room.id,
+            historyGapId = gapId,
+        )
+
+        assertFalse(db.historyGapDao().forRoom(room.id).single().recoverable)
+    }
+
+    @Test
+    fun exactGapIdentityDisambiguatesEqualTimeTimestampFallback() = runTest {
+        val room = BufferStore(db).getOrCreate(networkId, "#ambiguous-gap", "#ambiguous-gap", BufferType.CHANNEL)
+        val firstId = db.historyGapDao().insert(
+            HistoryGapEntity(0, room.id, "a", 100, "b", 500),
+        )
+        val secondId = db.historyGapDao().insert(
+            HistoryGapEntity(0, room.id, "c", 100, "d", 900),
+        )
+
+        processor.persistHistoryPageResult(
+            networkId = networkId,
+            request = ChatHistoryRequest(
+                ChatHistoryRequest.Subcommand.AFTER,
+                "#ambiguous-gap",
+                bound1 = "timestamp=1970-01-01T00:00:00.100Z",
+                limit = 50,
+            ),
+            response = ChatHistoryResponse.Messages(emptyList(), null, null, true, 0),
+            expectedRoomId = room.id,
+            historyGapId = secondId,
+        )
+
+        val gaps = db.historyGapDao().forRoom(room.id).associateBy { it.id }
+        assertTrue(checkNotNull(gaps[firstId]).recoverable)
+        assertFalse(checkNotNull(gaps[secondId]).recoverable)
+    }
+
+    @Test
+    fun terminalDirectionalPageClosesGapAfterReachingOppositeBoundary() = runTest {
+        val room = BufferStore(db).getOrCreate(networkId, "#closed-gap", "#closed-gap", BufferType.CHANNEL)
+        db.historyGapDao().insert(
+            HistoryGapEntity(0, room.id, "m100", 100, "m900", 900),
+        )
+        val terminal = IrcEvent.ChatMessage(
+            ctx("m900", 900), IrcEvent.ChatKind.PRIVMSG, Prefix("alice"),
+            "#closed-gap", "terminal", false, null,
+        )
+
+        processor.persistHistoryPage(
+            networkId,
+            ChatHistoryRequest(
+                ChatHistoryRequest.Subcommand.AFTER,
+                "#closed-gap",
+                bound1 = "msgid=m100",
+                limit = 50,
+            ),
+            ChatHistoryResponse.Messages(
+                events = listOf(terminal),
+                oldest = ChatHistoryReference("m900", 900),
+                newest = ChatHistoryReference("m900", 900),
+                endOfHistory = true,
+                primaryMessageCount = 1,
+            ),
+            expectedRoomId = room.id,
+        )
+
+        assertTrue(db.historyGapDao().forRoom(room.id).isEmpty())
+    }
+
+    @Test
+    fun latestRetainsGapWhenOpaqueBoundariesShareATimestamp() = runTest {
+        processor.process(
+            networkId,
+            IrcEvent.ChatMessage(
+                ctx("old-boundary", 100), IrcEvent.ChatKind.PRIVMSG, Prefix("alice"),
+                "#same-time", "old", false, null,
+            ),
+        )
+        val room = checkNotNull(db.bufferDao().byName(networkId, "#same-time"))
+        val newest = IrcEvent.ChatMessage(
+            ctx("new-boundary", 100), IrcEvent.ChatKind.PRIVMSG, Prefix("alice"),
+            "#same-time", "new", false, null,
+        )
+
+        processor.persistHistoryPage(
+            networkId,
+            ChatHistoryRequest(ChatHistoryRequest.Subcommand.LATEST, "#same-time", limit = 50),
+            ChatHistoryResponse.Messages(
+                events = listOf(newest),
+                oldest = ChatHistoryReference("new-boundary", 100),
+                newest = ChatHistoryReference("new-boundary", 100),
+                endOfHistory = false,
+                primaryMessageCount = 1,
+            ),
+            expectedRoomId = room.id,
+        )
+
+        val gap = db.historyGapDao().forRoom(room.id).single()
+        assertEquals("old-boundary", gap.olderMsgid)
+        assertEquals("new-boundary", gap.newerMsgid)
+        assertEquals(100L, gap.olderServerTime)
+        assertEquals(100L, gap.newerServerTime)
+    }
+
+    @Test
+    fun latestKeepsDistinctSameTimestampGapsSeparate() = runTest {
+        val room = BufferStore(db).getOrCreate(networkId, "#same-time-gaps", "#same-time-gaps", BufferType.CHANNEL)
+        val ids = db.messageDao().insertAll(
+            listOf("a", "b", "c").map { msgid ->
+                MessageEntity(
+                    bufferId = room.id,
+                    msgid = msgid,
+                    serverTime = 100,
+                    sender = "alice",
+                    kind = MessageKind.PRIVMSG,
+                    text = msgid,
+                    dedupKey = msgid,
+                )
+            },
+        )
+        db.historyGapDao().insert(
+            HistoryGapEntity(
+                roomId = room.id,
+                olderMsgid = "a",
+                olderServerTime = 100,
+                newerMsgid = "b",
+                newerServerTime = 100,
+                olderEventId = ids[0],
+                olderTimelineOrder = ids[0],
+                newerEventId = ids[1],
+                newerTimelineOrder = ids[1],
+            ),
+        )
+        db.historyCursorDao().upsert(
+            HistoryCursorEntity(room.id, "c", 100, "a", 100, false),
+        )
+        val newest = IrcEvent.ChatMessage(
+            ctx("d", 100), IrcEvent.ChatKind.PRIVMSG, Prefix("alice"),
+            "#same-time-gaps", "d", false, null,
+        )
+
+        processor.persistHistoryPage(
+            networkId,
+            ChatHistoryRequest(ChatHistoryRequest.Subcommand.LATEST, "#same-time-gaps", limit = 50),
+            ChatHistoryResponse.Messages(
+                listOf(newest),
+                ChatHistoryReference("d", 100),
+                ChatHistoryReference("d", 100),
+                false,
+                1,
+            ),
+            expectedRoomId = room.id,
+        )
+
+        assertEquals(
+            setOf("a" to "b", "c" to "d"),
+            db.historyGapDao().forRoom(room.id).map { it.olderMsgid to it.newerMsgid }.toSet(),
+        )
+    }
+
+    @Test
+    fun overlappingPageAtEqualOlderTimestampRetainsTheUncoveredPrefix() = runTest {
+        val room = BufferStore(db).getOrCreate(networkId, "#equal-edge", "#equal-edge", BufferType.CHANNEL)
+        val boundaries = db.messageDao().insertAll(
+            listOf(
+                MessageEntity(bufferId = room.id, msgid = "a", serverTime = 100, sender = "alice", kind = MessageKind.PRIVMSG, text = "a", dedupKey = "a"),
+                MessageEntity(bufferId = room.id, msgid = "z", serverTime = 200, sender = "alice", kind = MessageKind.PRIVMSG, text = "z", dedupKey = "z"),
+            ),
+        )
+        db.historyGapDao().insert(
+            HistoryGapEntity(
+                roomId = room.id,
+                olderMsgid = "a",
+                olderServerTime = 100,
+                newerMsgid = "z",
+                newerServerTime = 200,
+                olderEventId = boundaries[0],
+                olderTimelineOrder = boundaries[0],
+                newerEventId = boundaries[1],
+                newerTimelineOrder = boundaries[1],
+            ),
+        )
+        val page = listOf(
+            IrcEvent.ChatMessage(ctx("b", 100), IrcEvent.ChatKind.PRIVMSG, Prefix("alice"), "#equal-edge", "b", false, null),
+            IrcEvent.ChatMessage(ctx("z", 200), IrcEvent.ChatKind.PRIVMSG, Prefix("alice"), "#equal-edge", "z", false, null),
+        )
+
+        processor.persistHistoryPage(
+            networkId,
+            ChatHistoryRequest(ChatHistoryRequest.Subcommand.AROUND, "#equal-edge", bound1 = "msgid=b", limit = 50),
+            ChatHistoryResponse.Messages(
+                page,
+                ChatHistoryReference("b", 100),
+                ChatHistoryReference("z", 200),
+                false,
+                2,
+            ),
+            expectedRoomId = room.id,
+        )
+
+        val gaps = db.historyGapDao().forRoom(room.id)
+        assertEquals(gaps.toString(), 1, gaps.size)
+        val remaining = gaps.single()
+        assertEquals("a", remaining.olderMsgid)
+        assertEquals("b", remaining.newerMsgid)
+    }
+
+    @Test
+    fun msgidlessSameTimestampLatestGapStoresExactTupleBoundary() = runTest {
+        processor.process(
+            networkId,
+            IrcEvent.ChatMessage(ctx("old", 100), IrcEvent.ChatKind.PRIVMSG, Prefix("alice"), "#tuple", "old", false, null),
+        )
+        val room = checkNotNull(db.bufferDao().byName(networkId, "#tuple"))
+        val newest = IrcEvent.ChatMessage(
+            ctx(null, 100), IrcEvent.ChatKind.PRIVMSG, Prefix("alice"), "#tuple", "new", false, null,
+        )
+
+        processor.persistHistoryPage(
+            networkId,
+            ChatHistoryRequest(ChatHistoryRequest.Subcommand.LATEST, "#tuple", limit = 50),
+            ChatHistoryResponse.Messages(
+                listOf(newest),
+                ChatHistoryReference(null, 100),
+                ChatHistoryReference(null, 100),
+                false,
+                1,
+            ),
+            expectedRoomId = room.id,
+        )
+
+        val gap = db.historyGapDao().forRoom(room.id).single()
+        val newRow = db.messageDao().newestMessage(room.id)!!
+        assertEquals(newRow.id, gap.newerEventId)
+        assertEquals(newRow.timelineOrder, gap.newerTimelineOrder)
+    }
+
+    @Test
     fun protocolPagePreservesPostMergeWinnerCursorExtents() = runTest {
         val store = BufferStore(db)
         val winner = store.getOrCreate(networkId, "alice", "Alice", BufferType.QUERY)
@@ -3884,12 +4369,13 @@ class EventProcessorTest {
     fun push_persistsSupportedMessage_withoutMutatingSessionState() = runTest {
         val notifications = mutableListOf<String>()
         val recording = EventProcessor(db, TypingTrackerImpl(), object : MessageNotifier {
-            override suspend fun onIncoming(
+            override suspend fun onCanonicalIncoming(
                 networkId: Long,
                 bufferId: Long,
                 type: BufferType,
                 hasMention: Boolean,
-                message: IrcEvent.ChatMessage,
+                eventId: Long,
+                message: MessageEntity,
             ) {
                 notifications += message.text
             }

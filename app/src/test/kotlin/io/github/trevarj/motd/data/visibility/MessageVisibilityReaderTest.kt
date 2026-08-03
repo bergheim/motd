@@ -269,6 +269,28 @@ class MessageVisibilityReaderTest {
     }
 
     @Test
+    fun firstUnreadRespectsTheBoundedRecentIsland() = runTest {
+        val ids = db.messageDao().insertAll(
+            listOf(
+                message(bufferId, "older unread", sender = "bob", serverTime = 100, dedupKey = "old"),
+                message(bufferId, "recent unread", sender = "bob", serverTime = 900, dedupKey = "recent"),
+            ),
+        )
+        val recentBoundary = io.github.trevarj.motd.data.db.TimelineAnchor(900, ids[1])
+
+        val result = reader.firstVisibleUnreadAnchor(
+            bufferId = bufferId,
+            after = io.github.trevarj.motd.data.db.TimelineAnchor(50, 0),
+            spec = spec(FoolsMode.COLLAPSE),
+            bounds = io.github.trevarj.motd.data.visibility.MessageWindowBounds(
+                lowerBoundary = recentBoundary,
+            ),
+        )
+
+        assertEquals(recentBoundary, result)
+    }
+
+    @Test
     fun rawTailObserverFollowsRedirectChangedWithoutMessageInvalidation() = runTest {
         val networkId = db.bufferDao().observeById(bufferId)!!.networkId
         val winnerId = db.bufferDao().insert(buffer(networkId, "#winner"))
@@ -432,6 +454,58 @@ class MessageVisibilityReaderTest {
         )
         // No viewport prefix to search => null without querying.
         assertNull(reader.nearestUnreadMentionBelowIndex(bufferId, beforeIndex = 0, after = marker, spec = spec))
+    }
+
+    @Test
+    fun viewportQueriesUseTheFocusedHistoryIslandBounds() = runTest {
+        val ids = db.messageDao().insertAll(
+            listOf(
+                message(bufferId, "old plain", sender = "bob", serverTime = 200, dedupKey = "old-plain"),
+                message(
+                    bufferId,
+                    "old mention",
+                    sender = "bob",
+                    serverTime = 300,
+                    dedupKey = "old-mention",
+                    hasMention = true,
+                ),
+                message(bufferId, "recent plain", sender = "bob", serverTime = 900, dedupKey = "recent-plain"),
+                message(
+                    bufferId,
+                    "recent mention",
+                    sender = "bob",
+                    serverTime = 1_000,
+                    dedupKey = "recent-mention",
+                    hasMention = true,
+                ),
+            ),
+        )
+        val marker = io.github.trevarj.motd.data.db.TimelineAnchor(50, 0)
+        val bounds = MessageWindowBounds(
+            upperBoundary = io.github.trevarj.motd.data.db.TimelineAnchor(300, ids[1]),
+        )
+
+        assertEquals(
+            2,
+            reader.countVisibleUnreadInTimelinePrefix(
+                bufferId,
+                beforeIndex = 2,
+                after = marker,
+                maxCount = 100,
+                spec = MessageVisibilitySpec(),
+                bounds = bounds,
+            ),
+        )
+        assertEquals(
+            ids[1],
+            reader.nearestUnreadMentionBelow(
+                bufferId,
+                beforeIndex = 2,
+                after = marker,
+                spec = MessageVisibilitySpec(),
+                bounds = bounds,
+            )?.id,
+        )
     }
 
     private fun spec(mode: FoolsMode, showJoinPartQuit: Boolean = true) = MessageVisibilitySpec(

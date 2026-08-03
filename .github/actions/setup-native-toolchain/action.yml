@@ -4,6 +4,34 @@ description: Install and expose the exact Android NDK pinned for libbox and APK 
 runs:
   using: composite
   steps:
+    # Resolve the pinned package paths in a shell step: the ${{ env }} context in
+    # a composite action does not see runner-set variables like ANDROID_HOME, so
+    # the cache path must be produced here rather than referenced inline.
+    - name: Resolve pinned toolchain paths
+      id: paths
+      shell: bash
+      run: |
+        set -euo pipefail
+        # shellcheck disable=SC1091
+        source third_party/sing-box/source.lock
+        {
+          echo "cache_paths<<EOF"
+          echo "$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION"
+          echo "$ANDROID_HOME/platforms/android-23"
+          echo "$ANDROID_HOME/platforms/android-37.0"
+          echo "$ANDROID_HOME/build-tools/36.0.0"
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+    # Cache the ~1GB NDK plus the pinned platforms/build-tools. The key hashes
+    # both source.lock (NDK version) and this action (the platform/build-tools
+    # list), so any pin change invalidates the cache automatically.
+    - name: Cache pinned Android NDK/SDK packages
+      uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+      with:
+        path: ${{ steps.paths.outputs.cache_paths }}
+        key: android-toolchain-${{ runner.os }}-${{ hashFiles('third_party/sing-box/source.lock', '.github/actions/setup-native-toolchain/action.yml') }}
+    # Idempotent: a no-op on a cache hit, and the source of truth that populates
+    # the cache on a miss. Always runs so ANDROID_NDK_HOME is exported either way.
     - name: Install pinned Android SDK packages
       shell: bash
       run: |

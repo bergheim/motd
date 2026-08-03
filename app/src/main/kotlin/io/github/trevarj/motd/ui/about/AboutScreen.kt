@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -21,6 +22,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -56,6 +58,7 @@ fun AboutScreen(
         state = state,
         onBack = onBack,
         onDiagnosticLoggingChanged = viewModel::setDiagnosticLoggingEnabled,
+        onAgentwireChanged = viewModel::setAgentwireEnabled,
         onExportDiagnostics = {
             createDiagnosticDocument.launch("motd-diagnostics-${System.currentTimeMillis()}.txt")
         },
@@ -68,11 +71,13 @@ private fun AboutContent(
     state: AboutDiagnosticsUiState,
     onBack: () -> Unit,
     onDiagnosticLoggingChanged: (Boolean) -> Unit,
+    onAgentwireChanged: (Boolean) -> Unit,
     onExportDiagnostics: () -> Unit,
 ) {
     val context = LocalContext.current
     val licenseUrl = "https://github.com/trevarj/motd/blob/main/LICENSE"
     val githubUrl = stringResource(R.string.settings_github_url)
+    val agentwireUrl = stringResource(R.string.about_agentwire_url)
     Scaffold(
         topBar = {
             TopAppBar(
@@ -164,6 +169,27 @@ private fun AboutContent(
             }
             item {
                 ListItem(
+                    overlineContent = { Text(stringResource(R.string.about_labs)) },
+                    headlineContent = { Text(stringResource(R.string.about_agentwire)) },
+                    supportingContent = { Text(stringResource(R.string.about_agentwire_summary)) },
+                    trailingContent = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(onClick = {
+                                context.startActivity(Intent(Intent.ACTION_VIEW, agentwireUrl.toUri()))
+                            }) { Text(stringResource(R.string.about_agentwire_repo)) }
+                            Switch(
+                                checked = state.agentwireEnabled,
+                                onCheckedChange = onAgentwireChanged,
+                                modifier = Modifier.testTag("about_agentwire_switch"),
+                            )
+                        }
+                    },
+                    modifier = Modifier.clickable { onAgentwireChanged(!state.agentwireEnabled) },
+                )
+                HorizontalDivider()
+            }
+            item {
+                ListItem(
                     headlineContent = { Text(stringResource(R.string.about_license)) },
                     supportingContent = { Text(stringResource(R.string.about_license_gpl)) },
                     modifier = Modifier.clickable {
@@ -201,6 +227,7 @@ private fun AboutScreenPreview() {
             state = AboutDiagnosticsUiState(),
             onBack = {},
             onDiagnosticLoggingChanged = {},
+            onAgentwireChanged = {},
             onExportDiagnostics = {},
         )
     }

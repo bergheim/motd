@@ -16,8 +16,7 @@ import io.github.trevarj.motd.data.prefs.SettingsRepository
 import io.github.trevarj.motd.data.prefs.ThemeMode
 import io.github.trevarj.motd.data.repo.BufferRepository
 import io.github.trevarj.motd.data.repo.NetworkRepository
-import io.github.trevarj.motd.irc.client.IrcClient
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.service.BufferReadMarker
 import io.github.trevarj.motd.service.CertPrompt
 import io.github.trevarj.motd.service.ConnectionManager
@@ -67,8 +66,7 @@ class ChatListDeleteTest {
 
     /** Appends every part/delete to a shared [ops] log so ordering can be asserted. */
     private class FakeConnectionManager(private val ops: MutableList<String>) : ConnectionManager {
-        override val connectionStates = MutableStateFlow<Map<Long, IrcClientState>>(emptyMap())
-        override fun clientFor(networkId: Long): IrcClient? = null
+        override val connectionStates = MutableStateFlow<Map<Long, ConnectionState>>(emptyMap())
         override suspend fun startAll() = Unit
         override suspend fun stopAll() = Unit
         override suspend fun connect(networkId: Long) = Unit

@@ -18,7 +18,6 @@ import io.github.trevarj.motd.data.sync.ChatSoundPlayer
 import io.github.trevarj.motd.data.visibility.MessageVisibilityPolicy
 import io.github.trevarj.motd.data.visibility.MessageVisibilitySpec
 import io.github.trevarj.motd.diagnostics.DiagnosticLogger
-import io.github.trevarj.motd.irc.event.IrcEvent
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 import java.util.EnumMap
 import java.util.concurrent.ConcurrentHashMap
@@ -309,34 +308,19 @@ class AndroidChatSoundPlayer @Inject internal constructor(
     override suspend fun onIncoming(
         bufferId: Long,
         type: BufferType,
-        message: IrcEvent.ChatMessage,
+        message: MessageEntity,
     ) = playIncoming(
         bufferId = bufferId,
         type = type,
-        senderAccount = message.ctx.account,
-        senderNick = message.source.nick,
-        normalizedActor = null,
-    )
-
-    override suspend fun onCanonicalIncoming(
-        bufferId: Long,
-        type: BufferType,
-        message: IrcEvent.ChatMessage,
-        canonical: MessageEntity,
-    ) = playIncoming(
-        bufferId = bufferId,
-        type = type,
-        senderAccount = canonical.senderAccount,
-        senderNick = null,
-        normalizedActor = canonical.normalizedActor,
+        senderAccount = message.senderAccount,
+        normalizedActor = message.normalizedActor,
     )
 
     private suspend fun playIncoming(
         bufferId: Long,
         type: BufferType,
         senderAccount: String?,
-        senderNick: String?,
-        normalizedActor: String?,
+        normalizedActor: String,
     ) {
         val buffer = db.bufferDao().observeById(bufferId) ?: return
         if (audioActivityTracker.recording.value || audioPlaybackController.state.value.playing) return
@@ -353,7 +337,7 @@ class AndroidChatSoundPlayer @Inject internal constructor(
                 settings.fools,
                 identityRules,
                 senderAccount,
-                normalizedActor ?: identityRules.normalize(senderNick.orEmpty()),
+                normalizedActor,
             ),
         ) ?: return
         backend.play(

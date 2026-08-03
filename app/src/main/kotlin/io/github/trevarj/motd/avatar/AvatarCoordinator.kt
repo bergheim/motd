@@ -4,6 +4,7 @@ import dagger.Lazy
 import io.github.trevarj.motd.data.db.UserDao
 import io.github.trevarj.motd.irc.client.IrcClient
 import io.github.trevarj.motd.irc.event.IrcEvent
+import io.github.trevarj.motd.ircbackend.IrcSessions
 import io.github.trevarj.motd.service.ConnectionManager
 import io.github.trevarj.motd.di.ApplicationScope
 import javax.inject.Inject
@@ -28,6 +29,7 @@ class AvatarCoordinator @Inject constructor(
     private val store: AvatarStore,
     private val userDao: UserDao,
     private val connections: Lazy<ConnectionManager>,
+    private val ircSessions: Lazy<IrcSessions>,
     @ApplicationScope private val scope: CoroutineScope,
 ) : AvatarController {
     private val delayedSyncs = java.util.concurrent.ConcurrentHashMap<String, Job>()
@@ -58,11 +60,11 @@ class AvatarCoordinator @Inject constructor(
                 store.rename(networkId, event.nick, event.nick, event.account)
             }
             is IrcEvent.Joined -> if (event.isSelf && prefs.config.first().showSharedAvatars) {
-                connections.get().clientFor(networkId)?.takeIf { supportsAvatarSubscription(it.caps) }
+                ircSessions.get().sessionFor(networkId)?.takeIf { supportsAvatarSubscription(it.caps) }
                     ?.send(syncAvatarMessage(event.channel))
             }
             is IrcEvent.CapsChanged -> if (event.added.any { it == AVATAR_CAP || it.startsWith("$AVATAR_CAP=") }) {
-                connections.get().clientFor(networkId)?.let { onReady(networkId, it) }
+                ircSessions.get().sessionFor(networkId)?.let { onReady(networkId, it) }
             }
             else -> Unit
         }
@@ -91,7 +93,7 @@ class AvatarCoordinator @Inject constructor(
             try {
                 delay(metadata.retryAfterSeconds.coerceAtMost(MAX_SYNC_DELAY_SECONDS) * 1_000)
                 if (!prefs.config.first().showSharedAvatars) return@launch
-                connections.get().clientFor(networkId)?.takeIf { supportsAvatarSubscription(it.caps) }
+                ircSessions.get().sessionFor(networkId)?.takeIf { supportsAvatarSubscription(it.caps) }
                     ?.send(syncAvatarMessage(metadata.target))
             } finally {
                 delayedSyncs.remove(key)
@@ -103,7 +105,7 @@ class AvatarCoordinator @Inject constructor(
         prefs.setShowSharedAvatars(show)
         if (!show) store.clearAll()
         for (networkId in connections.get().connectionStates.value.keys) {
-            connections.get().clientFor(networkId)?.let { client ->
+            ircSessions.get().sessionFor(networkId)?.let { client ->
                 if (!client.hasCap(AVATAR_CAP)) return@let
                 client.send(
                     if (show && supportsAvatarSubscription(client.caps)) subscribeAvatarMessage()
@@ -116,7 +118,7 @@ class AvatarCoordinator @Inject constructor(
     override suspend fun setSelfAvatar(networkId: Long, url: String?): Boolean {
         val validated = url?.let(::validateAvatarUrl)
         if (url != null && validated == null) return false
-        val client = connections.get().clientFor(networkId)
+        val client = ircSessions.get().sessionFor(networkId)
         if (validated != null && client != null && !supportsAvatarPublishing(client.caps, validated)) {
             return false
         }
@@ -144,7 +146,7 @@ class AvatarCoordinator @Inject constructor(
     }
 
     override fun publishingAvailable(networkId: Long): Boolean =
-        connections.get().clientFor(networkId)?.let { supportsAvatarPublishing(it.caps) } == true
+        ircSessions.get().sessionFor(networkId)?.let { supportsAvatarPublishing(it.caps) } == true
 
     private companion object {
         const val MAX_SYNC_DELAY_SECONDS = 60L * 60L

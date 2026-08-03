@@ -20,6 +20,41 @@ class ChatListBadgeStateTest {
         assertEquals(ChatListBadgeState(mentions = 3, unread = 8), state)
     }
 
+    @Test
+    fun incomplete_positive_counts_are_exposed_as_lower_bounds() {
+        val state = chatListBadgeState(
+            row(muted = false, unread = 8, mentions = 3).copy(
+                unreadCountIncomplete = true,
+                mentionCountIncomplete = true,
+            ),
+        )
+
+        assertEquals(
+            ChatListBadgeState(
+                mentions = 3,
+                unread = 8,
+                mentionsIncomplete = true,
+                unreadIncomplete = true,
+            ),
+            state,
+        )
+    }
+
+    @Test
+    fun incomplete_zero_counts_do_not_render_zero_plus_badges() {
+        val state = chatListBadgeState(
+            row(muted = false, unread = 0, mentions = 0).copy(
+                unreadCountIncomplete = true,
+                mentionCountIncomplete = true,
+            ),
+        )
+
+        assertEquals(
+            ChatListBadgeState(mentionsIncomplete = true, unreadIncomplete = true),
+            state,
+        )
+    }
+
     private fun row(muted: Boolean, unread: Int, mentions: Int) = ChatListRow(
         bufferId = 1,
         networkId = 1,

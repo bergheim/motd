@@ -55,7 +55,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -119,8 +118,18 @@ import kotlinx.coroutines.withContext
 /** Limit collapsed system-event work per composed row during high-velocity history traversal. */
 internal const val MAX_COLLAPSED_SYSTEM_EVENTS = 24
 
-/** Stable identity for remembered expanded pill state; changes when Paging extends a tail chunk. */
+/** Refresh identity for expanded line content; changes when Paging extends a tail chunk. */
 internal data class SystemRunContentKey(val newestId: Long, val oldestId: Long, val count: Int)
+
+/** An expanded run stays expanded when synchronization reshapes its bounded Paging chunk. */
+internal fun systemRunExpanded(runIds: Collection<Long>, expandedEventIds: Set<Long>): Boolean =
+    runIds.any(expandedEventIds::contains)
+
+internal fun updateExpandedSystemEvents(
+    current: Set<Long>,
+    runIds: Collection<Long>,
+    expanded: Boolean,
+): Set<Long> = if (expanded) current + runIds else current - runIds.toSet()
 
 /** Reuse lazy compositions only across rows with the same structural layout. */
 internal enum class MessageContentType {
@@ -216,6 +225,8 @@ fun MessageList(
     listState: LazyListState,
     networkId: Long?,
     readMarkerTime: TimelineAnchor?,
+    modifier: Modifier = Modifier,
+    readMarkerLabel: String? = null,
     onLongPress: (MessageEntity) -> Unit,
     onReply: (MessageEntity) -> Unit,
     // React to a message; the whole entity is passed so a still-pending own row (msgid == null) is
@@ -223,7 +234,6 @@ fun MessageList(
     onReact: (MessageEntity, String) -> Unit,
     onImageClick: (String) -> Unit,
     onRetry: (MessageEntity) -> Unit,
-    modifier: Modifier = Modifier,
     bufferId: Long? = null,
     conversationName: String? = null,
     directMessage: Boolean = false,
@@ -274,6 +284,9 @@ fun MessageList(
     onDismissInvite: (Long) -> Unit = {},
 ) {
     val scrolling by remember(listState) { derivedStateOf { listState.isScrollInProgress } }
+    // Keep the user's expanded JOIN/PART runs above the volatile Paging rows. A history sync may
+    // briefly replace or rechunk those rows, but overlapping event identities remain stable.
+    var expandedSystemEventIds by remember(bufferId) { mutableStateOf(emptySet<Long>()) }
     // Scrolling postpones only cache misses. Parsed URLs and resolved previews remain renderable so
     // a recycled row does not lose rich content halfway through a fling.
     val canStartNewRichContentWork = richContentReady && !scrolling
@@ -283,8 +296,11 @@ fun MessageList(
         reverseLayout = true,
         // Retained rows can predate messages sent by earlier orchestrated journeys. Keep the
         // timeline addressable so the real-stack acceptance test can scroll to an imported row
-        // instead of confusing an off-screen row with a missing one.
-        modifier = modifier.fillMaxSize().testTag("chat_timeline"),
+        // instead of confusing an off-screen row with a missing one. Scroll-driven paging: reaching
+        // the older end triggers Paging APPEND via the prefetch window, no gesture plumbing needed.
+        modifier = modifier
+            .fillMaxSize()
+            .testTag("chat_timeline"),
         contentPadding = PaddingValues(vertical = 8.dp),
     ) {
         // Stable keys stop paging invalidations (new message / echo confirm / page load) from
@@ -350,6 +366,15 @@ fun MessageList(
                         index = index,
                         newest = msg,
                         readMarkerTime = readMarkerTime,
+                        readMarkerLabel = readMarkerLabel,
+                        expandedEventIds = expandedSystemEventIds,
+                        onExpandedChange = { runIds, expanded ->
+                            expandedSystemEventIds = updateExpandedSystemEvents(
+                                expandedSystemEventIds,
+                                runIds,
+                                expanded,
+                            )
+                        },
                     )
                 }
                 return@items
@@ -366,6 +391,7 @@ fun MessageList(
                         msg = msg,
                         older = older,
                         readMarkerTime = readMarkerTime,
+                        readMarkerLabel = readMarkerLabel,
                         onExpand = { onToggleFool(msg.id) },
                     )
                 }
@@ -402,6 +428,7 @@ fun MessageList(
                         older = older,
                         formatTime = formatMessageTime,
                         readMarkerTime = readMarkerTime,
+                        readMarkerLabel = readMarkerLabel,
                         // An expanded fool row shows a small tap-to-re-collapse chip above its bubble so the
                         // toggle is bidirectional without stealing the bubble's long-press/link taps (#9).
                         onCollapseFool = if (isFool) ({ onToggleFool(msg.id) }) else null,
@@ -442,10 +469,13 @@ fun MessageList(
         // Append spinner / end-of-history / error affordances (plans/15 #27). This item sits at the
         // top of the reversed list, i.e. visually above the oldest message where APPEND loads more.
         item(key = "append-state", contentType = "loadstate") {
-            ChatHistoryFooter(historyUiState) {
-                onHistoryRetry()
-                items.retry()
-            }
+            ChatHistoryFooter(
+                state = historyUiState,
+                onRetry = {
+                    onHistoryRetry()
+                    items.retry()
+                },
+            )
         }
     }
 }
@@ -786,6 +816,9 @@ private fun SystemEventRun(
     index: Int,
     newest: MessageEntity,
     readMarkerTime: TimelineAnchor?,
+    readMarkerLabel: String?,
+    expandedEventIds: Set<Long>,
+    onExpandedChange: (Collection<Long>, Boolean) -> Unit,
 ) {
     // Gather at most one chunk: newest first (index), then older neighbors while still system events.
     val run = ArrayList<MessageEntity>()
@@ -799,11 +832,12 @@ private fun SystemEventRun(
         i++
     }
     val oldest = run.last()
+    val runIds = run.map { it.id }
     val olderThanRun = if (index + run.size < items.itemCount) items.peek(index + run.size) else null
 
     val summary = if (run.size == 1) newest.text else summarizeSystemRun(run)
 
-    // Divider below the run when the run's newest crosses the marker and its older neighbor doesn't.
+    // Divider before the run when the run's newest crosses the marker and its older neighbor doesn't.
     val showNewDivider = readMarkerTime != null &&
         newest.timelineAnchor() > readMarkerTime &&
         (olderThanRun == null || olderThanRun.timelineAnchor() <= readMarkerTime)
@@ -814,19 +848,21 @@ private fun SystemEventRun(
     // Column so the pill and any dividers stack vertically. A bare item slot stacks siblings on top
     // of each other (its MeasurePolicy behaves like a Box), which would overlap the divider text.
     Column(modifier = Modifier.fillMaxWidth()) {
+        if (showNewDivider) {
+            NewMessagesDivider(
+                label = readMarkerLabel ?: stringResource(R.string.chat_new_messages),
+                modifier = Modifier.testTag("chat_read_marker_divider"),
+            )
+        }
         SystemEventPill(
             summary = summary,
             lineCount = run.size,
             loadLines = { run.map { it.text } },
             contentKey = SystemRunContentKey(newest.id, oldest.id, run.size),
+            expanded = systemRunExpanded(runIds, expandedEventIds),
+            onExpandedChange = { expanded -> onExpandedChange(runIds, expanded) },
             modifier = Modifier.testTag("chat_system_pill"),
         )
-        if (showNewDivider) {
-            NewMessagesDivider(
-                label = stringResource(R.string.chat_new_messages),
-                modifier = Modifier.testTag("chat_read_marker_divider"),
-            )
-        }
         if (showDay) DaySeparator(timeMs = oldest.serverTime)
     }
 }
@@ -880,6 +916,7 @@ private fun MessageRow(
     older: MessageEntity?,
     formatTime: (Long) -> String,
     readMarkerTime: TimelineAnchor?,
+    readMarkerLabel: String?,
     senderIsFriend: Boolean,
     reactions: List<ReactionChip>,
     knownNicks: Set<String>,
@@ -911,8 +948,8 @@ private fun MessageRow(
     // Non-null for an expanded fool row: renders a "hide" chip above the bubble that re-collapses it.
     onCollapseFool: (() -> Unit)? = null,
 ) {
-    // Read-marker divider sits below the first message newer than the marker (drawn after the
-    // bubble because the list is reversed => "above" the newer message visually).
+    // The lazy list reverses item order, not a row's children. Render the divider before the first
+    // unread bubble so the boundary is visually above that message.
     val showNewDivider = readMarkerTime != null &&
         msg.timelineAnchor() > readMarkerTime &&
         (older == null || older.timelineAnchor() <= readMarkerTime)
@@ -928,6 +965,13 @@ private fun MessageRow(
     val spacing = LocalSpacing.current
     val showSender = showsSender(msg, older)
     val gap = bubbleGap(showSender, older != null, spacing)
+
+    if (showNewDivider) {
+        NewMessagesDivider(
+            label = readMarkerLabel ?: stringResource(R.string.chat_new_messages),
+            modifier = Modifier.testTag("chat_read_marker_divider"),
+        )
+    }
 
     // A row asks Room for its reply target only while it is composed. This avoids timeline-wide
     // loaded-window scans during fast traversal; collection is lifecycle-cancelled off-screen.
@@ -1182,12 +1226,6 @@ private fun MessageRow(
         )
     }
 
-    if (showNewDivider) {
-        NewMessagesDivider(
-            label = stringResource(R.string.chat_new_messages),
-            modifier = Modifier.testTag("chat_read_marker_divider"),
-        )
-    }
     if (showDay) DaySeparator(timeMs = msg.serverTime)
 }
 
@@ -1202,6 +1240,7 @@ private fun FoolPlaceholderRow(
     msg: MessageEntity,
     older: MessageEntity?,
     readMarkerTime: TimelineAnchor?,
+    readMarkerLabel: String?,
     onExpand: () -> Unit,
 ) {
     val showNewDivider = readMarkerTime != null &&
@@ -1214,6 +1253,12 @@ private fun FoolPlaceholderRow(
     // Column so the placeholder row and any dividers stack vertically rather than overlapping (a bare
     // item slot stacks its children like a Box).
     Column(modifier = Modifier.fillMaxWidth()) {
+        if (showNewDivider) {
+            NewMessagesDivider(
+                label = readMarkerLabel ?: stringResource(R.string.chat_new_messages),
+                modifier = Modifier.testTag("chat_read_marker_divider"),
+            )
+        }
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1238,12 +1283,6 @@ private fun FoolPlaceholderRow(
             )
         }
 
-        if (showNewDivider) {
-            NewMessagesDivider(
-                label = stringResource(R.string.chat_new_messages),
-                modifier = Modifier.testTag("chat_read_marker_divider"),
-            )
-        }
         if (showDay) DaySeparator(timeMs = msg.serverTime)
     }
 }
@@ -1280,14 +1319,25 @@ internal fun FoolCollapseChip(sender: String, tag: String, onCollapse: () -> Uni
 }
 
 const val CHAT_HISTORY_RETRY_TAG = "chat_history_retry"
+const val CHAT_HISTORY_LOADING_TAG = "chat_history_loading"
 
-/** Only persisted protocol completion may render the beginning-of-history claim. */
+/**
+ * Older-end paging footer. Scroll-driven APPEND drives history automatically, so the footer only
+ * renders the shimmer, a retry affordance for recoverable errors, or a terminal status line. Only
+ * persisted protocol completion may render the beginning-of-history claim.
+ */
 @Composable
-fun ChatHistoryFooter(state: ChatHistoryUiState, onRetry: () -> Unit) {
+fun ChatHistoryFooter(
+    state: ChatHistoryUiState,
+    onRetry: () -> Unit,
+) {
     when (state) {
         ChatHistoryUiState.Hidden -> Unit
         ChatHistoryUiState.Loading -> androidx.compose.foundation.layout.Box(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 12.dp)
+                .testTag(CHAT_HISTORY_LOADING_TAG),
             contentAlignment = androidx.compose.ui.Alignment.Center,
         ) {
             androidx.compose.material3.CircularProgressIndicator(
@@ -1295,22 +1345,19 @@ fun ChatHistoryFooter(state: ChatHistoryUiState, onRetry: () -> Unit) {
                 strokeWidth = 2.dp,
             )
         }
-        ChatHistoryUiState.Offline -> HistoryStatusText(R.string.chat_history_footer_offline)
-        ChatHistoryUiState.Negotiating -> HistoryStatusText(R.string.chat_history_footer_negotiating)
-        ChatHistoryUiState.Unsupported -> HistoryStatusText(R.string.chat_history_footer_unsupported)
-        ChatHistoryUiState.ConfirmedStart -> HistoryStatusText(R.string.chat_history_start)
-        is ChatHistoryUiState.Incomplete -> HistoryRetryFooter(
-            text = stringResource(R.string.chat_history_incomplete),
-            onRetry = onRetry,
-        )
-        is ChatHistoryUiState.Capped -> HistoryRetryFooter(
-            text = pluralStringResource(R.plurals.chat_history_capped, state.limit, state.limit),
-            onRetry = onRetry,
-        )
-        ChatHistoryUiState.Error -> HistoryRetryFooter(
+        ChatHistoryUiState.Retry -> HistoryRetryFooter(
             text = stringResource(R.string.chat_history_error),
             onRetry = onRetry,
         )
+        is ChatHistoryUiState.Unavailable -> HistoryStatusText(
+            if (state.offline) {
+                R.string.chat_history_footer_offline
+            } else {
+                R.string.chat_history_footer_negotiating
+            },
+        )
+        ChatHistoryUiState.Unsupported -> HistoryStatusText(R.string.chat_history_footer_unsupported)
+        ChatHistoryUiState.ConfirmedStart -> HistoryStatusText(R.string.chat_history_start)
     }
 }
 

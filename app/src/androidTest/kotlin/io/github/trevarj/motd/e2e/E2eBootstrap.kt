@@ -17,6 +17,10 @@ data class FixtureArgs(
     val password: String,
     val nick: String,
     val channel: String,
+    val ergoPort: Int,
+    val ergoUser: String,
+    val ergoPassword: String,
+    val secondNick: String,
     val fingerprint: String,
     val runId: String,
 ) {
@@ -29,12 +33,17 @@ data class FixtureArgs(
             val port = required("sojuPort").toIntOrNull()
                 ?.takeIf { it in 1..65535 }
                 ?: error("invalid sojuPort")
+            val ergoPort = required("ergoPort").toIntOrNull()
+                ?.takeIf { it in 1..65535 }
+                ?: error("invalid ergoPort")
             val fingerprint = required("sojuTlsSha256").lowercase()
             require(fingerprint.matches(Regex("[0-9a-f]{64}"))) { "invalid sojuTlsSha256" }
             return FixtureArgs(
                 host = required("sojuHost"), port = port, user = required("sojuUser"),
                 password = required("sojuPassword"), nick = required("nick"),
-                channel = required("channel"), fingerprint = fingerprint,
+                channel = required("channel"), ergoPort = ergoPort,
+                ergoUser = required("ergoUser"), ergoPassword = required("ergoPassword"),
+                secondNick = required("secondNick"), fingerprint = fingerprint,
                 runId = required("e2eRunId"),
             )
         }

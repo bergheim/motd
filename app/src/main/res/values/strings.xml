@@ -17,28 +17,10 @@
     <string name="chatlist_no_networks_title">No networks configured</string>
     <string name="chatlist_no_networks_message">Add a network, or import a backup from Settings.</string>
     <string name="chatlist_archived_empty_title">No archived chats yet</string>
-    <string name="chat_refresh_history">Refresh history</string>
-    <plurals name="chat_history_updated">
-        <item quantity="one">History updated · %1$d new message</item>
-        <item quantity="other">History updated · %1$d new messages</item>
-    </plurals>
-    <string name="chat_history_up_to_date">History is up to date</string>
-    <string name="chat_history_unsupported">History refresh is not supported by this server</string>
-    <string name="chat_history_failed">History refresh failed</string>
-    <string name="chat_history_offline">Reconnect before refreshing history</string>
     <string name="chat_send_rejected">Couldn\'t save this message</string>
     <string name="chat_not_in_channel">You\'re not in this channel</string>
     <string name="chat_parted_banner_rejoin">Rejoin</string>
     <string name="chat_parted_banner_text">You\'re not in %1$s</string>
-    <string name="chat_history_refresh_title">Refresh history</string>
-    <string name="chat_history_refresh_description">Choose how much history to load for this chat.</string>
-    <string name="chat_history_range_missing">Missing messages</string>
-    <string name="chat_history_range_24h">Past 24 hours</string>
-    <string name="chat_history_range_7d">Past 7 days</string>
-    <string name="chat_history_range_30d">Past 30 days</string>
-    <string name="chat_history_range_all">All available (up to 5,000 messages)</string>
-    <string name="chat_history_refreshing">Refreshing history…</string>
-    <string name="chat_history_refreshing_progress">Refreshing history: %1$d / %2$d</string>
 
     <!-- New-conversation bottom sheet (WP6) -->
     <string name="new_sheet_join_channel">Join channel</string>
@@ -102,6 +84,13 @@
     <string name="onboarding_connect_retry">Retry</string>
     <string name="onboarding_connect_networks_title">Bouncer networks</string>
     <string name="onboarding_connect_import_hint">Toggle networks to import.</string>
+    <string name="onboarding_bouncer_discovery_loading">Discovering bouncer networks…</string>
+    <string name="onboarding_bouncer_discovery_retry">Retry discovery</string>
+    <string name="onboarding_bouncer_discovery_refresh">Refresh networks</string>
+    <string name="onboarding_bouncer_connection_lost">The bouncer connection was lost. Retry when it is connected.</string>
+    <string name="onboarding_bouncer_server_rejected">The bouncer rejected this request: %1$s</string>
+    <string name="onboarding_bouncer_server_rejected_generic">The bouncer rejected this request.</string>
+    <string name="onboarding_bouncer_request_failed">The bouncer request failed. Please retry.</string>
     <string name="onboarding_connect_add_network">Add network</string>
     <string name="onboarding_connect_add_name">Network name</string>
     <string name="onboarding_connect_add_host">Host</string>
@@ -145,6 +134,8 @@
     <string name="settings_delivery_push_change">Change distributor</string>
     <string name="settings_delivery_push_retry">Retry</string>
     <string name="settings_delivery_push_fix_notifications">Enable notifications</string>
+    <string name="settings_delivery_notifications_blocked">Notifications are blocked</string>
+    <string name="settings_delivery_notifications_blocked_desc">Synchronization may continue while message and status alerts are blocked. Enable notifications in Android settings to receive alerts.</string>
     <string name="settings_delivery_push_status_choose">Choose a push distributor</string>
     <string name="settings_delivery_push_status_endpoint">Requesting an endpoint…</string>
     <string name="settings_delivery_push_status_server">Endpoint received — waiting for the bouncer…</string>
@@ -302,6 +293,7 @@
     <string name="channelinfo_leave">Leave</string>
     <string name="channelinfo_leave_confirm_title">Leave channel?</string>
     <string name="channelinfo_leave_confirm_message">You will stop receiving messages from this channel.</string>
+    <string name="channelinfo_leave_failed">Couldn’t leave channel. Check your connection and try again.</string>
     <string name="channelinfo_section_regular">Members</string>
     <string name="channelinfo_member_search_hint">Search members</string>
     <string name="channelinfo_member_search_empty">No members match your search</string>
@@ -330,6 +322,11 @@
     <string name="about_legal_notice">Free software with no warranty. You may share and modify it under the GNU GPL v3 or later.</string>
     <string name="about_diagnostic_logging">Diagnostic logging</string>
     <string name="about_diagnostic_logging_summary">Records bounded technical traces for connections, sync, push, and message handling. Message contents, credentials, and personal identifiers are excluded. Turning it on starts a fresh log.</string>
+    <string name="about_labs">Labs</string>
+    <string name="about_agentwire">Agentwire harness</string>
+    <string name="about_agentwire_summary">Show the experimental agent harness in channels activated by an Agentwire v1 topic. Off by default.</string>
+    <string name="about_agentwire_repo">Repo</string>
+    <string name="about_agentwire_url" translatable="false">https://github.com/trevarj/agentwire</string>
     <string name="about_export_diagnostics">Export diagnostic log</string>
     <string name="about_export_diagnostics_summary">Save the captured trace as a text file to share when reporting a problem.</string>
     <string name="about_export_diagnostics_success">Diagnostic log saved.</string>
@@ -414,6 +411,10 @@
     <string name="chat_search">Search</string>
     <string name="chat_scroll_to_bottom">Scroll to bottom</string>
     <string name="chat_new_messages">New messages</string>
+    <plurals name="chat_new_messages_count">
+        <item quantity="one">%1$s new message</item>
+        <item quantity="other">%1$s new messages</item>
+    </plurals>
     <string name="chat_retry">Retry</string>
     <string name="chat_delete_failed">Delete</string>
     <string name="chat_sending">Sending…</string>
@@ -421,25 +422,12 @@
     <string name="chat_empty_title">No messages yet</string>
     <string name="chat_empty_message">Say hello to start the conversation.</string>
     <string name="chat_history_error">Couldn\'t load older messages</string>
-    <string name="chat_history_incomplete">Older history may be incomplete</string>
     <string name="chat_history_loading_messages">Loading messages…</string>
-    <string name="chat_history_syncing_messages">Syncing messages…</string>
+    <string name="chat_history_syncing_messages">Finding first unread…</string>
     <string name="chat_history_sync_failed_inline">Couldn\'t sync messages</string>
-    <plurals name="chat_history_capped">
-        <item quantity="one">Stopped after %1$d message; older history may remain</item>
-        <item quantity="other">Stopped after %1$d messages; older history may remain</item>
-    </plurals>
     <string name="chat_history_footer_offline">Reconnect to load older messages</string>
     <string name="chat_history_footer_negotiating">Waiting for history support…</string>
     <string name="chat_history_footer_unsupported">This server does not provide older history</string>
-    <plurals name="chat_history_resync_incomplete">
-        <item quantity="one">History refresh added %1$d message but could not verify the full range</item>
-        <item quantity="other">History refresh added %1$d messages but could not verify the full range</item>
-    </plurals>
-    <plurals name="chat_history_resync_capped">
-        <item quantity="one">History refresh added %1$d message and stopped at the %2$d-message safety limit</item>
-        <item quantity="other">History refresh added %1$d messages and stopped at the %2$d-message safety limit</item>
-    </plurals>
     <string name="chat_history_start">Beginning of history</string>
     <plurals name="chat_member_count">
         <item quantity="one">%1$d member</item>
@@ -762,6 +750,7 @@
     <string name="channel_list_title">Browse channels</string>
     <string name="channel_list_search_hint">Search channels</string>
     <string name="channel_list_root_cant_browse">This soju account can\'t browse channels. Open one of its networks instead.</string>
+    <string name="channel_list_unsupported">This account type doesn\'t support browsing or discovering rooms.</string>
     <string name="channel_list_empty">No channels found</string>
     <string name="channel_list_empty_message">Try a different channel name or search term.</string>
     <string name="channel_list_search_title">Find a channel</string>
@@ -827,6 +816,7 @@
     <string name="channelinfo_topic_edit_action">Edit topic</string>
     <string name="channelinfo_topic_edit_hint">Channel topic</string>
     <string name="channelinfo_topic_edit_save">Save</string>
+    <string name="channelinfo_topic_edit_failed">Couldn\'t send topic. Try again.</string>
     <string name="channelinfo_operator_tools">Operator tools</string>
     <string name="channelinfo_invite_nick">Nick to invite</string>
     <string name="channelinfo_invite">Invite</string>
@@ -888,6 +878,26 @@
     <string name="chatlist_archived_reveal_action">Reveal archived chats</string>
     <string name="chatlist_archived_revealed_announcement">Archived chats revealed</string>
     <string name="chatlist_archived_hidden_announcement">Archived chats hidden</string>
+    <string name="chatlist_invitations">Invitations</string>
+    <string name="chatlist_invitations_empty">No invitations</string>
+    <plurals name="chatlist_invitations_count">
+        <item quantity="one">Invitations (%1$d)</item>
+        <item quantity="other">Invitations (%1$d)</item>
+    </plurals>
+    <plurals name="chatlist_invitations_pending_count">
+        <item quantity="one">%1$d awaiting response</item>
+        <item quantity="other">%1$d awaiting response</item>
+    </plurals>
+    <string name="chatlist_invitation_title">Invitation to %1$s</string>
+    <string name="chatlist_invitation_from">Invited by %1$s on %2$s</string>
+    <string name="chatlist_invitation_join">Join</string>
+    <string name="chatlist_invitation_ignore">Ignore</string>
+    <string name="chatlist_invitation_pending">Awaiting response</string>
+    <string name="chatlist_invitation_joining">Joining…</string>
+    <string name="chatlist_invitation_joined">Joined</string>
+    <string name="chatlist_invitation_ignored">Ignored</string>
+    <string name="chatlist_invitation_failed">Join failed</string>
+    <string name="chatlist_invitation_failed_hint">Could not join. You can retry or ignore this invitation.</string>
     <string name="bouncer_network_preset">Network preset</string>
     <string name="channel_list_joining">Joining</string>
     <string name="channel_list_joined">Joined</string>
@@ -962,6 +972,14 @@
     <plurals name="badge_mention">
         <item quantity="one">%1$d mention</item>
         <item quantity="other">%1$d mentions</item>
+    </plurals>
+    <plurals name="badge_unread_at_least">
+        <item quantity="one">At least %1$d unread</item>
+        <item quantity="other">At least %1$d unread</item>
+    </plurals>
+    <plurals name="badge_mention_at_least">
+        <item quantity="one">At least %1$d mention</item>
+        <item quantity="other">At least %1$d mentions</item>
     </plurals>
 
     <!-- Adaptive chat workspace -->

@@ -1,10 +1,5 @@
 package io.github.trevarj.motd.ui.components
 
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.SizeTransform
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -32,7 +27,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
 import io.github.trevarj.motd.R
 import io.github.trevarj.motd.ui.theme.LocalSpacing
-import io.github.trevarj.motd.ui.theme.MotdMotion
 import io.github.trevarj.motd.ui.theme.MotdTheme
 
 /**
@@ -43,29 +37,55 @@ data class SystemEvent(val text: String)
 /**
  * Centered pill summarizing a consecutive run of system events. A single event shows its text; a
  * run collapses to a summary ("3 joined · 1 left") that expands inline on tap to list each line
- * (plans/07). [summary] and [lines] are pre-computed; this composable owns only expand state.
+ * (plans/07). Lines remain lazy until expansion, while content refreshes keep the user's current
+ * expanded/collapsed choice.
  */
 @Composable
 fun SystemEventPill(
     summary: String,
     lineCount: Int,
     loadLines: () -> List<String>,
-    /** Changes whenever the backing collapsed chunk changes; resets stale expanded line state. */
+    /** Changes whenever the backing collapsed chunk changes so expanded lines are refreshed. */
     contentKey: Any,
     modifier: Modifier = Modifier,
 ) {
-    var expanded by remember(contentKey) { mutableStateOf(false) }
+    var expanded by remember { mutableStateOf(false) }
+    SystemEventPill(
+        summary = summary,
+        lineCount = lineCount,
+        loadLines = loadLines,
+        contentKey = contentKey,
+        expanded = expanded,
+        onExpandedChange = { expanded = it },
+        modifier = modifier,
+    )
+}
+
+/** Controlled variant used when expansion must survive Paging row replacement. */
+@Composable
+internal fun SystemEventPill(
+    summary: String,
+    lineCount: Int,
+    loadLines: () -> List<String>,
+    contentKey: Any,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     // Materializing every line of a large JOIN/PART burst while scrolling is expensive. Keep the
     // collapsed path to its bounded summary and build lines only if the user opens the pill.
-    var lines by remember(contentKey) { mutableStateOf<List<String>?>(null) }
     val collapsible = lineCount > 1
+    val showLines = expanded && collapsible
+    val lines = remember(contentKey, showLines) {
+        if (showLines) loadLines() else emptyList()
+    }
     val expansionState = stringResource(
-        if (expanded) R.string.system_event_expanded else R.string.system_event_collapsed,
+        if (showLines) R.string.system_event_expanded else R.string.system_event_collapsed,
     )
     // Capsule for the short collapsed pill; once expanded the percent radius would be 50% of the
     // smaller dimension and overrun the 14 dp text padding, pushing top/bottom lines outside the
     // background. Cap it to a Dp radius that stays within the padding when expanded.
-    val pillShape = if (expanded && collapsible) RoundedCornerShape(14.dp) else RoundedCornerShape(50)
+    val pillShape = if (showLines) RoundedCornerShape(14.dp) else RoundedCornerShape(50)
     Row(
         modifier = modifier.fillMaxWidth().padding(
             vertical = LocalSpacing.current.systemPillVPad,
@@ -88,45 +108,33 @@ fun SystemEventPill(
                 )
                 .then(
                     if (collapsible) Modifier.clickable {
-                        if (!expanded) lines = loadLines()
-                        expanded = !expanded
+                        onExpandedChange(!showLines)
                     } else Modifier,
                 )
                 .padding(horizontal = 14.dp, vertical = 6.dp),
             horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
         ) {
-            AnimatedContent(
-                targetState = expanded && collapsible,
-                transitionSpec = {
-                    (fadeIn(MotdMotion.microFadeIn) togetherWith fadeOut(MotdMotion.microFadeOut))
-                        .using(
-                            SizeTransform(
-                                clip = false,
-                                sizeAnimationSpec = { _, _ -> MotdMotion.contentSize },
-                            ),
+            // Keep exactly one content tree mounted. AnimatedContent briefly layered the collapsed
+            // summary over the expanding lines while LazyColumn remeasured a tall JOIN/PART run,
+            // producing a full-row flash on physical devices.
+            if (showLines) {
+                Column {
+                    lines.forEach { line ->
+                        Text(
+                            text = line,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
                         )
-                },
-                label = "system_event_content",
-            ) { showLines ->
-                if (showLines) {
-                    Column {
-                        lines.orEmpty().forEach { line ->
-                            Text(
-                                text = line,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                textAlign = TextAlign.Center,
-                            )
-                        }
                     }
-                } else {
-                    Text(
-                        text = summary,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center,
-                    )
                 }
+            } else {
+                Text(
+                    text = summary,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
             }
         }
     }

@@ -1,7 +1,7 @@
 package io.github.trevarj.motd.ui.channellist
 
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.irc.client.ChannelListing
-import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 
 /** Server-side user-count floor when the network advertises ELIST 'U'. */
@@ -18,50 +18,67 @@ fun sortListings(listings: List<ChannelListing>): List<ChannelListing> =
 
 /** Prefer the scoped client's live state, especially when the manager snapshot has not caught up. */
 fun channelBrowserConnectionState(
-    managerState: IrcClientState?,
-    clientState: IrcClientState?,
-): IrcClientState = when {
+    managerState: ConnectionState?,
+    clientState: ConnectionState?,
+): ConnectionState = when {
     clientState != null -> clientState
     managerState != null -> managerState
-    else -> IrcClientState.Disconnected
+    else -> ConnectionState.Disconnected
 }
 
 enum class ChannelBrowserAvailability {
     INITIALIZING,
     ROOT_UNAVAILABLE,
+    /** This network's backend has no room-discovery capability at all (review fix, P2 finding) —
+     *  never reached for IRC; XMPP is the first backend that settles here today. */
+    UNSUPPORTED,
     CONNECTING,
     READY,
     OFFLINE,
     FAILED,
 }
 
+/**
+ * [supportsDiscovery] defaults to `true` for source compatibility with every pre-existing 3-arg
+ * caller (review fix — P2 finding: XMPP's `ChannelListViewModel` used to reach for the IRC-owned
+ * `IrcSessions` accessor unconditionally, so opening the browser for an XMPP network always waited
+ * out a poll timeout). `false` — from [io.github.trevarj.motd.service.ConnectionManager.supportsRoomDiscovery] —
+ * settles the browser on [ChannelBrowserAvailability.UNSUPPORTED] immediately, before ever touching
+ * a protocol-specific session accessor.
+ */
 fun channelBrowserAvailability(
     initialized: Boolean,
     isRoot: Boolean,
-    connection: IrcClientState,
+    connection: ConnectionState,
+    supportsDiscovery: Boolean = true,
 ): ChannelBrowserAvailability = when {
     !initialized -> ChannelBrowserAvailability.INITIALIZING
+    !supportsDiscovery -> ChannelBrowserAvailability.UNSUPPORTED
     isRoot -> ChannelBrowserAvailability.ROOT_UNAVAILABLE
-    connection is IrcClientState.Ready -> ChannelBrowserAvailability.READY
-    connection is IrcClientState.Connecting || connection is IrcClientState.Registering ->
+    connection is ConnectionState.Ready -> ChannelBrowserAvailability.READY
+    connection is ConnectionState.Connecting || connection is ConnectionState.Authenticating ->
         ChannelBrowserAvailability.CONNECTING
-    connection is IrcClientState.Failed -> ChannelBrowserAvailability.FAILED
+    connection is ConnectionState.Failed -> ChannelBrowserAvailability.FAILED
     else -> ChannelBrowserAvailability.OFFLINE
 }
 
-/** Whether a blank LIST can be bounded server-side instead of streaming the entire network. */
-fun supportsPopularChannelList(connection: IrcClientState): Boolean =
-    (connection as? IrcClientState.Ready)
-        ?.isupport
-        ?.get("ELIST")
-        ?.contains('U', ignoreCase = true) == true
+/** Whether entering the browser should request the locally bounded popular-channel set. */
+fun shouldAutoFetchPopularChannels(
+    connection: ConnectionState,
+    loaded: Boolean,
+    isRoot: Boolean,
+): Boolean =
+    connection is ConnectionState.Ready &&
+        !loaded &&
+        !isRoot
 
 /**
  * Resolve the LIST arguments for a fetch (plans/16 §5.7).
  *
  * A non-blank [query] fetches with a `*query*` substring mask and no min-users floor. A blank
- * query fetches the busiest channels ([DEFAULT_MIN_USERS] floor). Callers must first require
- * [supportsPopularChannelList] so this never degrades into an unbounded network-wide LIST.
+ * query fetches the busiest channels ([DEFAULT_MIN_USERS] floor, applied server-side only when
+ * ELIST 'U' is present). Without ELIST 'U', the IRC client streams the response through its
+ * memory-bounded top-[POPULAR_CHANNEL_LIMIT] accumulator.
  */
 data class ListArgs(val mask: String?, val minUsers: Int?)
 

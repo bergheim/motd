@@ -32,11 +32,17 @@ name: motd-e2e-hermetic
 
 services:
   ergo:
-    image: ghcr.io/ergochat/ergo:v2.18.0
+    # Pinned to the same ergo version the Nix e2e-stack fixture ships (2.17.0), so hosted CI
+    # and the local native stack exercise identical upstream IRCd behavior (msgid/echo/replay).
+    image: ghcr.io/ergochat/ergo:v2.17.0
     restart: unless-stopped
     volumes:
       - ./ergo/ircd.yaml:/ircd/ircd.yaml:ro
       - ergo-data:/ircd
+    ports:
+      # Test-only upstream endpoint used by the second-client unread journey. The app still reaches
+      # IRC exclusively through Soju; only the instrumentation fixture connects here.
+      - "16667:6667"
     # ergo's default entrypoint runs `ergo run --conf /ircd/ircd.yaml`.
     healthcheck:
       # The ergo image is alpine-based, so busybox `nc` is available. Probe the
@@ -74,6 +80,7 @@ services:
       dockerfile: Dockerfile
       args:
         SOJU_VERSION: v0.10.1
+        SOJU_COMMIT: ca81b9905e24aadd6a346a5ae72ae7e9d14db568
     depends_on:
       ergo:
         condition: service_healthy

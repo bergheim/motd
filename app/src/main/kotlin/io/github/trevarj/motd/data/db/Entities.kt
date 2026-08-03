@@ -90,6 +90,13 @@ data class NetworkEntity(
     val pendingCredentialRequirements: String? = null,
     /** Desired auto-connect value restored once [pendingCredentialRequirements] has been repaired. */
     val restoreAutoConnect: Boolean = false,
+    /**
+     * Persisted protocol discriminator resolved through the backend registry
+     * (docs/backend-neutral-xmpp-rollout.md). Pre-v21 rows are IRC by definition, so the column
+     * defaults to "irc"; protocol-owned account surfaces set it explicitly for new rows.
+     */
+    @ColumnInfo(defaultValue = "irc")
+    val protocol: String = "irc",
 ) {
     // Redact secrets (saslPassword, serverPassword, obfsLink) from logs; proxyHost/port are
     // non-sensitive so keep them out
@@ -465,6 +472,40 @@ data class HistoryCursorEntity(
     val oldestMsgid: String? = null,
     val oldestServerTime: Long? = null,
     val historyComplete: Boolean = false,
+)
+
+/**
+ * An interval of retained server history that is not present locally. Both boundaries are known
+ * messages surrounding the missing interval; msgid is preferred for protocol paging while time is
+ * always retained for local ordering and timestamp-only servers.
+ */
+@Entity(
+    tableName = "history_gaps",
+    indices = [
+        Index(value = ["roomId", "olderServerTime"]),
+        Index(value = ["roomId", "newerServerTime"]),
+    ],
+    foreignKeys = [ForeignKey(
+        entity = RoomEntity::class,
+        parentColumns = ["id"],
+        childColumns = ["roomId"],
+        onDelete = ForeignKey.CASCADE,
+    )],
+)
+data class HistoryGapEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val roomId: RoomId,
+    val olderMsgid: String?,
+    val olderServerTime: Long,
+    val newerMsgid: String?,
+    val newerServerTime: Long,
+    /** False when the server proved this missing interval is no longer page-recoverable. */
+    @ColumnInfo(defaultValue = "1") val recoverable: Boolean = true,
+    /** Exact local tuple for msgid-less/equal-time boundaries, when that row is still retained. */
+    val olderEventId: Long? = null,
+    val olderTimelineOrder: Long? = null,
+    val newerEventId: Long? = null,
+    val newerTimelineOrder: Long? = null,
 )
 
 /** Whole-network discovery watermark, colocated with the canonical room/history graph. */

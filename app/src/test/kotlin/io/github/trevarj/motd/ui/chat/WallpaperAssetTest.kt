@@ -1,12 +1,14 @@
 package io.github.trevarj.motd.ui.chat
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.util.Xml
 import androidx.compose.ui.unit.IntSize
 import androidx.test.core.app.ApplicationProvider
 import io.github.trevarj.motd.data.prefs.ChatWallpaperPreset
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -47,22 +49,32 @@ class WallpaperAssetTest {
         assertEquals(0.06f, wallpaperPatternMaxAlpha(dark = true, trueBlack = true))
     }
 
-    @Test fun rasterCoverageOnlyExpandsAcrossViewportChanges() {
-        val initial = expandedRasterCoverage(IntSize.Zero, IntSize(1080, 1800))
-        val keyboardOpen = expandedRasterCoverage(initial, IntSize(1080, 1100))
-        val wider = expandedRasterCoverage(keyboardOpen, IntSize(1200, 1600))
+    @Test fun wallpaperCoverageOnlyExpandsAcrossViewportChanges() {
+        val initial = expandedWallpaperCoverage(IntSize.Zero, IntSize(1080, 1800))
+        val keyboardOpen = expandedWallpaperCoverage(initial, IntSize(1080, 1100))
+        val wider = expandedWallpaperCoverage(keyboardOpen, IntSize(1200, 1600))
 
         assertEquals(IntSize(1080, 1800), keyboardOpen)
         assertEquals(IntSize(1200, 1800), wider)
     }
 
-    @Test fun retainedRasterIsCroppedAtNativeScale() {
-        assertEquals(
-            IntSize(540, 600),
-            wallpaperRasterSourceSize(
-                rasterSize = IntSize(540, 900),
-                canvasSize = IntSize(1080, 1200),
-            ),
-        )
+    @Test fun tileKeyIsIndependentOfViewportThemeAndIntensity() {
+        val chatter = wallpaperTileKey(ChatWallpaperPreset.CHATTER, density = 2.5f)
+
+        assertEquals(WallpaperTileKey(ChatWallpaperPreset.CHATTER, 610), chatter)
+        assertEquals(chatter, wallpaperTileKey(ChatWallpaperPreset.CHATTER, density = 2.5f))
+        assertNotEquals(chatter, wallpaperTileKey(ChatWallpaperPreset.CHANNELS, density = 2.5f))
+        assertNotEquals(chatter, wallpaperTileKey(ChatWallpaperPreset.CHATTER, density = 3f))
+    }
+
+    @Test fun everyPresetRendersACompactAlphaTile() {
+        ChatWallpaperPreset.entries.filterNot { it == ChatWallpaperPreset.NONE }.forEach { preset ->
+            val key = wallpaperTileKey(preset, density = 0.5f)
+            val bitmap = renderWallpaperTile(assets, key)
+
+            assertEquals(key.tileSizePx, bitmap.width)
+            assertEquals(key.tileSizePx, bitmap.height)
+            assertEquals(Bitmap.Config.ALPHA_8, bitmap.config)
+        }
     }
 }

@@ -31,11 +31,19 @@ import io.github.trevarj.motd.ui.theme.MotdTheme
 
 /** Unread count pill (primary). Renders "99+" for large counts. */
 @Composable
-fun UnreadBadge(count: Int, modifier: Modifier = Modifier) {
+fun UnreadBadge(count: Int, modifier: Modifier = Modifier, lowerBound: Boolean = false) {
     // CD carries the real count (the visible text caps at "99+") so the e2e harness can read it.
-    val cd = pluralStringResource(R.plurals.badge_unread, count, count)
+    val cd = pluralStringResource(
+        if (lowerBound) R.plurals.badge_unread_at_least else R.plurals.badge_unread,
+        count,
+        count,
+    )
     CountBadge(
-        text = if (count > 99) "99+" else count.toString(),
+        text = when {
+            count > 99 -> "99+"
+            lowerBound -> "$count+"
+            else -> count.toString()
+        },
         background = MaterialTheme.colorScheme.primary,
         foreground = MaterialTheme.colorScheme.onPrimary,
         modifier = modifier,
@@ -45,10 +53,18 @@ fun UnreadBadge(count: Int, modifier: Modifier = Modifier) {
 
 /** Mention badge (secondary, "@" glyph). */
 @Composable
-fun MentionBadge(count: Int, modifier: Modifier = Modifier) {
-    val cd = pluralStringResource(R.plurals.badge_mention, count, count)
+fun MentionBadge(count: Int, modifier: Modifier = Modifier, lowerBound: Boolean = false) {
+    val cd = pluralStringResource(
+        if (lowerBound) R.plurals.badge_mention_at_least else R.plurals.badge_mention,
+        count,
+        count,
+    )
     CountBadge(
-        text = if (count > 1) "@$count" else "@",
+        text = when {
+            lowerBound -> "@$count+"
+            count > 1 -> "@$count"
+            else -> "@"
+        },
         background = MaterialTheme.colorScheme.secondary,
         foreground = MaterialTheme.colorScheme.onSecondary,
         modifier = modifier,
@@ -58,10 +74,18 @@ fun MentionBadge(count: Int, modifier: Modifier = Modifier) {
 
 /** Subdued total activity count shown only on a muted chat row. */
 @Composable
-fun MutedActivityBadge(count: Int, modifier: Modifier = Modifier) {
-    val cd = pluralStringResource(R.plurals.badge_unread, count, count)
+fun MutedActivityBadge(count: Int, modifier: Modifier = Modifier, lowerBound: Boolean = false) {
+    val cd = pluralStringResource(
+        if (lowerBound) R.plurals.badge_unread_at_least else R.plurals.badge_unread,
+        count,
+        count,
+    )
     CountBadge(
-        text = if (count > 99) "99+" else count.toString(),
+        text = when {
+            count > 99 -> "99+"
+            lowerBound -> "$count+"
+            else -> count.toString()
+        },
         background = MaterialTheme.colorScheme.surfaceContainerHighest,
         foreground = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = modifier,

@@ -11,10 +11,13 @@ captures/
 .externalNativeBuild/
 .cxx/
 
-# Signing (never commit)
+# Signing (never commit) — except the deliberately public debug key below
 *.jks
 *.keystore
 keystore.properties
+# The conventional androiddebugkey/android pair, checked in so every machine, container and CI
+# runner signs debug builds identically and in-place upgrades keep working. Signs nothing shipped.
+!app/debug.keystore
 .firebaserc
 firebase/functions/.env.*
 firebase/functions/lib/

@@ -118,6 +118,7 @@ class RegistrationStateMachineTest {
         assertEquals(listOf("CAP REQ :echo-message"), afterFirstBindCapChange.deferredLines())
         val ready = afterFirstBindCapChange.filterIsInstance<RegistrationStateMachine.Action.Complete>().single()
         assertTrue(ready.caps.containsAll(replayBarrier.split(' ')))
+        assertEquals(setOf("echo-message"), ready.deferredCaps)
         assertTrue(afterFirstBindCapChange.deferredLines().all { it.substringAfter("CAP REQ :").contains(' ').not() })
     }
 
@@ -250,6 +251,32 @@ class RegistrationStateMachineTest {
     }
 
     @Test
+    fun `normal bouncer welcome exposes deferred capability decisions`() {
+        val machine = RegistrationStateMachine(
+            IrcClientConfig(
+                host = "soju",
+                port = 6697,
+                tls = true,
+                nick = "motd",
+                username = "motd",
+                realname = "motd",
+                bouncerNetId = "2",
+            ),
+        )
+        machine.start()
+        val replayBarrier =
+            "sasl soju.im/bouncer-networks draft/chathistory batch message-tags server-time"
+        machine.onMessage(cap("LS", "$replayBarrier draft/read-marker"))
+        machine.onMessage(cap("ACK", replayBarrier))
+
+        val welcome = machine.onMessage(IrcMessage(command = "001", params = listOf("motd", "Welcome")))
+        val ready = welcome.filterIsInstance<RegistrationStateMachine.Action.Complete>().single()
+
+        assertTrue("draft/read-marker" in ready.deferredCaps)
+        assertTrue(welcome.sentLines().contains("CAP REQ :draft/read-marker"))
+    }
+
+    @Test
     fun `fallback CAP DEL updates ready snapshot and drops stale deferred caps`() {
         val machine = RegistrationStateMachine(
             IrcClientConfig(
@@ -274,6 +301,7 @@ class RegistrationStateMachineTest {
 
         assertTrue("message-tags" !in ready.caps)
         assertTrue("draft/chathistory" in ready.caps)
+        assertTrue("message-tags" !in ready.deferredCaps)
         assertTrue(
             actions.deferredLines().none {
                 it.endsWith("message-tags") || it.endsWith("extended-monitor")
@@ -308,6 +336,7 @@ class RegistrationStateMachineTest {
         assertTrue(actions.deferredLines().contains("CAP REQ :draft/metadata-2"))
         val ready = actions.filterIsInstance<RegistrationStateMachine.Action.Complete>().single()
         assertTrue(ready.caps.none { it.startsWith("draft/metadata-2") })
+        assertTrue("draft/metadata-2" in ready.deferredCaps)
     }
 
     private fun cap(subcommand: String, caps: String) =

@@ -47,6 +47,7 @@ class EventMapper(
             label = msg.tags["label"],
             serverTimeSource = parsedTime.source,
             isHistoryContext = "draft/chathistory-context" in msg.tags,
+            clientTags = msg.tags.filterKeys { it.startsWith('+') },
         )
     }
 

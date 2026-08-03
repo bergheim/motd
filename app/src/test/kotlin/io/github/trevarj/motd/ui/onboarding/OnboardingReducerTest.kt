@@ -4,7 +4,7 @@ import io.github.trevarj.motd.bouncer.BouncerKind
 import io.github.trevarj.motd.bouncer.SojuLoginForm
 import io.github.trevarj.motd.bouncer.ZncLoginForm
 import io.github.trevarj.motd.data.db.NetworkRole
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.ui.settings.addnetwork.NetworkPresetId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -308,9 +308,9 @@ class OnboardingReducerTest {
     fun `conn state changes accumulate a log and surface failure reason`() {
         val s = reduce(
             OnboardingState(step = OnboardingStep.CONNECT),
-            OnboardingAction.ConnStateChanged(IrcClientState.Connecting),
-            OnboardingAction.ConnStateChanged(IrcClientState.Registering),
-            OnboardingAction.ConnStateChanged(IrcClientState.Failed("bad password", fatal = true)),
+            OnboardingAction.ConnStateChanged(ConnectionState.Connecting),
+            OnboardingAction.ConnStateChanged(ConnectionState.Authenticating),
+            OnboardingAction.ConnStateChanged(ConnectionState.Failed("bad password", fatal = true)),
         )
         assertEquals(3, s.stateLog.size)
         assertEquals("bad password", s.error)
@@ -323,7 +323,7 @@ class OnboardingReducerTest {
         val s = onboardingReducer(
             OnboardingState(step = OnboardingStep.CONNECT),
             OnboardingAction.ConnStateChanged(
-                IrcClientState.Ready("me", emptySet(), emptyMap()),
+                ConnectionState.Ready("me"),
             ),
         )
         assertTrue(s.isReady)
@@ -333,16 +333,18 @@ class OnboardingReducerTest {
 
     @Test
     fun `bouncer list loads and toggles selection`() {
-        val listed = onboardingReducer(
-            OnboardingState(step = OnboardingStep.CONNECT),
+        val listed = reduce(
+            OnboardingState(step = OnboardingStep.CONNECT, networkId = 1L),
+            OnboardingAction.BouncerListLoading(1L, 1L, 1L),
             OnboardingAction.BouncerListed(
+                1L, 1L, 1L,
                 listOf(
                     BouncerNetworkRow("1", "Libera", selected = false),
                     BouncerNetworkRow("2", "OFTC", selected = false),
                 ),
             ),
         )
-        assertTrue(listed.bouncerListLoaded)
+        assertTrue(listed.bouncerDiscovery is BouncerDiscoveryState.Loaded)
         assertEquals(2, listed.bouncerNetworks.size)
 
         val toggled = onboardingReducer(listed, OnboardingAction.ToggleBouncerNetwork("1"))
@@ -351,10 +353,12 @@ class OnboardingReducerTest {
     }
 
     @Test
-    fun `late bouncer list update preserves selected imports`() {
+    fun `passive bouncer snapshot preserves selected imports`() {
         val selected = reduce(
-            OnboardingState(step = OnboardingStep.CONNECT),
+            OnboardingState(step = OnboardingStep.CONNECT, networkId = 1L),
+            OnboardingAction.BouncerListLoading(1L, 1L, 1L),
             OnboardingAction.BouncerListed(
+                1L, 1L, 1L,
                 listOf(
                     BouncerNetworkRow("1", "Libera", selected = false),
                     BouncerNetworkRow("2", "OFTC", selected = false),
@@ -365,7 +369,8 @@ class OnboardingReducerTest {
 
         val refreshed = onboardingReducer(
             selected,
-            OnboardingAction.BouncerListed(
+            OnboardingAction.BouncerSnapshot(
+                1L, 1L,
                 listOf(
                     BouncerNetworkRow("1", "Libera.Chat", selected = false),
                     BouncerNetworkRow("3", "ExampleNet", selected = false),
@@ -378,10 +383,12 @@ class OnboardingReducerTest {
     }
 
     @Test
-    fun `transient empty bouncer list preserves selected imports`() {
+    fun `failed discovery retains selected imports and passive snapshots retain the error`() {
         val selected = reduce(
-            OnboardingState(step = OnboardingStep.CONNECT),
+            OnboardingState(step = OnboardingStep.CONNECT, networkId = 1L),
+            OnboardingAction.BouncerListLoading(1L, 1L, 1L),
             OnboardingAction.BouncerListed(
+                1L, 1L, 1L,
                 listOf(BouncerNetworkRow("libera", "Libera", selected = false)),
             ),
             OnboardingAction.ToggleBouncerNetwork("libera"),
@@ -389,22 +396,74 @@ class OnboardingReducerTest {
 
         val refreshed = onboardingReducer(
             selected,
-            OnboardingAction.BouncerListed(emptyList()),
+            OnboardingAction.BouncerListFailed(1L, 1L, 1L, BouncerOperationError.ConnectionLost),
         )
 
         assertEquals(listOf("libera"), refreshed.bouncerNetworks.map { it.netId })
         assertTrue(refreshed.bouncerNetworks.single().selected)
+        val passive = onboardingReducer(
+            refreshed,
+            OnboardingAction.BouncerSnapshot(1L, 1L, listOf(BouncerNetworkRow("2", "OFTC", false))),
+        )
+        assertTrue(passive.bouncerDiscovery is BouncerDiscoveryState.Failed)
+        assertTrue(passive.bouncerNetworks.single { it.netId == "libera" }.selected)
     }
 
     @Test
-    fun `bouncer add appends a row`() {
+    fun `bouncer add preserves drafts on failure and clears them once on success`() {
         val s = reduce(
-            OnboardingState(step = OnboardingStep.CONNECT),
-            OnboardingAction.BouncerListed(emptyList()),
-            OnboardingAction.BouncerAdded(BouncerNetworkRow("9", "New", selected = true)),
+            OnboardingState(step = OnboardingStep.CONNECT, networkId = 1L),
+            OnboardingAction.BouncerListLoading(1L, 1L, 1L),
+            OnboardingAction.BouncerListed(1L, 1L, 1L, emptyList()),
+            OnboardingAction.EditBouncerAddDraft(BouncerAddDraft("New", "irc.new.example")),
+            OnboardingAction.BouncerAddSubmitting(1L, 1L),
+            OnboardingAction.BouncerAddFailed(1L, 1L, BouncerOperationError.ConnectionLost),
         )
-        assertEquals(1, s.bouncerNetworks.size)
-        assertEquals("New", s.bouncerNetworks.first().name)
+        assertEquals(BouncerAddDraft("New", "irc.new.example"), s.bouncerAddDraft)
+        assertTrue(s.bouncerAdd is BouncerAddState.Failed)
+        val accepted = onboardingReducer(
+            s,
+            OnboardingAction.BouncerAdded(1L, 1L, BouncerNetworkRow("9", "New", selected = true)),
+        )
+        assertEquals(BouncerAddDraft(), accepted.bouncerAddDraft)
+        assertTrue(accepted.bouncerAdd is BouncerAddState.Success)
+        assertEquals(1, accepted.bouncerNetworks.size)
+        assertEquals(accepted, onboardingReducer(accepted, OnboardingAction.BouncerSnapshot(1L, 1L, emptyList())))
+    }
+
+    @Test
+    fun `stale list and add results from replaced root are ignored`() {
+        val replacement = reduce(
+            OnboardingState(networkId = 2L),
+            OnboardingAction.BouncerListLoading(2L, 3L, 4L),
+        )
+        val afterList = onboardingReducer(
+            replacement,
+            OnboardingAction.BouncerListed(1L, 1L, 1L, listOf(BouncerNetworkRow("old", "Old", false))),
+        )
+        val afterAdd = onboardingReducer(
+            afterList,
+            OnboardingAction.BouncerAdded(1L, 1L, BouncerNetworkRow("old", "Old", true)),
+        )
+        assertTrue(afterAdd.bouncerNetworks.isEmpty())
+        assertTrue(afterAdd.bouncerAdd is BouncerAddState.Idle)
+    }
+
+    @Test
+    fun `discovery retry does not invalidate pending add`() {
+        val submitting = reduce(
+            OnboardingState(networkId = 1L),
+            OnboardingAction.BouncerListLoading(1L, 7L, 1L),
+            OnboardingAction.EditBouncerAddDraft(BouncerAddDraft("New", "irc.new.example")),
+            OnboardingAction.BouncerAddSubmitting(1L, 7L),
+            OnboardingAction.BouncerListLoading(1L, 7L, 2L),
+        )
+        val added = onboardingReducer(
+            submitting,
+            OnboardingAction.BouncerAdded(1L, 7L, BouncerNetworkRow("9", "New", true)),
+        )
+        assertTrue(added.bouncerAdd is BouncerAddState.Success)
+        assertEquals("9", added.bouncerNetworks.single().netId)
     }
 
     @Test

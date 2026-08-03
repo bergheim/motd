@@ -91,7 +91,7 @@ class ConnectionActor(
     val networkId: Long,
     private val scope: CoroutineScope,
     private val connectionFactory: suspend () -> ManagedConnection,
-    private val onState: (Long, IrcClientState) -> Unit,
+    private val onState: suspend (Long, IrcClientState) -> Unit,
     private val onEvent: suspend (Long, IrcEvent) -> Unit,
     private val onReady: suspend (ManagedConnection) -> Unit,
     private val onConnectionChanged: (Long, ManagedConnection?) -> Unit = { _, _ -> },

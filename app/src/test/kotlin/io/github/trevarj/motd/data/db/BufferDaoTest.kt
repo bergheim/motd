@@ -91,6 +91,240 @@ class BufferDaoTest {
     }
 
     @Test
+    fun `same timestamp opaque gap keeps chat list counts explicitly incomplete`() = runTest {
+        val bid = db.bufferDao().insert(
+            buffer(networkId, "#same-time").copy(
+                localReadAnchorTime = 100,
+                localReadAnchorEventId = Long.MIN_VALUE,
+            ),
+        )
+        db.historyGapDao().insert(
+            HistoryGapEntity(0, bid, "older", 100, "newer", 100),
+        )
+
+        val row = db.bufferDao().observeChatList().first().single()
+
+        assertTrue(row.unreadCountIncomplete)
+        assertTrue(row.mentionCountIncomplete)
+    }
+
+    @Test
+    fun `same timestamp msgidless tuple gap keeps chat list counts explicitly incomplete`() = runTest {
+        val bid = db.bufferDao().insert(
+            buffer(networkId, "#same-time-tuple").copy(
+                localReadAnchorTime = 100,
+                localReadAnchorEventId = 10,
+            ),
+        )
+        db.historyGapDao().insert(
+            HistoryGapEntity(
+                roomId = bid,
+                olderMsgid = null,
+                olderServerTime = 100,
+                newerMsgid = null,
+                newerServerTime = 100,
+                olderEventId = 10,
+                olderTimelineOrder = 10,
+                newerEventId = 20,
+                newerTimelineOrder = 20,
+            ),
+        )
+
+        val row = db.bufferDao().observeChatList().first().single()
+
+        assertTrue(row.unreadCountIncomplete)
+        assertTrue(row.mentionCountIncomplete)
+    }
+
+    @Test
+    fun `exhausted identical boundary at the unread floor keeps counts incomplete`() = runTest {
+        val bid = db.bufferDao().insert(
+            buffer(networkId, "#saturated-floor").copy(
+                localReadAnchorTime = 100,
+                localReadAnchorEventId = 10,
+            ),
+        )
+        db.historyGapDao().insert(
+            HistoryGapEntity(
+                roomId = bid,
+                olderMsgid = "opaque",
+                olderServerTime = 100,
+                newerMsgid = "opaque",
+                newerServerTime = 100,
+                recoverable = false,
+                olderEventId = 10,
+                olderTimelineOrder = 10,
+                newerEventId = 10,
+                newerTimelineOrder = 10,
+            ),
+        )
+
+        val row = db.bufferDao().observeChatList().first().single()
+
+        assertTrue(row.unreadCountIncomplete)
+        assertTrue(row.mentionCountIncomplete)
+    }
+
+    @Test
+    fun `spanning gap whose exact newer tuple follows the read marker keeps counts incomplete`() = runTest {
+        val bid = db.bufferDao().insert(
+            buffer(networkId, "#spanning-floor").copy(
+                localReadAnchorTime = 900,
+                localReadAnchorEventId = 50,
+            ),
+        )
+        db.historyGapDao().insert(
+            HistoryGapEntity(
+                roomId = bid,
+                olderMsgid = "old",
+                olderServerTime = 100,
+                newerMsgid = "newer-tie",
+                newerServerTime = 900,
+                olderEventId = 10,
+                olderTimelineOrder = 10,
+                newerEventId = 100,
+                newerTimelineOrder = 100,
+            ),
+        )
+
+        val row = db.bufferDao().observeChatList().first().single()
+
+        assertTrue(row.unreadCountIncomplete)
+        assertTrue(row.mentionCountIncomplete)
+    }
+
+    @Test
+    fun `dominating mute floor treats its equal-time tuple as fully acknowledged`() = runTest {
+        val bid = db.bufferDao().insert(
+            buffer(networkId, "#mute-floor").copy(
+                localReadAnchorTime = 800,
+                localReadAnchorEventId = 50,
+                localUnreadFloorTime = 900,
+            ),
+        )
+        db.historyGapDao().insert(
+            HistoryGapEntity(
+                roomId = bid,
+                olderMsgid = "old",
+                olderServerTime = 100,
+                newerMsgid = "newer-tie",
+                newerServerTime = 900,
+                olderEventId = 10,
+                olderTimelineOrder = 10,
+                newerEventId = 100,
+                newerTimelineOrder = 100,
+            ),
+        )
+
+        val row = db.bufferDao().observeChatList().first().single()
+
+        assertFalse(row.unreadCountIncomplete)
+        assertFalse(row.mentionCountIncomplete)
+    }
+
+    @Test
+    fun `canonicalized newer gap boundary does not leave a false incomplete badge`() = runTest {
+        val bid = db.bufferDao().insert(buffer(networkId, "#canonical-gap"))
+        val ids = db.messageDao().insertAll(
+            listOf(
+                message(bid, "winner", serverTime = 900, dedupKey = "winner"),
+                message(bid, "loser", serverTime = 900, dedupKey = "loser"),
+            ),
+        )
+        db.bufferDao().update(
+            checkNotNull(db.bufferDao().rawById(bid)).copy(
+                localReadAnchorTime = 900,
+                localReadAnchorEventId = ids[0],
+            ),
+        )
+        db.historyGapDao().insert(
+            HistoryGapEntity(
+                roomId = bid,
+                olderMsgid = "old",
+                olderServerTime = 100,
+                newerMsgid = "loser",
+                newerServerTime = 900,
+                newerEventId = ids[1],
+                newerTimelineOrder = ids[1],
+            ),
+        )
+
+        db.historyGapDao().repointEventBoundary(ids[1], ids[0], 900, ids[0])
+        val row = db.bufferDao().observeChatList().first().single()
+
+        assertFalse(row.unreadCountIncomplete)
+        assertFalse(row.mentionCountIncomplete)
+    }
+
+    @Test
+    fun `reordered canonical boundary uses its repaired timeline tuple for badges`() = runTest {
+        val bid = db.bufferDao().insert(buffer(networkId, "#reordered-gap"))
+        val ids = db.messageDao().insertAll(
+            listOf(
+                message(bid, "marker", serverTime = 900, dedupKey = "marker"),
+                message(bid, "boundary", serverTime = 900, dedupKey = "boundary"),
+            ),
+        )
+        db.bufferDao().update(
+            checkNotNull(db.bufferDao().rawById(bid)).copy(
+                localReadAnchorTime = 900,
+                localReadAnchorEventId = ids[0],
+            ),
+        )
+        db.historyGapDao().insert(
+            HistoryGapEntity(
+                roomId = bid,
+                olderMsgid = "old",
+                olderServerTime = 100,
+                newerMsgid = "boundary",
+                newerServerTime = 900,
+                newerEventId = ids[1],
+                newerTimelineOrder = 100,
+            ),
+        )
+
+        db.historyGapDao().repointEventBoundary(ids[1], ids[1], 900, 0)
+        val row = db.bufferDao().observeChatList().first().single()
+
+        assertFalse(row.unreadCountIncomplete)
+        assertFalse(row.mentionCountIncomplete)
+    }
+
+    @Test
+    fun `partial history without a gap keeps counts incomplete`() = runTest {
+        val bid = db.bufferDao().insert(
+            buffer(networkId, "#partial").copy(
+                localReadAnchorTime = 100,
+                historyComplete = false,
+                oldestFetchedTime = 200,
+            ),
+        )
+
+        val row = db.bufferDao().observeChatList().first().single()
+
+        assertTrue(row.unreadCountIncomplete)
+        assertTrue(row.mentionCountIncomplete)
+    }
+
+    @Test
+    fun `another rooms gap does not control partial-history count fallback`() = runTest {
+        val complete = db.bufferDao().insert(
+            buffer(networkId, "#complete").copy(
+                localReadAnchorTime = 100,
+                historyComplete = true,
+                oldestFetchedTime = 200,
+            ),
+        )
+        val other = db.bufferDao().insert(buffer(networkId, "#other"))
+        db.historyGapDao().insert(HistoryGapEntity(0, other, "a", 100, "b", 500))
+
+        val row = db.bufferDao().observeChatList().first().single { it.bufferId == complete }
+
+        assertFalse(row.unreadCountIncomplete)
+        assertFalse(row.mentionCountIncomplete)
+    }
+
+    @Test
     fun `same millisecond local anchor uses event id ordering`() = runTest {
         val room = db.bufferDao().insert(buffer(networkId, "#same-ms"))
         val ids = db.messageDao().insertAll(

@@ -1,8 +1,13 @@
 package io.github.trevarj.motd.data.repo
 
+import androidx.paging.ExperimentalPagingApi
+import androidx.paging.LoadType
 import androidx.paging.PagingSource
+import androidx.paging.PagingState
+import androidx.paging.RemoteMediator
 import io.github.trevarj.motd.data.db.MessageEntity
 import io.github.trevarj.motd.data.db.MessageKind
+import io.github.trevarj.motd.data.db.TimelineAnchor
 import io.github.trevarj.motd.data.db.MotdDatabase
 import io.github.trevarj.motd.data.db.buffer
 import io.github.trevarj.motd.data.db.inMemoryDb
@@ -13,6 +18,7 @@ import io.github.trevarj.motd.data.visibility.MessageVisibilityPolicy
 import io.github.trevarj.motd.data.visibility.MessageVisibilityReader
 import io.github.trevarj.motd.data.visibility.MessageVisibilitySpec
 import io.github.trevarj.motd.data.visibility.messagePagingQuery
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -47,6 +53,61 @@ class MessageRepositoryPagingTest {
         assertTrue(MESSAGE_PAGING_CONFIG.enablePlaceholders)
         assertEquals(500, MESSAGE_PAGING_CONFIG.maxSize)
         assertEquals(250, MESSAGE_PAGING_CONFIG.jumpThreshold)
+    }
+
+    @OptIn(ExperimentalPagingApi::class)
+    @Test
+    fun recentFocusAttachesMediatorWithCanonicalRoomId() = runTest {
+        // Scroll-driven paging attaches the mediator unconditionally, including Recent focus, so the
+        // first Paging collection builds it with the canonical room id resolved from the context.
+        var mediatorRoomId: Long? = null
+        var mediatorFocus: HistoryWindowFocus? = null
+        val repository = MessageRepositoryImpl(
+            db.bufferDao(),
+            db.networkIdentityDao(),
+            db.messageDao(),
+            db.reactionDao(),
+            ChatHistoryMediatorFactory { roomId, focus ->
+                mediatorRoomId = roomId
+                mediatorFocus = focus
+                object : RemoteMediator<Int, MessageEntity>() {
+                    override suspend fun load(
+                        loadType: LoadType,
+                        state: PagingState<Int, MessageEntity>,
+                    ) = MediatorResult.Success(endOfPaginationReached = true)
+                }
+            },
+            db.historyGapDao(),
+        )
+
+        repository.messages(bufferId, MessageVisibilitySpec(), HistoryWindowFocus.Recent).first()
+
+        assertEquals(bufferId, mediatorRoomId)
+        assertEquals(HistoryWindowFocus.Recent, mediatorFocus)
+    }
+
+    @Test
+    fun sameTimestampBoundaryKeepsOnlyTheSelectedRecentIsland() = runTest {
+        val olderId = db.messageDao().insertAll(
+            listOf(message(bufferId, "older", "alice", 100, "older", msgid = "older")),
+        ).single()
+        val newerId = db.messageDao().insertAll(
+            listOf(message(bufferId, "newer", "alice", 100, "newer", msgid = "newer")),
+        ).single()
+        val newer = checkNotNull(db.messageDao().byCanonicalId(newerId))
+
+        val page = db.messageDao().pagingSource(
+            messagePagingQuery(
+                bufferId,
+                MessageVisibilitySpec(),
+                lowerBoundary = TimelineAnchor(100, newer.id, newer.timelineOrder),
+            ),
+        ).load(
+            PagingSource.LoadParams.Refresh(null, 50, false),
+        ).requirePage()
+
+        assertEquals(listOf(newerId), page.data.map { it.id })
+        assertFalse(page.data.any { it.id == olderId })
     }
 
     @Test

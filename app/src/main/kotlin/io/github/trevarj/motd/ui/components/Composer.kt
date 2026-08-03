@@ -61,6 +61,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
@@ -243,6 +244,7 @@ fun Composer(
     voiceEnabled: Boolean = false,
     voiceRecording: Boolean = false,
     onVoiceHoldStart: () -> Unit = {},
+    onVoiceAccessibilityStart: () -> Unit = {},
     onVoiceHoldStop: () -> Unit = {},
     onVoiceHoldCancel: () -> Unit = {},
     onVoiceLock: () -> Unit = {},
@@ -501,6 +503,10 @@ fun Composer(
                             dismissEmojiPicker()
                             onVoiceHoldStart()
                         },
+                        onAccessibilityStart = {
+                            dismissEmojiPicker()
+                            onVoiceAccessibilityStart()
+                        },
                         onHoldStop = onVoiceHoldStop,
                         onHoldCancel = onVoiceHoldCancel,
                         onLock = onVoiceLock,
@@ -523,6 +529,7 @@ private fun VoiceRecordButton(
     enabled: Boolean,
     recording: Boolean,
     onHoldStart: () -> Unit,
+    onAccessibilityStart: () -> Unit,
     onHoldStop: () -> Unit,
     onHoldCancel: () -> Unit,
     onLock: () -> Unit,
@@ -534,11 +541,15 @@ private fun VoiceRecordButton(
     val lockPx = with(density) { 72.dp.toPx() }
     val latestRecording by rememberUpdatedState(recording)
     val latestHoldStart by rememberUpdatedState(onHoldStart)
+    val latestAccessibilityStart by rememberUpdatedState(onAccessibilityStart)
     val latestHoldStop by rememberUpdatedState(onHoldStop)
     val latestHoldCancel by rememberUpdatedState(onHoldCancel)
     val latestLock by rememberUpdatedState(onLock)
     FilledIconButton(
-        onClick = {},
+        onClick = {
+            if (latestRecording) latestHoldStop()
+            else latestAccessibilityStart()
+        },
         enabled = enabled,
         modifier = Modifier
             .size(48.dp)
@@ -547,7 +558,14 @@ private fun VoiceRecordButton(
                 if (!enabled) return@pointerInput
                 coroutineScope {
                     awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
+                        val down = awaitFirstDown(
+                            requireUnconsumed = false,
+                            pass = PointerEventPass.Initial,
+                        )
+                        // Keep the optimized pointer gesture separate from the semantic action:
+                        // consuming the down prevents Material's click from turning a quick tap
+                        // into a locked recording, while keyboard/accessibility clicks still use onClick.
+                        down.consume()
                         if (latestRecording) {
                             waitForUpOrCancellation()
                             latestHoldStop()
@@ -559,6 +577,9 @@ private fun VoiceRecordButton(
                         val longPress = this@coroutineScope.launch {
                             delay(voiceRecordHoldDelay(viewConfiguration.longPressTimeoutMillis))
                             started = true
+                            // Confirm the hold threshold itself, when microphone capture begins.
+                            // Quick taps stay silent because they never activate recording.
+                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                             latestHoldStart()
                         }
                         while (true) {
@@ -587,6 +608,9 @@ private fun VoiceRecordButton(
                                     VoiceGestureTarget.CANCEL -> {
                                         cancelled = true
                                         change.consume()
+                                        // Use rejection feedback when the destructive slide target
+                                        // commits so cancellation is unambiguous without looking.
+                                        haptics.performHapticFeedback(HapticFeedbackType.Reject)
                                         latestHoldCancel()
                                         break
                                     }
@@ -597,7 +621,7 @@ private fun VoiceRecordButton(
                         }
                         longPress.cancel()
                         when {
-                            !started -> Unit // Voice recording is deliberately press-and-hold only.
+                            !started -> Unit // Pointer taps stay silent; semantic clicks start a locked recording.
                             cancelled -> Unit
                             locked -> Unit
                             else -> latestHoldStop()

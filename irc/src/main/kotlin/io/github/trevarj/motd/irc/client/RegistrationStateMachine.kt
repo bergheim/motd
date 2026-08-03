@@ -28,6 +28,8 @@ internal class RegistrationStateMachine(
             val isupport: Isupport,
             /** Soju child fallback: the stalled welcome burst requires protocol-default CHANTYPES. */
             val assumeDefaultTargetClassification: Boolean = false,
+            /** Capabilities requested after Ready whose ACK/NAK decision is still outstanding. */
+            val deferredCaps: Set<String> = emptySet(),
         ) : Action
         /** Registration failed terminally. */
         data class Fail(val reason: String, val fatal: Boolean) : Action
@@ -208,7 +210,12 @@ internal class RegistrationStateMachine(
         phase = Phase.DONE
         val actions = mutableListOf<Action>(
             Action.SetNick(nick),
-            Action.Complete(nick, acked.toSet(), isupport),
+            Action.Complete(
+                nick,
+                acked.toSet(),
+                isupport,
+                deferredCaps = postWelcomeCapReqs.toSet(),
+            ),
         )
         val fallbackAwayLine = initialAwayLine()
         if (fallbackAwayLine != null && (!preAwayAttempted || preAwayRejected)) {
@@ -297,6 +304,7 @@ internal class RegistrationStateMachine(
                 acked.toSet(),
                 isupport,
                 assumeDefaultTargetClassification = true,
+                deferredCaps = postWelcomeCapReqs.toSet(),
             ),
         )
         // Soju can remove capabilities while BOUNCER BIND selects the upstream network. Request

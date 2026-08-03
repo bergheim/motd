@@ -19,6 +19,8 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
+import io.github.trevarj.motd.agentwire.AgentwireGateScreen
+import io.github.trevarj.motd.data.prefs.AppearanceConfig
 import io.github.trevarj.motd.ui.about.AboutScreen
 import io.github.trevarj.motd.ui.channelinfo.ChannelInfoScreen
 import io.github.trevarj.motd.ui.channellist.ChannelListScreen
@@ -52,6 +54,7 @@ import io.github.trevarj.motd.ui.theme.MotdMotion
 // Compose trees while the first Room and Paging emissions arrive.
 @Composable
 fun MotdNavGraph(
+    appearance: AppearanceConfig,
     navController: NavHostController = rememberNavController(),
     // Notification-tap deep-link: open the buffer and jump to the message. Null when absent.
     notificationTarget: NotificationTarget? = null,
@@ -63,16 +66,18 @@ fun MotdNavGraph(
     // target after navigating lets a subsequent identical tap re-trigger (null → value transition).
     LaunchedEffect(notificationTarget) {
         val target = notificationTarget ?: return@LaunchedEffect
-        navController.navigate(
+        // Replace an existing chat entry so a warm notification tap for the already-open buffer
+        // receives a fresh route-scoped ViewModel and resolves the requested message. A
+        // single-top navigation would retain the old ViewModel and silently ignore new jump args.
+        navController.openChat(
             ChatRoute(
                 target.bufferId,
                 target.jumpToMsgid,
                 target.jumpToTime,
                 target.jumpToEventId,
             ),
-        ) {
-            launchSingleTop = true
-        }
+            replaceCurrentChat = true,
+        )
         onNotificationTargetHandled()
     }
     NavHost(
@@ -141,25 +146,31 @@ fun MotdNavGraph(
                     )
                 },
                 detailPane = { showBack ->
-                    ChatScreen(
-                        bufferId = route.bufferId,
+                    AgentwireGateScreen(
                         onBack = { navController.popBackStack() },
                         showBack = showBack,
-                        onOpenChannelInfo = { navController.navigate(ChannelInfoRoute(it)) },
-                        onOpenSearch = { navController.navigate(SearchRoute(it)) },
-                        onOpenImage = { navController.navigate(ImageViewerRoute(it)) },
-                        // /msg and /query replace the detail on wide layouts and push on phones.
-                        onOpenBuffer = {
-                            navController.openChat(ChatRoute(it), replaceCurrentChat = !showBack)
-                        },
-                        onOpenAudioOrigin = { origin ->
-                            navController.openChat(
-                                ChatRoute(origin.bufferId, origin.msgid, origin.serverTime, origin.eventId),
-                                replaceCurrentChat = !showBack,
-                            )
-                        },
-                        onOpenChannelList = { navController.navigate(ChannelListRoute(it)) },
-                    )
+                    ) {
+                        ChatScreen(
+                            bufferId = route.bufferId,
+                            appearance = appearance,
+                            onBack = { navController.popBackStack() },
+                            showBack = showBack,
+                            onOpenChannelInfo = { navController.navigate(ChannelInfoRoute(it)) },
+                            onOpenSearch = { navController.navigate(SearchRoute(it)) },
+                            onOpenImage = { navController.navigate(ImageViewerRoute(it)) },
+                            // /msg and /query replace the detail on wide layouts and push on phones.
+                            onOpenBuffer = {
+                                navController.openChat(ChatRoute(it), replaceCurrentChat = !showBack)
+                            },
+                            onOpenAudioOrigin = { origin ->
+                                navController.openChat(
+                                    ChatRoute(origin.bufferId, origin.msgid, origin.serverTime, origin.eventId),
+                                    replaceCurrentChat = !showBack,
+                                )
+                            },
+                            onOpenChannelList = { navController.navigate(ChannelListRoute(it)) },
+                        )
+                    }
                 },
             )
         }

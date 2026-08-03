@@ -39,18 +39,21 @@ verified libbox artifact.
 
 ## Lint
 
-Lint warnings are errors. Use the single-worker, no-daemon form for final lint
-checks because it avoids a known Android lint worker race.
+Lint warnings are errors. Run with the warm daemon and the repo's bounded worker
+cap (`org.gradle.workers.max` in `gradle.properties`). Do not add
+`--no-daemon --max-workers=1`: it cost roughly 30x the wall-clock (~300s vs ~10s
+warm) for no deterministic race protection. Lint can rarely hit the
+`ModifierDeclarationDetector` classloader race; if it does, just re-run (the warm
+daemon makes a re-run ~10s). CI and release wrap lint in a bounded retry.
 
 ```sh
-./gradlew :app:lintFossDebug :app:assembleFossDebug \
-  --stacktrace --no-daemon --max-workers=1
+./gradlew :app:lintFossDebug :app:assembleFossDebug --stacktrace
 ```
 
 For release parity:
 
 ```sh
-./gradlew :app:lintFossRelease --stacktrace --no-daemon --max-workers=1
+./gradlew :app:lintFossRelease --stacktrace
 ```
 
 ## Choose checks by changed surface
@@ -76,7 +79,7 @@ Full release-parity Gradle verification:
   :irc:build \
   :app:testFossDebugUnitTest :app:testFossReleaseUnitTest \
   :app:lintFossDebug :app:lintFossRelease :app:assembleFossRelease \
-  --stacktrace --no-daemon --max-workers=1
+  --stacktrace
 ```
 
 ## Device and E2E testing

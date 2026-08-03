@@ -16,7 +16,7 @@ import io.github.trevarj.motd.ui.theme.spacingFor
 import io.github.trevarj.motd.irc.client.HistoryAvailability
 import io.github.trevarj.motd.irc.client.HistoryReferenceType
 import io.github.trevarj.motd.irc.client.IrcDisconnectedException
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.irc.proto.IrcCaseMapping
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 import kotlin.random.Random
@@ -168,7 +168,11 @@ class ChatModelsTest {
     }
 
     @Test fun `FAB tap with a pending mention follows the mention walk`() {
-        assertEquals(ScrollToBottomFabJump.Mention(7), scrollToBottomFabJump(longPress = false, mentionTarget = 7))
+        val target = ChatPositionTarget(index = 7, expectedEventId = 70)
+        assertEquals(
+            ScrollToBottomFabJump.Mention(target),
+            scrollToBottomFabJump(longPress = false, mentionTarget = target),
+        )
     }
 
     @Test fun `FAB tap with no pending mention falls through to newest`() {
@@ -176,7 +180,10 @@ class ChatModelsTest {
     }
 
     @Test fun `FAB long-press skips the mention walk and goes to newest`() {
-        assertEquals(ScrollToBottomFabJump.Newest, scrollToBottomFabJump(longPress = true, mentionTarget = 7))
+        assertEquals(
+            ScrollToBottomFabJump.Newest,
+            scrollToBottomFabJump(longPress = true, mentionTarget = ChatPositionTarget(index = 7)),
+        )
     }
 
     @Test fun `FAB long-press with no pending mention also goes to newest`() {
@@ -456,6 +463,39 @@ class ChatModelsTest {
         assertEquals(0, firstUnreadTopAnchorIndex(firstUnreadIndex = 1, rowsFit = 2))
     }
 
+    @Test fun `measured row correction aligns variable-height unread target to the visual top`() {
+        // reverseLayout offsets grow from the viewport start (visual bottom); top alignment is
+        // offset + size == viewportEndOffset. scrollBy(delta) moves the item to offset - delta.
+        // Entry row just past the top edge (real reopen trace): a small positive nudge up.
+        assertEquals(
+            75,
+            reverseItemTopAlignmentCorrection(
+                itemOffset = 1_651,
+                itemSize = 222,
+                viewportEndOffset = 1_798,
+            ),
+        )
+        // Entry row resting at the max-scroll clamp (real first-open trace): a negative correction
+        // eases it down into exact top alignment instead of poking past the viewport end.
+        assertEquals(
+            -138,
+            reverseItemTopAlignmentCorrection(
+                itemOffset = 1_284,
+                itemSize = 376,
+                viewportEndOffset = 1_798,
+            ),
+        )
+        // Already top-aligned: no correction.
+        assertEquals(
+            0,
+            reverseItemTopAlignmentCorrection(
+                itemOffset = 1_576,
+                itemSize = 222,
+                viewportEndOffset = 1_798,
+            ),
+        )
+    }
+
     @Test fun `composer does not need member nicks for blank text or command hints`() {
         assertFalse(composerNeedsMemberNicks(TextFieldValue("")))
         assertFalse(composerNeedsMemberNicks(TextFieldValue("/jo", TextRange(3))))
@@ -559,127 +599,85 @@ class ChatModelsTest {
     }
 
     @Test fun `typed snackbar handles retry before acknowledging and preserves exact reply request`() {
-        val historyEvent = QueuedChatUiEvent(7, ChatUiEvent.HistoryIncomplete(3))
-        val historyOrder = mutableListOf<String>()
-        handleChatUiEventResult(
-            event = historyEvent,
-            actionPerformed = true,
-            retryReplyJump = { historyOrder += "unexpected" },
-            retryMissingHistory = { historyOrder += "retry" },
-            acknowledge = { historyOrder += "ack:$it" },
-        )
-        assertEquals(listOf("retry", "ack:7"), historyOrder)
-
+        val order = mutableListOf<String>()
         val request = ReplyJumpRequest("MiXeD/opaque=Reply")
         var retried: ReplyJumpRequest? = null
         handleChatUiEventResult(
             event = QueuedChatUiEvent(8, ChatUiEvent.ReplyJumpUnavailable(request)),
             actionPerformed = true,
-            retryReplyJump = { retried = it },
-            retryMissingHistory = {},
-            acknowledge = {},
+            retryReplyJump = { retried = it; order += "retry" },
+            acknowledge = { order += "ack:$it" },
         )
         assertEquals(request, retried)
+        assertEquals(listOf("retry", "ack:8"), order)
     }
 
-    @Test fun `manual history refresh outcomes use the title-adjacent notice`() {
-        assertTrue(ChatUiEvent.HistoryOffline.isHistoryRefreshNotice())
-        assertTrue(ChatUiEvent.HistoryUpdated(1).isHistoryRefreshNotice())
-        assertTrue(ChatUiEvent.HistoryUpToDate.isHistoryRefreshNotice())
-        assertTrue(ChatUiEvent.HistoryUnsupported.isHistoryRefreshNotice())
-        assertTrue(ChatUiEvent.HistoryFailed.isHistoryRefreshNotice())
-        assertTrue(ChatUiEvent.HistoryIncomplete(1).isHistoryRefreshNotice())
-        assertTrue(ChatUiEvent.HistoryCapped(inserted = 1, limit = 2).isHistoryRefreshNotice())
-        assertFalse(ChatUiEvent.InvalidCommand.isHistoryRefreshNotice())
-        assertFalse(ChatUiEvent.ReplyJumpUnavailable(ReplyJumpRequest("id")).isHistoryRefreshNotice())
-    }
-
-    @Test fun `history footer requires persisted completion`() {
+    @Test fun `history footer derives the six states from append and availability`() {
         val ready = HistoryAvailability.Ready(setOf(HistoryReferenceType.MSGID), pageLimit = 50)
-        val ended = LoadState.NotLoading(endOfPaginationReached = true)
-
-        assertEquals(
-            ChatHistoryUiState.Incomplete(),
-            chatHistoryUiState(
-                BufferType.CHANNEL,
-                IrcClientState.Ready("me", emptySet(), emptyMap()),
-                ready,
-                ended,
-                historyComplete = false,
-            ),
-        )
-        assertEquals(
-            ChatHistoryUiState.ConfirmedStart,
-            chatHistoryUiState(
-                BufferType.CHANNEL,
-                IrcClientState.Ready("me", emptySet(), emptyMap()),
-                ready,
-                ended,
-                historyComplete = true,
-            ),
-        )
-    }
-
-    @Test fun `history footer distinguishes hidden loading availability and error states`() {
         val idle = LoadState.NotLoading(endOfPaginationReached = false)
-        val failed = LoadState.Error(IllegalStateException("offline"))
-        val ready = HistoryAvailability.Ready(setOf(HistoryReferenceType.TIMESTAMP), pageLimit = 50)
+        val ended = LoadState.NotLoading(endOfPaginationReached = true)
+        val failed = LoadState.Error(IllegalStateException("boom"))
+        val connected = ConnectionState.Ready("me")
 
         fun state(
-            connection: IrcClientState?,
+            bufferType: BufferType?,
+            connection: ConnectionState?,
             availability: HistoryAvailability,
-            append: LoadState = idle,
-            bufferType: BufferType = BufferType.CHANNEL,
-        ) = chatHistoryUiState(
-            bufferType,
-            connection,
-            availability,
-            append,
-            historyComplete = false,
+            append: LoadState,
+            historyComplete: Boolean = false,
+        ) = chatHistoryUiState(bufferType, connection, availability, append, historyComplete)
+
+        // Hidden: no/server buffer, or a Ready timeline with nothing terminal to show. A Ready
+        // end-of-pagination without persisted completion (e.g. an unrecoverable gap) is silent
+        // because scroll-driven APPEND owns any further fetch.
+        assertEquals(ChatHistoryUiState.Hidden, state(null, connected, ready, idle))
+        assertEquals(ChatHistoryUiState.Hidden, state(BufferType.SERVER, connected, ready, idle))
+        assertEquals(ChatHistoryUiState.Hidden, state(BufferType.CHANNEL, connected, ready, idle))
+        assertEquals(ChatHistoryUiState.Hidden, state(BufferType.CHANNEL, connected, ready, ended))
+
+        // Loading: an APPEND page is in flight.
+        assertEquals(ChatHistoryUiState.Loading, state(BufferType.CHANNEL, connected, ready, LoadState.Loading))
+
+        // Retry: a recoverable append error while history is advertised.
+        assertEquals(ChatHistoryUiState.Retry, state(BufferType.CHANNEL, connected, ready, failed))
+
+        // Unavailable(offline): disconnected/fatal. Unavailable(negotiating): mid-registration,
+        // whether the append is an error or merely idle.
+        assertEquals(
+            ChatHistoryUiState.Unavailable(offline = true),
+            state(BufferType.CHANNEL, ConnectionState.Disconnected, HistoryAvailability.NegotiatingOrOffline, failed),
+        )
+        assertEquals(
+            ChatHistoryUiState.Unavailable(offline = false),
+            state(BufferType.CHANNEL, ConnectionState.Authenticating, HistoryAvailability.NegotiatingOrOffline, failed),
+        )
+        assertEquals(
+            ChatHistoryUiState.Unavailable(offline = false),
+            state(BufferType.CHANNEL, ConnectionState.Authenticating, HistoryAvailability.NegotiatingOrOffline, idle),
         )
 
+        // Unsupported: the capability decision supersedes any append state.
         assertEquals(
-            ChatHistoryUiState.Hidden,
-            state(IrcClientState.Disconnected, ready, bufferType = BufferType.SERVER),
-        )
-        assertEquals(
-            ChatHistoryUiState.Loading,
-            state(IrcClientState.Connecting, ready, append = LoadState.Loading),
-        )
-        assertEquals(
-            ChatHistoryUiState.Offline,
-            state(IrcClientState.Disconnected, HistoryAvailability.NegotiatingOrOffline, failed),
-        )
-        assertEquals(
-            ChatHistoryUiState.Negotiating,
-            state(IrcClientState.Registering, HistoryAvailability.NegotiatingOrOffline, failed),
+            ChatHistoryUiState.Unsupported,
+            state(BufferType.CHANNEL, connected, HistoryAvailability.Unsupported, idle),
         )
         assertEquals(
             ChatHistoryUiState.Unsupported,
-            state(IrcClientState.Ready("me", emptySet(), emptyMap()), HistoryAvailability.Unsupported),
+            state(BufferType.CHANNEL, connected, HistoryAvailability.Unsupported, failed),
         )
+
+        // ConfirmedStart: persisted completion at end-of-pagination.
         assertEquals(
-            ChatHistoryUiState.Unsupported,
-            state(
-                IrcClientState.Ready("me", emptySet(), emptyMap()),
-                HistoryAvailability.Unsupported,
-                append = failed,
-            ),
-        )
-        assertEquals(
-            ChatHistoryUiState.Error,
-            state(
-                IrcClientState.Ready("me", emptySet(), emptyMap()),
-                ready,
-                append = failed,
-            ),
+            ChatHistoryUiState.ConfirmedStart,
+            state(BufferType.CHANNEL, connected, ready, ended, historyComplete = true),
         )
     }
 
     @Test fun `offline failure retries once when Ready is first observed with the error`() {
         val gate = HistoryReadyRetryGate()
         val ready = HistoryAvailability.Ready(setOf(HistoryReferenceType.MSGID), pageLimit = 50)
-        val offline = LoadState.Error(IrcDisconnectedException("CHATHISTORY", "offline"))
+        val disconnected = IrcDisconnectedException("CHATHISTORY", "offline")
+        val offline = LoadState.Error(disconnected)
 
         assertTrue(gate.update(ready, offline))
         assertFalse(gate.update(ready, offline))
@@ -690,6 +688,49 @@ class ChatModelsTest {
         assertFalse(gate.update(HistoryAvailability.NegotiatingOrOffline, nextGeneration))
         assertTrue(gate.update(ready, nextGeneration))
         assertFalse(gate.update(ready, nextGeneration))
+    }
+
+    @Test
+    fun `identity-free insertion point at snapshot end settles on the last row`() {
+        assertEquals(0, materializableTargetIndex(1, itemCount = 1, hasExactIdentity = false))
+        assertEquals(4, materializableTargetIndex(5, itemCount = 5, hasExactIdentity = false))
+        assertEquals(null, materializableTargetIndex(1, itemCount = 1, hasExactIdentity = true))
+        assertEquals(null, materializableTargetIndex(0, itemCount = 0, hasExactIdentity = false))
+    }
+
+    @Test
+    fun `materialized target follows its stable key when an insertion shifts the index`() {
+        val row = MessageEntity(
+            id = 7,
+            bufferId = 1,
+            serverTime = 100,
+            sender = "alice",
+            kind = MessageKind.PRIVMSG,
+            text = "row",
+            dedupKey = "row",
+        )
+        val materialized = MaterializedChatTarget(row, index = 4)
+        val shiftedVisibleItems = listOf(
+            99L to 4,
+            row.id to 5,
+        )
+
+        assertEquals(4, materialized.index)
+        assertEquals(7L, materialized.row.id)
+        assertEquals(5, materializedTargetVisibleIndex(shiftedVisibleItems, row.id))
+    }
+
+    @Test
+    fun `focused one-row island shows newest escape even at its local bottom`() {
+        assertTrue(
+            shouldShowNewestFab(
+                atBottom = true,
+                hasNewerHistoryIsland = true,
+                autoScrolling = false,
+            ),
+        )
+        assertFalse(shouldShowNewestFab(true, false, false))
+        assertFalse(shouldShowNewestFab(true, true, true))
     }
 
     @Test

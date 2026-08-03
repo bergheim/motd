@@ -188,6 +188,20 @@ _e2e_node_count_from_attr() {
 # bounds_of_text "<text>" — bounds of the first node whose text= matches exactly.
 bounds_of_text() { _e2e_bounds_from_attr "text" "$1"; }
 
+# bounds_of_text_last "<text>" — bounds of the last exact-text node. Bottom sheets can retain
+# the query as editable text while rendering an identically labelled result below it.
+bounds_of_text_last() {
+  local value="$1" esc
+  _e2e_have_dump || return 1
+  # shellcheck disable=SC2016
+  esc="$(printf '%s' "$value" | sed 's/[][\.*^$(){}?+|/]/\\&/g')"
+  grep -oE "<node[^>]* text=\"${esc}\"[^>]*>" "$_E2E_DUMP" 2>/dev/null \
+    | tail -n1 \
+    | grep -oE 'bounds="\[[0-9]+,[0-9]+\]\[[0-9]+,[0-9]+\]"' \
+    | head -n1 \
+    | sed -E 's/^bounds="(.*)"$/\1/'
+}
+
 # bounds_of_desc "<contentDesc>" — bounds by content-desc.
 bounds_of_desc() { _e2e_bounds_from_attr "content-desc" "$1"; }
 
@@ -294,6 +308,9 @@ _e2e_tap_bounds_fn() {
 
 # tap_text "<text>" — tap the centre of the node with this exact visible text.
 tap_text() { _e2e_tap_bounds_fn bounds_of_text "$1" "text"; }
+
+# tap_text_last "<text>" — tap the final exact-text node in hierarchy order.
+tap_text_last() { _e2e_tap_bounds_fn bounds_of_text_last "$1" "last text"; }
 
 # tap_desc "<contentDesc>" — tap by content-desc.
 tap_desc() { _e2e_tap_bounds_fn bounds_of_desc "$1" "desc"; }
@@ -523,6 +540,19 @@ wait_for_text() {
     fi
     sleep 1
     waited=$(( waited + 1 ))
+  done
+  return 1
+}
+
+# wait_for_tag "<testTag>" <timeout_s> — poll until a tagged Compose node is exported.
+wait_for_tag() {
+  local tag="$1" timeout="${2:-20}" waited=0
+  while [ "$waited" -lt "$timeout" ]; do
+    if dump && [ -n "$(bounds_of_tag "$tag")" ]; then
+      return 0
+    fi
+    sleep 1
+    waited=$((waited + 1))
   done
   return 1
 }

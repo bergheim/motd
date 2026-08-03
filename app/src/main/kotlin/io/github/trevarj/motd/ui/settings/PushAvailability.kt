@@ -59,4 +59,7 @@ enum class PushSetupStatus {
  */
 open class PushAvailabilityProvider @Inject constructor() {
     open fun availability(): Flow<PushAvailability> = flowOf(PushAvailability())
+
+    /** Re-read app notification permission after a screen returns from Android Settings. */
+    open fun refreshNotificationPermission() = Unit
 }

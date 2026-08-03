@@ -6,6 +6,7 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import io.github.trevarj.motd.data.db.BufferEntity
 import io.github.trevarj.motd.data.db.BufferType
+import io.github.trevarj.motd.data.db.HistoryGapEntity
 import io.github.trevarj.motd.data.db.MessageEntity
 import io.github.trevarj.motd.data.db.MessageKind
 import io.github.trevarj.motd.data.db.MotdDatabase
@@ -185,6 +186,96 @@ class CanonicalTimelineStoreTest {
         assertEquals("server-final", row.text)
         assertEquals("echo-1", row.msgid)
         assertNull(row.pendingLabel)
+        setup.db.close()
+    }
+
+    @Test
+    fun coalescenceRepointsDurableGapBoundaryToTheEnrichedWinner() = runTest {
+        val setup = openSetup("canonical-gap-coalesce.db")
+        val pending = setup.store.ingest(
+            TimelineObservation(
+                networkId = setup.networkId,
+                event = event(setup.roomId, null, 30_000, "draft").copy(
+                    isSelf = true,
+                    pendingLabel = "gap-label",
+                ),
+                origin = ObservationOrigin.LOCAL_SEND,
+                connectionGeneration = 1,
+                label = "gap-label",
+                batchId = null,
+                timeProvenance = TimeProvenance.LOCAL_CLOCK,
+            ),
+        )
+        val server = setup.store.ingest(
+            tagged(setup.networkId, setup.roomId, "gap-msgid", 31_000, "server-final"),
+        )
+        assertNotEquals(pending.event.id, server.event.id)
+        setup.db.historyGapDao().insert(
+            HistoryGapEntity(
+                roomId = setup.roomId,
+                olderMsgid = "old",
+                olderServerTime = 1_000,
+                newerMsgid = "gap-msgid",
+                newerServerTime = server.event.serverTime,
+                olderEventId = null,
+                olderTimelineOrder = null,
+                newerEventId = server.event.id,
+                newerTimelineOrder = server.event.timelineOrder,
+            ),
+        )
+
+        val echo = setup.store.ingest(
+            TimelineObservation(
+                networkId = setup.networkId,
+                event = event(setup.roomId, "gap-msgid", 31_000, "server-final").copy(isSelf = true),
+                origin = ObservationOrigin.LIVE,
+                connectionGeneration = 1,
+                label = "gap-label",
+                batchId = null,
+                timeProvenance = TimeProvenance.SERVER_TAG,
+            ),
+        )
+
+        assertEquals(pending.event.id, echo.event.id)
+        val gap = setup.db.historyGapDao().forRoom(setup.roomId).single()
+        assertEquals(echo.event.id, gap.newerEventId)
+        assertEquals(echo.event.serverTime, gap.newerServerTime)
+        assertEquals(echo.event.timelineOrder, gap.newerTimelineOrder)
+        setup.db.close()
+    }
+
+    @Test
+    fun playbackReorderingRepairsTheExactGapBoundaryOrder() = runTest {
+        val setup = openSetup("canonical-gap-order.db")
+        val first = setup.store.ingest(
+            tagged(setup.networkId, setup.roomId, "order-one", 40_000, "one"),
+        ).event
+        val second = setup.store.ingest(
+            tagged(setup.networkId, setup.roomId, "order-two", 40_000, "two"),
+        ).event
+        setup.db.historyGapDao().insert(
+            HistoryGapEntity(
+                roomId = setup.roomId,
+                olderMsgid = "older",
+                olderServerTime = 1_000,
+                newerMsgid = second.msgid,
+                newerServerTime = second.serverTime,
+                olderEventId = null,
+                olderTimelineOrder = null,
+                newerEventId = second.id,
+                newerTimelineOrder = second.timelineOrder,
+            ),
+        )
+
+        setup.store.reconcilePlaybackOrder(
+            orderedEventIds = listOf(second.id, first.id),
+            insertedEventIds = emptySet(),
+            prependUnanchored = false,
+        )
+
+        val gap = setup.db.historyGapDao().forRoom(setup.roomId).single()
+        assertEquals(second.id, gap.newerEventId)
+        assertEquals(0L, gap.newerTimelineOrder)
         setup.db.close()
     }
 
@@ -407,6 +498,90 @@ class CanonicalTimelineStoreTest {
         reopened.close()
     }
 
+    @Test
+    fun selfEchoOlderThanNewestRow_staysAtBottom() = runTest {
+        val setup = openSetup("canonical-self-echo-clamp.db")
+        // Someone else's message is the newest row on screen when we send.
+        setup.store.ingest(tagged(setup.networkId, setup.roomId, "alice-1", 100_000, "hi from alice"))
+        // The optimistic local send uses the device clock (ahead of the origin server) and lands at the bottom.
+        setup.store.ingest(selfPending(setup.networkId, setup.roomId, "motd-1", 133_000, "my reply"))
+        // The bouncer echoes our send with the origin server's time, a second BEFORE alice's message.
+        val echo = setup.store.ingest(selfEcho(setup.networkId, setup.roomId, "motd-1", "s-1", 99_000, "my reply"))
+
+        val stored = rows(setup.db, setup.roomId)
+        assertEquals(2, stored.size)
+        // Floored to alice's real time, not the 99_000 echo time, so it never sorts below her message.
+        assertEquals(100_000, stored.first().serverTime)
+        assertEquals(echo.event.id, stored.first().id)
+        assertEquals("my reply", stored.first().text)
+        setup.db.close()
+    }
+
+    @Test
+    fun selfEchoNewerThanNewestRow_keepsTrueTime() = runTest {
+        val setup = openSetup("canonical-self-echo-benign.db")
+        setup.store.ingest(tagged(setup.networkId, setup.roomId, "alice-1", 100_000, "hi from alice"))
+        setup.store.ingest(selfPending(setup.networkId, setup.roomId, "motd-1", 133_000, "my reply"))
+        // Echo time is already the newest, so no clamp fires and the true origin-server time is kept.
+        setup.store.ingest(selfEcho(setup.networkId, setup.roomId, "motd-1", "s-1", 105_000, "my reply"))
+
+        val stored = rows(setup.db, setup.roomId)
+        assertEquals(105_000, stored.first().serverTime)
+        assertEquals("my reply", stored.first().text)
+        setup.db.close()
+    }
+
+    @Test
+    fun clampedSelfEcho_historyReplayKeepsCursorAtRealTime() = runTest {
+        val setup = openSetup("canonical-self-echo-cursor.db")
+        setup.store.ingest(tagged(setup.networkId, setup.roomId, "alice-1", 100_000, "hi from alice"))
+        setup.store.ingest(selfPending(setup.networkId, setup.roomId, "motd-1", 133_000, "my reply"))
+        setup.store.ingest(selfEcho(setup.networkId, setup.roomId, "motd-1", "s-1", 99_000, "my reply"))
+        // soju replays our own message in the next CHATHISTORY window with its true origin-server time.
+        setup.store.ingest(
+            TimelineObservation(
+                networkId = setup.networkId,
+                event = selfEvent(setup.roomId, "s-1", 99_000, "my reply", null),
+                origin = ObservationOrigin.HISTORY,
+                connectionGeneration = 1,
+                batchId = "history",
+                timeProvenance = TimeProvenance.SERVER_TAG,
+            ),
+        )
+
+        // The cursor reflects a timestamp a real message already carried, never the device clock (133_000).
+        val cursor = setup.db.historyCursorDao().byRoom(setup.roomId)
+        assertEquals(100_000L, cursor?.newestServerTime)
+        setup.db.close()
+    }
+
+    private fun selfPending(networkId: Long, roomId: Long, label: String, time: Long, text: String) =
+        TimelineObservation(
+            networkId = networkId,
+            event = selfEvent(roomId, null, time, text, label),
+            origin = ObservationOrigin.LOCAL_SEND,
+            connectionGeneration = 1,
+            batchId = null,
+            timeProvenance = TimeProvenance.LOCAL_CLOCK,
+        )
+
+    private fun selfEcho(
+        networkId: Long,
+        roomId: Long,
+        label: String,
+        msgid: String,
+        time: Long,
+        text: String,
+    ) = TimelineObservation(
+        networkId = networkId,
+        event = selfEvent(roomId, msgid, time, text, null),
+        origin = ObservationOrigin.LIVE,
+        connectionGeneration = 1,
+        batchId = null,
+        timeProvenance = TimeProvenance.SERVER_TAG,
+        label = label,
+    )
+
     private data class ObservationSpec(
         val origin: ObservationOrigin,
         val msgid: String?,
@@ -505,5 +680,19 @@ class CanonicalTimelineStoreTest {
             text = text,
             dedupKey = "diagnostic-only",
         )
+
+        fun selfEvent(roomId: Long, msgid: String?, time: Long, text: String, pendingLabel: String?) =
+            MessageEntity(
+                bufferId = roomId,
+                msgid = msgid,
+                serverTime = time,
+                sender = "me",
+                normalizedActor = "me",
+                kind = MessageKind.PRIVMSG,
+                text = text,
+                isSelf = true,
+                pendingLabel = pendingLabel,
+                dedupKey = "diagnostic-only",
+            )
     }
 }

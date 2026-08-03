@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.Forum
+import androidx.compose.material.icons.outlined.Mail
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.outlined.PushPin
@@ -50,6 +51,8 @@ import androidx.compose.material.icons.outlined.Unarchive
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -58,6 +61,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
@@ -83,6 +87,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -120,9 +125,10 @@ import io.github.trevarj.motd.audio.AudioPlaybackOrigin
 import io.github.trevarj.motd.audio.AudioPlaybackState
 import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.db.ChatListRow
+import io.github.trevarj.motd.data.db.InviteState
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.ui.components.ConnectionBanner
 import io.github.trevarj.motd.ui.components.AudioMiniPlayer
 import io.github.trevarj.motd.ui.components.AudioPlaybackViewModel
@@ -183,6 +189,8 @@ fun ChatListScreen(
         onSetMuted = viewModel::setMuted,
         onSetArchived = viewModel::setArchived,
         onDeleteBuffers = viewModel::deleteBuffers,
+        onAcceptInvitation = viewModel::acceptInvitation,
+        onIgnoreInvitation = viewModel::ignoreInvitation,
         onJoinChannel = viewModel::joinChannel,
         onMessageUser = { networkId, nick -> viewModel.messageUser(networkId, nick, onOpenBuffer) },
         // Round 5: drawer selection + connectivity + nav.
@@ -226,6 +234,8 @@ fun ChatListContent(
     onJoinChannel: (Long, String) -> Unit,
     onMessageUser: (Long, String) -> Unit,
     onDeleteBuffers: (Collection<ChatListRow>) -> Unit = {},
+    onAcceptInvitation: (Long) -> Unit = {},
+    onIgnoreInvitation: (Long) -> Unit = {},
     // Round 5 (plans/16 §3): drawer + scoping. Defaulted so previews stay terse.
     onSelectNetwork: (Long?) -> Unit = {},
     onConnect: (Long) -> Unit = {},
@@ -240,6 +250,7 @@ fun ChatListContent(
     selectedBufferId: Long? = null,
 ) {
     var archiveMode by rememberSaveable { mutableStateOf(false) }
+    var invitationMode by rememberSaveable { mutableStateOf(false) }
     var showSheet by remember { mutableStateOf(false) }
     var showMarkAllReadDialog by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState()
@@ -248,7 +259,7 @@ fun ChatListContent(
     // The per-row network tag is redundant once the list is scoped to one network.
     val showNetworkChip = state.networks.size > 1 && state.selectedNetworkId == null
     val visibleRows = if (archiveMode) state.archivedRows else state.rows
-    var selectedIds by rememberSaveable(archiveMode, state.selectedNetworkId) { mutableStateOf(emptyList<Long>()) }
+    var selectedIds by rememberSaveable(archiveMode, invitationMode, state.selectedNetworkId) { mutableStateOf(emptyList<Long>()) }
     val selectedRows = orderedSelectedRows(visibleRows, selectedIds)
     val selectionActive = selectedRows.isNotEmpty()
     var confirmRemoval by remember { mutableStateOf(false) }
@@ -265,11 +276,12 @@ fun ChatListContent(
     }
 
     // One ordered Back policy keeps drawer, transient selection, and archive mode independent.
-    BackHandler(enabled = drawerState.isOpen || selectionActive || archiveMode) {
+    BackHandler(enabled = drawerState.isOpen || selectionActive || archiveMode || invitationMode) {
         when {
             drawerState.isOpen -> scope.launch { drawerState.close() }
             selectionActive -> selectedIds = emptyList()
-            else -> archiveMode = false
+            archiveMode -> archiveMode = false
+            else -> invitationMode = false
         }
     }
 
@@ -281,6 +293,8 @@ fun ChatListContent(
                 selectedNetworkId = state.selectedNetworkId,
                 allUnread = state.allUnread,
                 allMentions = state.allMentions,
+                allUnreadIncomplete = state.allUnreadIncomplete,
+                allMentionsIncomplete = state.allMentionsIncomplete,
                 scopedUnreadCount = state.scopedUnreadCount,
                 allOffline = state.allOffline,
                 onSelectNetwork = { id ->
@@ -322,6 +336,8 @@ fun ChatListContent(
                         val scopedName = state.selectedNetworkName
                         if (selectionActive) {
                             Text(pluralStringResource(R.plurals.chatlist_selected_count, selectedRows.size, selectedRows.size))
+                        } else if (invitationMode) {
+                            Text(text = stringResource(R.string.chatlist_invitations), fontWeight = FontWeight.Bold)
                         } else if (archiveMode) {
                             Text(text = stringResource(R.string.chatlist_archived_chats), fontWeight = FontWeight.Bold)
                         } else if (scopedName != null) {
@@ -337,13 +353,20 @@ fun ChatListContent(
                     },
                     navigationIcon = {
                         IconButton(
-                            onClick = { if (selectionActive) selectedIds = emptyList() else if (archiveMode) archiveMode = false else scope.launch { drawerState.open() } },
+                            onClick = {
+                                when {
+                                    selectionActive -> selectedIds = emptyList()
+                                    invitationMode -> invitationMode = false
+                                    archiveMode -> archiveMode = false
+                                    else -> scope.launch { drawerState.open() }
+                                }
+                            },
                             modifier = Modifier.testTag("chatlist_selection_close"),
                         ) {
                             Icon(
-                                if (selectionActive || archiveMode) Icons.AutoMirrored.Filled.ArrowBack else Icons.Filled.Menu,
+                                if (selectionActive || archiveMode || invitationMode) Icons.AutoMirrored.Filled.ArrowBack else Icons.Filled.Menu,
                                 contentDescription = stringResource(
-                                    if (selectionActive) R.string.chatlist_selection_close else if (archiveMode) R.string.action_back else R.string.drawer_open,
+                                    if (selectionActive) R.string.chatlist_selection_close else if (archiveMode || invitationMode) R.string.action_back else R.string.drawer_open,
                                 ),
                             )
                         }
@@ -367,25 +390,25 @@ fun ChatListContent(
                             IconButton(onClick = { confirmRemoval = true }, modifier = Modifier.testTag("chatlist_selection_remove")) {
                                 Icon(Icons.Outlined.Delete, stringResource(R.string.chatlist_remove))
                             }
-                        } else {
-                        IconButton(onClick = onOpenSearch) {
-                            Icon(
-                                Icons.Outlined.Search,
-                                contentDescription = stringResource(R.string.chatlist_search),
-                            )
-                        }
-                        IconButton(onClick = onOpenSettings, modifier = Modifier.testTag("chatlist_open_settings")) {
-                            Icon(
-                                Icons.Outlined.Settings,
-                                contentDescription = stringResource(R.string.chatlist_settings),
-                            )
-                        }
+                        } else if (!archiveMode && !invitationMode) {
+                            IconButton(onClick = onOpenSearch) {
+                                Icon(
+                                    Icons.Outlined.Search,
+                                    contentDescription = stringResource(R.string.chatlist_search),
+                                )
+                            }
+                            IconButton(onClick = onOpenSettings, modifier = Modifier.testTag("chatlist_open_settings")) {
+                                Icon(
+                                    Icons.Outlined.Settings,
+                                    contentDescription = stringResource(R.string.chatlist_settings),
+                                )
+                            }
                         }
                     },
                 )
             },
             floatingActionButton = {
-                if (!selectionActive) FloatingActionButton(onClick = { showSheet = true }, modifier = Modifier.testTag("chatlist_new_conversation")) {
+                if (!selectionActive && !archiveMode && !invitationMode) FloatingActionButton(onClick = { showSheet = true }, modifier = Modifier.testTag("chatlist_new_conversation")) {
                     Icon(
                         Icons.Filled.Add,
                         contentDescription = stringResource(R.string.chatlist_new_conversation),
@@ -408,7 +431,8 @@ fun ChatListContent(
                         )
                     }
 
-                    if (!shouldRenderChatList(archiveMode, state.rows, state.archivedRows) && !state.loading) {
+                    val hasInvitationRoute = !archiveMode && state.invitations.any(ChatListInvitation::actionable)
+                    if (!invitationMode && !shouldRenderChatList(archiveMode, state.rows, state.archivedRows) && !hasInvitationRoute && !state.loading) {
                         val noNetworks = !archiveMode && state.networks.isEmpty()
                         EmptyState(
                             icon = if (archiveMode) Icons.Outlined.Archive else Icons.Outlined.Forum,
@@ -443,9 +467,14 @@ fun ChatListContent(
                         ChatList(
                             rows = visibleRows,
                             archivedRows = state.archivedRows,
+                            invitations = state.invitations,
                             archiveMode = archiveMode,
+                            invitationMode = invitationMode,
                             archiveRevealSignal = archiveRevealSignal,
                             onOpenArchive = { archiveMode = true },
+                            onOpenInvitations = { invitationMode = true },
+                            onAcceptInvitation = onAcceptInvitation,
+                            onIgnoreInvitation = onIgnoreInvitation,
                             presence = state.queryPresence,
                             friends = state.friends,
                             fools = state.fools,
@@ -588,9 +617,14 @@ internal object ChatListItemMotion {
 private fun ChatList(
     rows: List<ChatListRow>,
     archivedRows: List<ChatListRow>,
+    invitations: List<ChatListInvitation>,
     archiveMode: Boolean,
+    invitationMode: Boolean,
     archiveRevealSignal: Int,
     onOpenArchive: () -> Unit,
+    onOpenInvitations: () -> Unit,
+    onAcceptInvitation: (Long) -> Unit,
+    onIgnoreInvitation: (Long) -> Unit,
     presence: Map<Long, io.github.trevarj.motd.service.PresenceState>,
     friends: Set<String>,
     fools: Set<String>,
@@ -614,12 +648,13 @@ private fun ChatList(
     var foolsExpanded by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
-    val hasActiveRows = rows.isNotEmpty()
+    val actionableInvitationCount = invitations.count(ChatListInvitation::actionable)
+    val hasActiveRows = rows.isNotEmpty() || actionableInvitationCount > 0
     val hasArchivedRows = archivedRows.isNotEmpty()
     val archiveFolderHeight = 56.dp
     val archiveFolderGeometry = ArchiveFolderPullGeometry(with(LocalDensity.current) { archiveFolderHeight.toPx() })
-    val archiveFolderPullEligible = !archiveMode && hasActiveRows && hasArchivedRows
-    val archivedOnly = !archiveMode && !hasActiveRows && hasArchivedRows
+    val archiveFolderPullEligible = !archiveMode && !invitationMode && hasActiveRows && hasArchivedRows
+    val archivedOnly = !archiveMode && !invitationMode && !hasActiveRows && hasArchivedRows
     var archivePullState by remember { mutableStateOf(ArchiveFolderPullState()) }
     var archiveDisplayExposurePx by remember { mutableFloatStateOf(0f) }
     var archiveSettling by remember { mutableStateOf(false) }
@@ -822,36 +857,44 @@ private fun ChatList(
                 },
             contentPadding = PaddingValues(bottom = 88.dp),
         ) {
-            items(sections.pinned, key = { it.bufferId }) { row ->
-                SelectableChatListRow(
-                    row,
-                    presence[row.bufferId],
-                    isFriend = isFriendQuery(row, friends),
-                    multiNetwork,
-                    onOpenBuffer,
-                    archiveMode,
-                    selected = row.bufferId in selectedIds,
-                    active = row.bufferId == activeBufferId,
-                    selectionActive = selectionActive,
-                    onToggleSelection = onToggleSelection,
-                    onStartSelection = onStartSelection,
-                    onArchive = { onSetArchived(listOf(row.bufferId), !archiveMode) },
-                    modifier = Modifier.animateItem(
-                        fadeInSpec = ChatListItemMotion.fadeInSpec,
-                        fadeOutSpec = ChatListItemMotion.fadeOutSpec,
-                        placementSpec = ChatListItemMotion.placementSpec,
-                    ),
-                )
-            }
-            if (sections.friends.isNotEmpty()) {
-                item(key = "friends-header") {
-                    SectionHeader(stringResource(R.string.chatlist_friends))
+            if (invitationMode) {
+                if (invitations.isEmpty()) {
+                    item(key = "invitations-empty") {
+                        EmptyState(
+                            icon = Icons.Outlined.Mail,
+                            title = stringResource(R.string.chatlist_invitations_empty),
+                            message = null,
+                        )
+                    }
+                } else {
+                    items(invitations, key = { "invitation-${it.messageId}" }) { invitation ->
+                        InvitationListItem(
+                            invitation = invitation,
+                            onJoin = { onAcceptInvitation(invitation.messageId) },
+                            onIgnore = { onIgnoreInvitation(invitation.messageId) },
+                            modifier = Modifier.animateItem(
+                                fadeInSpec = ChatListItemMotion.fadeInSpec,
+                                fadeOutSpec = ChatListItemMotion.fadeOutSpec,
+                                placementSpec = ChatListItemMotion.placementSpec,
+                            ),
+                        )
+                    }
                 }
-                items(sections.friends, key = { it.bufferId }) { row ->
+            } else {
+                if (actionableInvitationCount > 0) {
+                    item(key = "invitations-folder") {
+                        InvitationsFolder(
+                            count = invitations.size,
+                            actionableCount = actionableInvitationCount,
+                            onOpen = onOpenInvitations,
+                        )
+                    }
+                }
+                items(sections.pinned, key = { it.bufferId }) { row ->
                     SelectableChatListRow(
                         row,
                         presence[row.bufferId],
-                        isFriend = true,
+                        isFriend = isFriendQuery(row, friends),
                         multiNetwork,
                         onOpenBuffer,
                         archiveMode,
@@ -868,73 +911,99 @@ private fun ChatList(
                         ),
                     )
                 }
-            }
-            if (sections.showRecentHeader) {
-                item(key = "recent-header") {
-                    SectionHeader(stringResource(R.string.chatlist_recent))
+                if (sections.friends.isNotEmpty()) {
+                    item(key = "friends-header") {
+                        SectionHeader(stringResource(R.string.chatlist_friends))
+                    }
+                    items(sections.friends, key = { it.bufferId }) { row ->
+                        SelectableChatListRow(
+                            row,
+                            presence[row.bufferId],
+                            isFriend = true,
+                            multiNetwork,
+                            onOpenBuffer,
+                            archiveMode,
+                            selected = row.bufferId in selectedIds,
+                            active = row.bufferId == activeBufferId,
+                            selectionActive = selectionActive,
+                            onToggleSelection = onToggleSelection,
+                            onStartSelection = onStartSelection,
+                            onArchive = { onSetArchived(listOf(row.bufferId), !archiveMode) },
+                            modifier = Modifier.animateItem(
+                                fadeInSpec = ChatListItemMotion.fadeInSpec,
+                                fadeOutSpec = ChatListItemMotion.fadeOutSpec,
+                                placementSpec = ChatListItemMotion.placementSpec,
+                            ),
+                        )
+                    }
                 }
-            }
-            items(sections.regular, key = { it.bufferId }) { row ->
-                SelectableChatListRow(
-                    row,
-                    presence[row.bufferId],
-                    isFriend = false,
-                    multiNetwork,
-                    onOpenBuffer,
-                    archiveMode,
-                    selected = row.bufferId in selectedIds,
-                    active = row.bufferId == activeBufferId,
-                    selectionActive = selectionActive,
-                    onToggleSelection = onToggleSelection,
-                    onStartSelection = onStartSelection,
-                    onArchive = { onSetArchived(listOf(row.bufferId), !archiveMode) },
-                    modifier = Modifier.animateItem(
-                        fadeInSpec = ChatListItemMotion.fadeInSpec,
-                        fadeOutSpec = ChatListItemMotion.fadeOutSpec,
-                        placementSpec = ChatListItemMotion.placementSpec,
-                    ),
-                )
-            }
-            if (sections.fools.isNotEmpty()) {
-                item(key = "fools-header") {
-                    FoolsSectionHeader(
-                        count = sections.fools.size,
-                        expanded = foolsExpanded,
-                        onToggle = {
-                            if (foolsExpanded) onRemoveSelection(sections.fools.map(ChatListRow::bufferId))
-                            foolsExpanded = !foolsExpanded
-                        },
+                if (sections.showRecentHeader) {
+                    item(key = "recent-header") {
+                        SectionHeader(stringResource(R.string.chatlist_recent))
+                    }
+                }
+                items(sections.regular, key = { it.bufferId }) { row ->
+                    SelectableChatListRow(
+                        row,
+                        presence[row.bufferId],
+                        isFriend = false,
+                        multiNetwork,
+                        onOpenBuffer,
+                        archiveMode,
+                        selected = row.bufferId in selectedIds,
+                        active = row.bufferId == activeBufferId,
+                        selectionActive = selectionActive,
+                        onToggleSelection = onToggleSelection,
+                        onStartSelection = onStartSelection,
+                        onArchive = { onSetArchived(listOf(row.bufferId), !archiveMode) },
+                        modifier = Modifier.animateItem(
+                            fadeInSpec = ChatListItemMotion.fadeInSpec,
+                            fadeOutSpec = ChatListItemMotion.fadeOutSpec,
+                            placementSpec = ChatListItemMotion.placementSpec,
+                        ),
                     )
                 }
-                if (foolsExpanded) {
-                    items(sections.fools, key = { it.bufferId }) { row ->
-                        Box(
-                            modifier = Modifier
-                                .animateItem(
-                                    fadeInSpec = ChatListItemMotion.fadeInSpec,
-                                    fadeOutSpec = ChatListItemMotion.fadeOutSpec,
-                                    placementSpec = ChatListItemMotion.placementSpec,
-                                ),
-                        ) {
-                            SelectableChatListRow(
-                                row = row,
-                                presence = presence[row.bufferId],
-                                isFriend = false,
-                                multiNetwork = multiNetwork,
-                                onOpenBuffer = onOpenBuffer,
-                                archiveMode = archiveMode,
-                                selected = row.bufferId in selectedIds,
-                                active = row.bufferId == activeBufferId,
-                                selectionActive = selectionActive,
-                                onToggleSelection = onToggleSelection,
-                                onStartSelection = onStartSelection,
-                                onArchive = { onSetArchived(listOf(row.bufferId), !archiveMode) },
-                            )
+                if (sections.fools.isNotEmpty()) {
+                    item(key = "fools-header") {
+                        FoolsSectionHeader(
+                            count = sections.fools.size,
+                            expanded = foolsExpanded,
+                            onToggle = {
+                                if (foolsExpanded) onRemoveSelection(sections.fools.map(ChatListRow::bufferId))
+                                foolsExpanded = !foolsExpanded
+                            },
+                        )
+                    }
+                    if (foolsExpanded) {
+                        items(sections.fools, key = { it.bufferId }) { row ->
+                            Box(
+                                modifier = Modifier
+                                    .animateItem(
+                                        fadeInSpec = ChatListItemMotion.fadeInSpec,
+                                        fadeOutSpec = ChatListItemMotion.fadeOutSpec,
+                                        placementSpec = ChatListItemMotion.placementSpec,
+                                    ),
+                            ) {
+                                SelectableChatListRow(
+                                    row = row,
+                                    presence = presence[row.bufferId],
+                                    isFriend = false,
+                                    multiNetwork = multiNetwork,
+                                    onOpenBuffer = onOpenBuffer,
+                                    archiveMode = archiveMode,
+                                    selected = row.bufferId in selectedIds,
+                                    active = row.bufferId == activeBufferId,
+                                    selectionActive = selectionActive,
+                                    onToggleSelection = onToggleSelection,
+                                    onStartSelection = onStartSelection,
+                                    onArchive = { onSetArchived(listOf(row.bufferId), !archiveMode) },
+                                )
+                            }
                         }
                     }
                 }
             }
-            }
+        }
 
         if (archiveFolderPullEligible && archiveDisplayExposurePx > 0f) {
             val overlayModifier = Modifier
@@ -951,7 +1020,7 @@ private fun ChatList(
             )
         }
 
-        if (!selectionActive) ViewportScrollToTopFab(
+        if (!selectionActive && !invitationMode) ViewportScrollToTopFab(
             listState = listState,
             sections = sections,
             foolsExpanded = foolsExpanded,
@@ -960,6 +1029,107 @@ private fun ChatList(
                 .align(Alignment.BottomEnd)
                 .padding(end = 16.dp, bottom = 88.dp),
         )
+    }
+}
+
+@Composable
+private fun InvitationsFolder(
+    count: Int,
+    actionableCount: Int,
+    onOpen: () -> Unit,
+) {
+    val detail = pluralStringResource(
+        R.plurals.chatlist_invitations_pending_count,
+        actionableCount,
+        actionableCount,
+    )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpen)
+            .testTag("chatlist_invitations_folder")
+            .padding(horizontal = 20.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Outlined.Mail, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+        Column(modifier = Modifier.padding(start = 16.dp).weight(1f)) {
+            Text(
+                text = pluralStringResource(R.plurals.chatlist_invitations_count, count, count),
+                fontWeight = FontWeight.Medium,
+            )
+            Text(text = detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun InvitationListItem(
+    invitation: ChatListInvitation,
+    onJoin: () -> Unit,
+    onIgnore: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val resolved = !invitation.actionable
+    val status = when (invitation.state) {
+        InviteState.JOINING -> stringResource(R.string.chatlist_invitation_joining)
+        InviteState.JOINED -> stringResource(R.string.chatlist_invitation_joined)
+        InviteState.DISMISSED -> stringResource(R.string.chatlist_invitation_ignored)
+        InviteState.FAILED -> stringResource(R.string.chatlist_invitation_failed)
+        else -> stringResource(R.string.chatlist_invitation_pending)
+    }
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .alpha(if (resolved) 0.56f else 1f)
+            .semantics { stateDescription = status }
+            .testTag("chatlist_invitation_${invitation.messageId}"),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = stringResource(R.string.chatlist_invitation_title, invitation.channel),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                text = stringResource(R.string.chatlist_invitation_from, invitation.inviter, invitation.networkName),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+            if (invitation.state == InviteState.FAILED) {
+                Text(
+                    text = stringResource(R.string.chatlist_invitation_failed_hint),
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
+            if (invitation.actionable) {
+                Row(
+                    modifier = Modifier.padding(top = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Button(
+                        onClick = onJoin,
+                        enabled = invitation.state != InviteState.JOINING,
+                        modifier = Modifier.testTag("chatlist_invitation_join_${invitation.messageId}"),
+                    ) {
+                        Text(if (invitation.state == InviteState.JOINING) status else stringResource(R.string.chatlist_invitation_join))
+                    }
+                    OutlinedButton(
+                        onClick = onIgnore,
+                        modifier = Modifier.testTag("chatlist_invitation_ignore_${invitation.messageId}"),
+                    ) {
+                        Text(stringResource(R.string.chatlist_invitation_ignore))
+                    }
+                }
+            } else {
+                Text(
+                    text = status,
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.padding(top = 12.dp),
+                )
+            }
+        }
     }
 }
 
@@ -1441,7 +1611,7 @@ private fun ChatListContentPreview() {
                         unreadCount = 2, mentionCount = 0,
                     ),
                 ),
-                connection = mapOf(1L to IrcClientState.Connecting),
+                connection = mapOf(1L to ConnectionState.Connecting),
                 networks = listOf(
                     NetworkEntity(
                         id = 1, name = "Libera", role = NetworkRole.DIRECT,

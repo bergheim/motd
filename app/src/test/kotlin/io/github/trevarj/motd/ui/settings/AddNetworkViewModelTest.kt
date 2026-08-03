@@ -8,8 +8,7 @@ import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
 import io.github.trevarj.motd.data.repo.NetworkRepository
 import io.github.trevarj.motd.data.prefs.PresetEnrollmentPrefs
-import io.github.trevarj.motd.irc.client.IrcClient
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.service.CertPrompt
 import io.github.trevarj.motd.service.ConnectionManager
 import io.github.trevarj.motd.ui.onboarding.AuthForm
@@ -78,12 +77,11 @@ class AddNetworkViewModelTest {
 
     /** ConnectionManager fake: drives connectionStates for a single network. */
     private class FakeConnectionManager : ConnectionManager {
-        override val connectionStates = MutableStateFlow<Map<Long, IrcClientState>>(emptyMap())
+        override val connectionStates = MutableStateFlow<Map<Long, ConnectionState>>(emptyMap())
         val connected = mutableListOf<Long>()
-        fun emit(id: Long, state: IrcClientState) {
+        fun emit(id: Long, state: ConnectionState) {
             connectionStates.value = connectionStates.value + (id to state)
         }
-        override fun clientFor(networkId: Long): IrcClient? = null
         override suspend fun startAll() = Unit
         override suspend fun stopAll() = Unit
         override suspend fun connect(networkId: Long) { connected += networkId }
@@ -160,7 +158,7 @@ class AddNetworkViewModelTest {
         assertEquals("account/libera", row.saslUser)
         assertEquals("account", row.username)
 
-        cm.emit(id, IrcClientState.Ready("motd", emptySet(), emptyMap()))
+        cm.emit(id, ConnectionState.Ready("motd"))
         runCurrent()
         assertTrue(done)
         assertTrue(id in bouncerPrefs.ids.value)
@@ -191,7 +189,7 @@ class AddNetworkViewModelTest {
         runCurrent()
         assertEquals(AddNetworkPhase.TESTING, vm.state.value.phase)
         val id = vm.state.value.networkId!!
-        cm.emit(id, IrcClientState.Ready("me", emptySet(), emptyMap()))
+        cm.emit(id, ConnectionState.Ready("me"))
         runCurrent()
         assertTrue(done)
         assertTrue(repo.networks.containsKey(id))   // row kept on success
@@ -209,7 +207,7 @@ class AddNetworkViewModelTest {
         vm.submit(onOpenBouncerNetworks = { routedTo = it }, onDone = {})
         runCurrent()
         val id = vm.state.value.networkId!!
-        cm.emit(id, IrcClientState.Ready("me", emptySet(), emptyMap()))
+        cm.emit(id, ConnectionState.Ready("me"))
         runCurrent()
         assertEquals(id, routedTo)
         assertEquals(NetworkRole.BOUNCER_ROOT, repo.networks[id]?.role)
@@ -224,7 +222,7 @@ class AddNetworkViewModelTest {
         vm.submit(onOpenBouncerNetworks = {}, onDone = {})
         runCurrent()
         val id = vm.state.value.networkId!!
-        cm.emit(id, IrcClientState.Failed("SASL failed", fatal = true))
+        cm.emit(id, ConnectionState.Failed("SASL failed", fatal = true))
         runCurrent()
         assertEquals(AddNetworkPhase.FAILED, vm.state.value.phase)
         assertEquals("SASL failed", vm.state.value.error)
@@ -240,7 +238,7 @@ class AddNetworkViewModelTest {
         vm.submit(onOpenBouncerNetworks = {}, onDone = {})
         runCurrent()
         val firstId = vm.state.value.networkId!!
-        cm.emit(firstId, IrcClientState.Failed("nope", fatal = true))
+        cm.emit(firstId, ConnectionState.Failed("nope", fatal = true))
         runCurrent()
         vm.retry(onOpenBouncerNetworks = {}, onDone = {})
         runCurrent()
@@ -274,7 +272,7 @@ class AddNetworkViewModelTest {
         vm.submit(onOpenBouncerNetworks = {}, onDone = {})
         runCurrent()
         val id = vm.state.value.networkId!!
-        cm.emit(id, IrcClientState.Failed("nope", fatal = true))
+        cm.emit(id, ConnectionState.Failed("nope", fatal = true))
         runCurrent()
         vm.saveAnyway { back = true }
         runCurrent()

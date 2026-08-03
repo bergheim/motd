@@ -1,7 +1,7 @@
 package io.github.trevarj.motd
 
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import io.github.trevarj.motd.data.repo.LinkPreview
 import io.github.trevarj.motd.data.repo.LinkPreviewKind
@@ -23,7 +23,7 @@ class LinkPreviewCardUiTest {
                 )
             }
         }
-        compose.onNodeWithTag("link_preview_text_body").assertIsDisplayed()
+        compose.onNodeWithTag("link_preview_text_body", useUnmergedTree = true).assertIsDisplayed()
     }
 
     @Test fun wikipedia_preview_exposes_its_article_extract() {
@@ -43,6 +43,6 @@ class LinkPreviewCardUiTest {
                 )
             }
         }
-        compose.onNodeWithTag("link_preview_wikipedia_body").assertIsDisplayed()
+        compose.onNodeWithTag("link_preview_wikipedia_body", useUnmergedTree = true).assertIsDisplayed()
     }
 }

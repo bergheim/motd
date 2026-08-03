@@ -27,7 +27,16 @@ class BatchEventMappingTest {
                 BatchChild.Message(msg("@time=2026-01-01T00:00:00Z :Alice!u@h QUIT :split")),
                 BatchChild.Message(msg("@time=2026-01-01T00:00:01Z :Bob!u@h QUIT :split")),
             ),
-        )
+        ).let { tree ->
+            tree.copy(
+                opening = tree.opening.copy(
+                    tags = mapOf(
+                        "msgid" to "split-event",
+                        "time" to "2026-01-01T00:00:02Z",
+                    ),
+                ),
+            )
+        }
         val history = batch(
             "history",
             "chathistory",
@@ -41,6 +50,8 @@ class BatchEventMappingTest {
         assertEquals(IrcEvent.NetworkBatchKind.NETSPLIT, event.kind)
         assertEquals("#room", event.target)
         assertEquals(listOf("Alice", "Bob"), event.events.map { (it as IrcEvent.Quit).nick })
+        assertEquals("split-event", event.historyMetadata?.msgid)
+        assertEquals(1_767_225_602_000L, event.historyMetadata?.serverTime)
     }
 
     @Test fun `malformed known batch recursively degrades while typed child survives unknown parent`() {

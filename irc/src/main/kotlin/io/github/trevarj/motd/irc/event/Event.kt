@@ -1,6 +1,8 @@
 package io.github.trevarj.motd.irc.event
 
 import io.github.trevarj.motd.irc.proto.IrcMessage
+import java.time.Instant
+import java.time.format.DateTimeParseException
 
 sealed interface IrcClientState {
     data object Disconnected : IrcClientState
@@ -26,6 +28,8 @@ data class MessageContext(
     val label: String?,       // labeled-response echo correlation
     val serverTimeSource: ServerTimeSource = ServerTimeSource.TAG,
     val isHistoryContext: Boolean = false,
+    /** Client-only IRCv3 tags, retained for feature-local protocol consumers. */
+    val clientTags: Map<String, String> = emptyMap(),
 )
 
 sealed interface IrcEvent {
@@ -67,15 +71,13 @@ sealed interface IrcEvent {
     ) {
         companion object {
             fun from(event: IrcEvent, ordinal: Int): PlaybackItem {
-                val context = event.messageContextOrNull()
+                val metadata = event.historyEventMetadataOrNull()
                 return PlaybackItem(
                     event = event,
                     ordinal = ordinal,
-                    isContext = context?.isHistoryContext == true,
-                    msgid = context?.msgid,
-                    serverTime = context?.takeIf {
-                        it.serverTimeSource == ServerTimeSource.TAG
-                    }?.serverTime,
+                    isContext = metadata?.isContext == true,
+                    msgid = metadata?.msgid,
+                    serverTime = metadata?.serverTime,
                 )
             }
         }
@@ -96,6 +98,7 @@ sealed interface IrcEvent {
         val serverB: String,
         val events: List<IrcEvent>,
         val target: String? = null,
+        val historyMetadata: HistoryEventMetadata? = null,
     ) : IrcEvent
     /** Compatibility wrapper for callers constructing native playback directly. */
     data class ReplayBatch(val target: String, val events: List<IrcEvent>) : IrcEvent
@@ -248,4 +251,40 @@ fun IrcEvent.messageContextOrNull(): MessageContext? = when (this) {
     is IrcEvent.StandardReply -> ctx
     is IrcEvent.MultilineRejected -> ctx
     else -> null
+}
+
+/** Wire metadata shared by mapped events and raw history-context fallbacks. */
+data class HistoryEventMetadata(
+    val isContext: Boolean,
+    val msgid: String?,
+    val serverTime: Long?,
+)
+
+fun IrcEvent.historyEventMetadataOrNull(): HistoryEventMetadata? {
+    messageContextOrNull()?.let { context ->
+        return HistoryEventMetadata(
+            isContext = context.isHistoryContext,
+            msgid = context.msgid,
+            serverTime = context.serverTime.takeIf { context.serverTimeSource == ServerTimeSource.TAG },
+        )
+    }
+    (this as? IrcEvent.NetworkBatch)?.historyMetadata?.let { return it }
+    val raw = (this as? IrcEvent.Raw)?.message ?: return null
+    val taggedTime = raw.tags["time"]?.let { value ->
+        try {
+            Instant.parse(value).toEpochMilli()
+        } catch (_: DateTimeParseException) {
+            null
+        }
+    }
+    if (
+        "draft/chathistory-context" !in raw.tags &&
+        "msgid" !in raw.tags &&
+        "time" !in raw.tags
+    ) return null
+    return HistoryEventMetadata(
+        isContext = "draft/chathistory-context" in raw.tags,
+        msgid = raw.tags["msgid"],
+        serverTime = taggedTime,
+    )
 }

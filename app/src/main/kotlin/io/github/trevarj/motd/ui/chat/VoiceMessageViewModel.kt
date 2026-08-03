@@ -63,6 +63,9 @@ data class VoiceMessageUiState(
     val notice: String? = null,
 )
 
+internal const val VOICE_PERMISSION_DENIED_ERROR =
+    "Microphone permission is required to record voice messages. Enable it in system settings and try again."
+
 @HiltViewModel
 class VoiceMessageViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
@@ -207,6 +210,11 @@ class VoiceMessageViewModel @Inject constructor(
 
     fun clearError() {
         _state.update { it.copy(error = null) }
+    }
+
+    /** A denied Android permission must remain visible instead of looking like a broken control. */
+    fun recordingPermissionDenied() {
+        _state.update { it.copy(error = VOICE_PERMISSION_DENIED_ERROR) }
     }
 
     fun clearNotice() {

@@ -6,7 +6,7 @@ e2e_audit_required_artifacts() {
   while IFS= read -r file; do
     base="${file##*/}"
     case "$base" in
-      summary.json|fixture.jsonl|pretest.json|started.jsonl|failure.json|route.json|semantics.json|lazy-state.json|connections.json|milestones.jsonl) ;;
+      summary.json|fixture.jsonl|pretest.json|started.jsonl|failure.json|route.json|semantics.json|lazy-state.json|connections.json|milestones.jsonl|timeline.json) ;;
       *) echo "privacy audit rejected unexpected artifact: $base" >&2; return 1 ;;
     esac
   done < <(find "$output_dir" -type f -print)

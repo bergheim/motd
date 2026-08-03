@@ -1,10 +1,12 @@
 package io.github.trevarj.motd
 
 import androidx.compose.ui.test.assertHeightIsAtLeast
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
+import io.github.trevarj.motd.ui.chat.CHAT_HISTORY_LOADING_TAG
 import io.github.trevarj.motd.ui.chat.CHAT_HISTORY_RETRY_TAG
 import io.github.trevarj.motd.ui.chat.ChatHistoryFooter
 import io.github.trevarj.motd.ui.chat.ChatHistoryUiState
@@ -18,11 +20,14 @@ class ChatHistoryFooterUiTest {
     val compose = createComposeRule()
 
     @Test
-    fun errorRetryHasStableTagAndMinimumTouchHeight() {
+    fun recoverableAppendErrorRetryHasStableTagAndMinimumTouchHeight() {
         var retries = 0
         compose.setContent {
             MotdTheme {
-                ChatHistoryFooter(ChatHistoryUiState.Error) { retries++ }
+                ChatHistoryFooter(
+                    state = ChatHistoryUiState.Retry,
+                    onRetry = { retries++ },
+                )
             }
         }
 
@@ -30,5 +35,21 @@ class ChatHistoryFooterUiTest {
             .assertHeightIsAtLeast(48.dp)
             .performClick()
         assertEquals(1, retries)
+    }
+
+    @Test
+    fun appendLoadingRendersShimmerFooter() {
+        compose.setContent {
+            MotdTheme {
+                ChatHistoryFooter(
+                    state = ChatHistoryUiState.Loading,
+                    onRetry = {},
+                )
+            }
+        }
+
+        // Scroll-driven APPEND surfaces the shimmer footer while an older page is in flight; there is
+        // no manual load-older affordance anymore.
+        compose.onNodeWithTag(CHAT_HISTORY_LOADING_TAG).assertIsDisplayed()
     }
 }

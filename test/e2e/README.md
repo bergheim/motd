@@ -13,20 +13,23 @@ setup and teardown deliberately clear application data.
 | Mode | Best for | Entry point |
 | --- | --- | --- |
 | Fast headless emulator | Default local feature validation; onboarding, chat, channel, settings, and bouncer journeys | `./test/e2e/headless.sh fast` |
-| Full headless emulator | Local A-I shell-runbook sweep | `./test/e2e/headless.sh full` |
+| Full headless emulator | Local A-H, J, R, then teardown shell-runbook sweep | `./test/e2e/headless.sh full` |
 | Public screenshot showcase | Deterministic chat list, conversation, and attachment-sheet captures | `./test/e2e/headless.sh showcase` |
 | Native local stack + USB device | Manual feature work, physical-device checks, quick iteration | `./test/e2e/local-stack.sh` |
-| Native ZNC + Ergo stack | ZNC playback, reconnect, SASL, and capability degradation | `./test/e2e/znc-stack.sh` |
-| Host-driven A–I runbook | Broad UI interaction and crash sweep on a device or emulator | `./test/e2e/runbook.sh` |
-| Managed-device fast suite | Alternate/manual CI execution of the fast journeys | `.github/workflows/smoke.yml` |
+| Native ZNC + Ergo stack | Scheduled ZNC playback, reconnect, SASL, and capability degradation | `./test/e2e/znc-stack.sh` |
+| Host-driven runbook | Broad UI interaction and crash sweep on a device or emulator | `./test/e2e/runbook.sh` |
+| Required hosted suites | Fast real-stack and managed-device component journeys | `.github/workflows/ci.yml` |
+| Managed-device component suite | All hermetic Compose/component instrumentation tests | `./test/e2e/component-suite.sh` |
 | Hermetic emulator run | Scheduled/manual exhaustive CI diagnostics | `.github/workflows/e2e.yml` |
 
 The fast headless suite is a required pull-request and main-branch CI gate. It
-runs exactly three isolated Kotlin journeys: TLS onboarding/import, one
-canonical echo/send/reconnect row, and bootstrapped navigation/settings/bouncer
-smoke. Host UIAutomator and the reconnect-window gap remain scheduled/manual;
-the exhaustive A-I workflow is diagnostics, not a required fast phase.
+runs exactly four isolated Kotlin journeys: TLS onboarding/import, one
+canonical echo/send/reconnect row, an 80-row second-client unread/history recovery,
+and bootstrapped navigation/settings/bouncer smoke. Host UIAutomator remains scheduled/manual;
+the exhaustive A-H/J/R/I workflow is diagnostics, not a required fast phase.
 Release CI still runs its own unit, lint, and FOSS release build checks.
+The required workflow also runs the 64 fixture-free component tests on a separate managed device,
+keeping UI-state coverage continuous without coupling those cases to Soju.
 
 ## Prerequisites
 
@@ -61,14 +64,16 @@ The lifecycle wrapper owns a dedicated AVD, emulator serial, native soju/ergo
 stack, adb reverse, and temporary state. Every adb command includes that serial,
 so an attached phone is never installed to, cleared, reversed, or reconfigured.
 Each method gets a fresh instrumentation process and cleared debug-app data;
-the direct launcher discovers exactly three annotated `Class#method` cases from
+the direct launcher discovers exactly four annotated `Class#method` cases from
 the installed test package, clears the target package before each one, and does
 not retain raw instrumentation output. CI and managed-device runs use the same
 fixture configuration and enforce isolation with Android Test Orchestrator.
-The three journeys cover:
+The four journeys cover:
 
 - onboarding, self-signed fixture trust, soju login, and network import;
 - one real UI send whose canonical Room event remains visible after reconnect; and
+- a second-client offline gap crossing a Paging window, first-unread viewport placement,
+  frozen read state, canonical ordering, exactly-once recovery, and deliberate read advancement; and
 - navigation, settings, themes, and Soju control-center panels.
 
 The production Activity, Room database, services, TLS transport, and bouncer
@@ -89,7 +94,8 @@ fast. Manage their lifecycle explicitly:
 ./test/e2e/headless.sh reset
 ```
 
-`full` runs the existing A-I uiautomator sweep on the same isolated emulator.
+`full` runs A-H, the safe Soju-control and retained-history phases J/R, then teardown phase I on
+the same isolated emulator. J/R intentionally precede I because teardown clears app state.
 `down` preserves the AVD; `reset` deletes only the wrapper's isolated AVD,
 stack, and state directories. Failures save a JSON summary and privacy-safe
 required-E2E structure under `test/e2e/artifacts/fast-suite/`; the fast gate
@@ -376,18 +382,21 @@ failure log.
 | A | Clean install, onboarding, TLS trust, bouncer import | Required |
 | B | Chat list, server drawer, connection state and scoping | Required |
 | C | Join, send, history, autocomplete, actions, reactions, reply, search | Required |
-| D | Channel info, topic, mute/pin, members, leave dialog | Diagnostic; live member state varies |
-| E | Channel browser and LIST search | Diagnostic |
-| F | Settings, themes, message presentation, delivery, networks, about | Diagnostic |
-| G | Compact and comfortable rendering | Diagnostic |
+| D | Channel info, topic, mute/pin, members, leave dialog | Required with the long-lived member fixture |
+| E | Channel browser and LIST search | Required |
+| F | Settings, themes, message presentation, delivery, networks, about | Required |
+| G | Compact and comfortable rendering | Required |
 | H | Inline image viewer | Conditional; skipped without a reachable seeded image |
 | I | Delete-chat cancellation, final crash sweep, clean reset | Required |
 | J | Soju control-center panels, admin discovery, safe console command | Required with the local admin fixture |
 | K | ntfy discovery, soju WebPush ACK, background/cold/Doze delivery, exactly-once notifications and visible rows | Conditional; skipped without F-Droid ntfy |
-| R | Force-stop, retained 40-row reconnect gap, soju stop/start, newest-window and older-scroll proof | Required when selected by fast connected/direct runs |
+| R | Force-stop, retained 40-row reconnect gap, soju stop/start, newest-window and older-scroll proof | Required in the scheduled/manual hermetic sweep |
 | S | Deterministic public screenshot showcase | Required when selected by `headless.sh showcase` |
 
-Phase K is intentionally excluded from the default A–I sweep because it needs an installed
+Phase E searches for the registered `#motd-browser` fixture through the IME, joins it, waits for
+the authoritative self-JOIN, and verifies that the new buffer reaches the chat list.
+
+Phase K is intentionally excluded from the default headless sweep because it needs an installed
 UnifiedPush distributor and network access to its HTTPS relay. With the native stack already up,
 run a clean debug-only proof using:
 
@@ -404,8 +413,8 @@ The runbook also snapshots all three global Android animation scales before disa
 and restores the exact original values on every normal exit, failure, or interruption. If the
 snapshot cannot be completed, it leaves the device's animation settings unchanged.
 
-The hermetic default is A–C. The scheduled/manual workflow may widen this to
-A–I. DM, mention, typing, member, and moderation checks need a live second
+The minimal committed environment is A–C. The scheduled/manual workflow widens this to
+A–H/J/R/I. DM, mention, typing, member, and moderation checks need a live second
 identity; missing optional fixture state is reported as a skip rather than a
 false failure.
 

@@ -4,14 +4,17 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.db.ChatListRow
+import io.github.trevarj.motd.data.db.InvitationEventRow
+import io.github.trevarj.motd.data.db.InviteState
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.prefs.SettingsRepository
 import io.github.trevarj.motd.data.prefs.OnboardingPrefs
 import io.github.trevarj.motd.data.repo.BufferRepository
 import io.github.trevarj.motd.data.repo.NetworkRepository
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.data.sync.InvitePayloadV1
 import io.github.trevarj.motd.service.ConnectionManager
 import io.github.trevarj.motd.service.ChannelCloseCoordinator
 import io.github.trevarj.motd.service.PresenceKey
@@ -31,7 +34,8 @@ data class ChatListState(
     val rows: List<ChatListRow> = emptyList(),
     /** Scoped archived rows; all global badges and drawer rollups deliberately exclude these. */
     val archivedRows: List<ChatListRow> = emptyList(),
-    val connection: Map<Long, IrcClientState> = emptyMap(),
+    val invitations: List<ChatListInvitation> = emptyList(),
+    val connection: Map<Long, ConnectionState> = emptyMap(),
     val queryPresence: Map<Long, PresenceState> = emptyMap(),
     val networks: List<NetworkEntity> = emptyList(),
     val loading: Boolean = true,
@@ -45,6 +49,10 @@ data class ChatListState(
     val allUnread: Int = 0, // "All chats" unread rollup (non-muted)
     val allMentions: Int = 0, // "All chats" mention rollup
 ) {
+    val allUnreadIncomplete: Boolean
+        get() = rows.any { !it.muted && it.unreadCountIncomplete }
+    val allMentionsIncomplete: Boolean
+        get() = rows.any { !it.muted && it.mentionCountIncomplete }
     /** Effective unread count for the current drawer scope; muted activity stays row-local. */
     val scopedUnreadCount: Int
         get() = rows.filterNot { it.type == BufferType.SERVER || it.muted }.sumOf { it.unreadCount }
@@ -55,7 +63,22 @@ data class ChatListState(
 
     /** Every network is absent from the map or Disconnected -> the "Go online" affordance shows. */
     val allOffline: Boolean
-        get() = networks.all { connection[it.id].let { s -> s == null || s is IrcClientState.Disconnected } }
+        get() = networks.all { connection[it.id].let { s -> s == null || s is ConnectionState.Disconnected } }
+}
+
+data class ChatListInvitation(
+    val messageId: Long,
+    val bufferId: Long,
+    val networkId: Long,
+    val networkName: String,
+    val inviter: String,
+    val channel: String,
+    val text: String,
+    val state: InviteState,
+    val serverTime: Long,
+) {
+    val actionable: Boolean
+        get() = state == InviteState.PENDING || state == InviteState.JOINING || state == InviteState.FAILED
 }
 
 @HiltViewModel
@@ -85,6 +108,7 @@ class ChatListViewModel @Inject constructor(
             if (settledIds.isNotEmpty()) archiveOverrides.value = archiveOverrides.value - settledIds
         }
         .combine(archiveOverrides, ::applyArchiveOverrides)
+    private val chatListData = chatListRows.combine(bufferRepository.observeInvitations(), ::Pair)
     private val settingsAndOnboarding = combine(
         settingsRepository.settings,
         onboardingPrefs.completed,
@@ -93,14 +117,15 @@ class ChatListViewModel @Inject constructor(
 
     val state: StateFlow<ChatListState> =
         combine(
-            chatListRows,
+            chatListData,
             networkRepository.observeNetworks(),
             connectionManager.connectionStates.combine(connectionManager.presenceStates) { connection, presence ->
                 connection to presence
             },
             settingsAndOnboarding,
             selection,
-        ) { rows, networks, connectionAndPresence, settingsAndOnboarding, selected ->
+        ) { listData, networks, connectionAndPresence, settingsAndOnboarding, selected ->
+            val (rows, invitationEvents) = listData
             val (connection, presence) = connectionAndPresence
             val (settings, onboardingComplete) = settingsAndOnboarding
             // If the selected network was deleted, fall back to the unified list.
@@ -109,14 +134,18 @@ class ChatListViewModel @Inject constructor(
 
             val scopedRows = scopeRows(rows, validSelection, networks)
             val (activeRows, archivedRows) = partitionArchivedRows(scopedRows)
+            val scopedBufferIds = scopedRows.mapTo(mutableSetOf(), ChatListRow::bufferId)
             ChatListState(
                 rows = activeRows,
                 archivedRows = archivedRows,
+                invitations = invitationEvents
+                    .filter { it.bufferId in scopedBufferIds }
+                    .mapNotNull(::toChatListInvitation),
                 connection = connection,
                 queryPresence = scopedRows.asSequence()
                     .filter { it.type == BufferType.QUERY }
                     .mapNotNull { row ->
-                        val normalize = connectionManager.clientFor(row.networkId)?.isupport?.let { it::normalize }
+                        val normalize = connectionManager.liveIdentityRules(row.networkId)?.let { it::normalize }
                             ?: return@mapNotNull null
                         presence[PresenceKey(row.networkId, normalize(row.displayName))]?.let { row.bufferId to it }
                     }
@@ -168,8 +197,24 @@ class ChatListViewModel @Inject constructor(
         }
     }
 
-    fun joinChannel(networkId: Long, channel: String) = viewModelScope.launch {
-        connectionManager.joinChannel(networkId, channel)
+    /**
+     * [rawInput] is the trimmed text the user typed in [NewConversationSheet]'s "join channel" tab —
+     * review fix: that shared composable used to apply an IRC-shaped `"#$input"` transform itself
+     * before this method ever saw it, so entering a bare XMPP room JID tried to join a `#`-prefixed
+     * target instead. [ConnectionManager.roomTargetSyntax] supplies whatever backend-specific
+     * transform applies (IRC's `#`-prefix; XMPP has none, so a null capability means "use verbatim").
+     */
+    fun joinChannel(networkId: Long, rawInput: String) = viewModelScope.launch {
+        val target = connectionManager.roomTargetSyntax(networkId)?.targetFor(rawInput) ?: rawInput
+        connectionManager.joinChannel(networkId, target)
+    }
+
+    fun acceptInvitation(messageId: Long) = viewModelScope.launch {
+        connectionManager.acceptInvite(messageId)
+    }
+
+    fun ignoreInvitation(messageId: Long) = viewModelScope.launch {
+        connectionManager.dismissInvite(messageId)
     }
 
     /**
@@ -250,6 +295,21 @@ class ChatListViewModel @Inject constructor(
     private companion object {
         const val KEY_SELECTED = "selected_network"
     }
+}
+
+internal fun toChatListInvitation(event: InvitationEventRow): ChatListInvitation? {
+    val payload = InvitePayloadV1.decode(event.eventPayload) ?: return null
+    return ChatListInvitation(
+        messageId = event.messageId,
+        bufferId = event.bufferId,
+        networkId = event.networkId,
+        networkName = event.networkName,
+        inviter = payload.inviter,
+        channel = payload.channel,
+        text = event.text,
+        state = event.inviteState,
+        serverTime = event.serverTime,
+    )
 }
 
 /** Pure selection seam: muted/SERVER/zero-unread rows never participate in mark-all. */

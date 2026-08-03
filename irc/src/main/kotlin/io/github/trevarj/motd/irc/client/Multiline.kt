@@ -47,8 +47,10 @@ internal fun planChatMessage(
     multilineLimits: MultilineLimits?,
     maxComponentBytes: Int = 400,
     forceLegacy: Boolean = false,
+    protocolTags: Map<String, String> = emptyMap(),
 ): MultilineSendPlan? {
     val baseTags = buildMap {
+        putAll(protocolTags)
         if (replyToMsgid != null) put("+reply", replyToMsgid)
         if (label != null) put("label", label)
     }

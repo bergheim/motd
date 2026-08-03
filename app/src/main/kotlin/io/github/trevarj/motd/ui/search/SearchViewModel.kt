@@ -5,18 +5,16 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.github.trevarj.motd.data.db.SearchHit
 import io.github.trevarj.motd.data.repo.SearchRepository
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.debounce
-import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import javax.inject.Inject
 
 /** Filter scope for the search screen. "current" only offered when launched with a bufferId. */
@@ -60,49 +58,78 @@ fun parseSearchQuery(raw: String): ParsedQuery {
     return ParsedQuery(text = rest.joinToString(" "), fromNick = fromNick)
 }
 
+/** True when [raw] contains no FTS text or sender-only filter to resolve. */
+fun isEmptySearchQuery(raw: String): Boolean =
+    parseSearchQuery(raw).let { it.text.isBlank() && it.fromNick == null }
+
+/** One logical result request. Results from an older key must never render under a newer one. */
+private data class SearchKey(
+    val rawQuery: String = "",
+    val scope: SearchScope = SearchScope.ALL,
+    val bufferId: Long? = null,
+) {
+    val hasBufferScope: Boolean get() = bufferId != null
+
+    fun emptyState() = SearchUiState(
+        rawQuery = rawQuery,
+        scope = scope,
+        hasBufferScope = hasBufferScope,
+    )
+
+    fun loadingState() = emptyState().copy(searching = true)
+}
+
 @HiltViewModel
 class SearchViewModel @Inject constructor(
     private val searchRepository: SearchRepository,
 ) : ViewModel() {
 
-    private val query = MutableStateFlow("")
-    private val scope = MutableStateFlow(SearchScope.ALL)
-
-    /** Set once from nav args; drives the "current buffer" chip availability + scoping. */
-    private var bufferId: Long? = null
-    private val hasBufferScope = MutableStateFlow(false)
+    /**
+     * State changes atomically by logical query/scope key. This lets the UI clear old results
+     * before the debounce while also preventing a late flow emission for a superseded key.
+     */
+    private val searchKey = MutableStateFlow(SearchKey())
 
     fun init(bufferId: Long?) {
-        this.bufferId = bufferId
-        hasBufferScope.value = bufferId != null
-        if (bufferId != null) scope.value = SearchScope.CURRENT
+        searchKey.update {
+            it.copy(
+                bufferId = bufferId,
+                scope = if (bufferId == null) SearchScope.ALL else SearchScope.CURRENT,
+            )
+        }
     }
 
-    @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
+    @OptIn(ExperimentalCoroutinesApi::class)
     val state: StateFlow<SearchUiState> =
-        combine(query, scope, hasBufferScope) { q, sc, hasScope -> Triple(q, sc, hasScope) }
-            .distinctUntilChanged()
-            // Debounce only the DB-hitting path so typing doesn't launch an FTS query per
-            // keystroke; a blank query short-circuits immediately so clearing results is instant.
-            .debounce { (q, _, _) -> if (parseSearchQuery(q).let { it.text.isBlank() && it.fromNick == null }) 0L else QUERY_DEBOUNCE_MS }
-            .flatMapLatest { (q, sc, hasScope) ->
-                val parsed = parseSearchQuery(q)
-                if (parsed.text.isBlank() && parsed.fromNick == null) {
-                    flowOf(SearchUiState(rawQuery = q, scope = sc, hasBufferScope = hasScope))
+        searchKey
+            .flatMapLatest { key ->
+                val parsed = parseSearchQuery(key.rawQuery)
+                if (isEmptySearchQuery(key.rawQuery)) {
+                    flowOf(key.emptyState())
                 } else {
-                    val scopeId = if (sc == SearchScope.CURRENT) bufferId else null
-                    searchRepository.search(parsed.text, scopeId).map { hits ->
-                        // `from:nick` is a client-side sender filter on top of the FTS results.
-                        val filtered = parsed.fromNick?.let { nick ->
-                            hits.filter { it.message.sender.equals(nick, ignoreCase = true) }
-                        } ?: hits
-                        SearchUiState(
-                            rawQuery = q,
-                            scope = sc,
-                            hasBufferScope = hasScope,
-                            groups = groupHits(filtered),
-                            searching = false,
-                        )
+                    flow {
+                        // Publish the key immediately. Only the repository call is debounced.
+                        emit(key.loadingState())
+                        delay(QUERY_DEBOUNCE_MS)
+                        val scopeId = if (key.scope == SearchScope.CURRENT) key.bufferId else null
+                        searchRepository.search(parsed.text, scopeId).collect { hits ->
+                            // flatMapLatest cancels the old collector. The explicit key guard
+                            // also blocks a result racing a synchronous key replacement.
+                            if (searchKey.value == key) {
+                                val filtered = parsed.fromNick?.let { nick ->
+                                    hits.filter { it.message.sender.equals(nick, ignoreCase = true) }
+                                } ?: hits
+                                emit(
+                                    SearchUiState(
+                                        rawQuery = key.rawQuery,
+                                        scope = key.scope,
+                                        hasBufferScope = key.hasBufferScope,
+                                        groups = groupHits(filtered),
+                                        searching = false,
+                                    ),
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -112,9 +139,9 @@ class SearchViewModel @Inject constructor(
                 initialValue = SearchUiState(),
             )
 
-    fun onQueryChange(q: String) { query.value = q }
+    fun onQueryChange(q: String) { searchKey.update { it.copy(rawQuery = q) } }
 
-    fun onScopeChange(s: SearchScope) { scope.value = s }
+    fun onScopeChange(s: SearchScope) { searchKey.update { it.copy(scope = s) } }
 
     private companion object {
         /** Wait for a typing pause before hitting the Room FTS query. */

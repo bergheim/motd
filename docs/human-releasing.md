@@ -90,7 +90,7 @@ creating or changing it, reload direnv and build the supported FOSS release:
 ```sh
 direnv allow
 MOTD_SOURCE_COMMIT="$(git rev-parse HEAD)" \
-  ./gradlew :app:assembleFossRelease --no-daemon --max-workers=1
+  ./gradlew :app:assembleFossRelease
 ```
 
 The signed APK is

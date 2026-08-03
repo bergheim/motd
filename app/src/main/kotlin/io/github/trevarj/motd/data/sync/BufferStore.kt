@@ -5,7 +5,9 @@ import io.github.trevarj.motd.data.db.AppStateEntity
 import io.github.trevarj.motd.data.db.BufferEntity
 import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.db.HistoryCursorEntity
+import io.github.trevarj.motd.data.db.HistoryGapEntity
 import io.github.trevarj.motd.data.db.MemberEntity
+import io.github.trevarj.motd.data.db.MessageEntity
 import io.github.trevarj.motd.data.db.MotdDatabase
 import io.github.trevarj.motd.data.db.RoomAliasEntity
 import io.github.trevarj.motd.data.db.RoomAliasNamespace
@@ -67,7 +69,10 @@ class BufferStore @Inject constructor(
                 )
                 dao.update(promoted)
                 dao.deleteDiscardedMessageIds(promoted.id)
-                if (nameCollision.dismissed) db.historyCursorDao().delete(promoted.id)
+                if (nameCollision.dismissed) {
+                    db.historyCursorDao().delete(promoted.id)
+                    db.historyGapDao().deleteForRoom(promoted.id)
+                }
                 aliasDao.deleteQueryAliases(promoted.id)
                 aliasDao.insertIgnore(
                     RoomAliasEntity(
@@ -276,15 +281,21 @@ class BufferStore @Inject constructor(
                 historyDiscardedThroughTime = discardedBoundary?.historyDiscardedThroughTime,
                 layoutDensityOverride = winner.layoutDensityOverride ?: loser.layoutDensityOverride,
             )
+            val mergedHistoryGaps = historyGapsForRoomMerge(winner.id, loser.id)
             bufferDao.update(result)
             aliasDao.repoint(loser.id, winner.id)
             canonicalTimeline.moveEventsToRoom(winner.networkId, loser.id, winner.id)
+            val canonicalMergedHistoryGaps = canonicalizeMergedHistoryGaps(
+                winner.id,
+                mergedHistoryGaps,
+            )
             aliasDao.copyMembers(loser.id, winner.id)
             aliasDao.deleteMembers(loser.id)
             aliasDao.copyReactions(loser.id, winner.id)
             aliasDao.deleteReactions(loser.id)
             mergeComposerDrafts(winner.id, loser.id)
             mergeHistoryCursors(winner.id, loser.id, result.historyComplete)
+            replaceMergedHistoryGaps(winner.id, loser.id, canonicalMergedHistoryGaps)
             bufferDao.copyDiscardedMessageIds(loser.id, winner.id)
             bufferDao.deleteDiscardedMessageIds(loser.id)
             aliasDao.repointRedirects(loser.id, winner.id)
@@ -296,6 +307,227 @@ class BufferStore @Inject constructor(
         }
         if (!nestedTransaction) drainCommittedRoomMerges()
         return merged
+    }
+
+    /** Preserve local islands supplied by the opposite room instead of hiding them in a stale gap. */
+    private suspend fun historyGapsForRoomMerge(
+        winnerId: RoomId,
+        loserId: RoomId,
+    ): List<HistoryGapEntity> {
+        val dao = db.historyGapDao()
+        val winnerRows = db.messageDao().historyRowsForMerge(winnerId)
+        val loserRows = db.messageDao().historyRowsForMerge(loserId)
+        val winnerGaps = dao.forRoom(winnerId)
+        val loserGaps = dao.forRoom(loserId)
+        return winnerGaps.flatMap { splitHistoryGap(it, loserRows, loserGaps) } +
+            loserGaps.flatMap { splitHistoryGap(it, winnerRows, winnerGaps) }
+    }
+
+    private fun splitHistoryGap(
+        gap: HistoryGapEntity,
+        oppositeRows: List<MessageEntity>,
+        oppositeGaps: List<HistoryGapEntity>,
+    ): List<HistoryGapEntity> {
+        val older = gapBoundary(gap, older = true)
+        val newer = gapBoundary(gap, older = false)
+        val inside = oppositeRows.filter { row ->
+            val anchor = TimelineAnchor(row.serverTime, row.id, row.timelineOrder)
+            anchor > older && anchor < newer
+        }
+        if (inside.isEmpty()) return listOf(gap)
+        val islands = mutableListOf<MutableList<MessageEntity>>()
+        inside.forEach { row ->
+            val current = islands.lastOrNull()
+            val separated = current?.lastOrNull()?.let { previous ->
+                val previousAnchor = TimelineAnchor(previous.serverTime, previous.id, previous.timelineOrder)
+                val rowAnchor = TimelineAnchor(row.serverTime, row.id, row.timelineOrder)
+                oppositeGaps.any { opposite ->
+                    gapBoundary(opposite, older = true) < rowAnchor &&
+                        gapBoundary(opposite, older = false) > previousAnchor
+                }
+            } ?: true
+            if (separated) islands += mutableListOf(row) else current += row
+        }
+        val segments = mutableListOf<Pair<HistoryMergeBoundary, HistoryMergeBoundary>>()
+        var cursor = HistoryMergeBoundary(
+            gap.olderMsgid,
+            gap.olderServerTime,
+            gap.olderEventId,
+            gap.olderTimelineOrder,
+        )
+        islands.forEach { island ->
+            val first = island.first().toHistoryMergeBoundary()
+            val last = island.last().toHistoryMergeBoundary()
+            segments += cursor to first
+            cursor = last
+        }
+        segments += cursor to HistoryMergeBoundary(
+            gap.newerMsgid,
+            gap.newerServerTime,
+            gap.newerEventId,
+            gap.newerTimelineOrder,
+        )
+        return segments.map { (left, right) ->
+            gap.copy(
+                id = 0,
+                olderMsgid = left.msgid,
+                olderServerTime = left.serverTime,
+                olderEventId = left.eventId,
+                olderTimelineOrder = left.timelineOrder,
+                newerMsgid = right.msgid,
+                newerServerTime = right.serverTime,
+                newerEventId = right.eventId,
+                newerTimelineOrder = right.timelineOrder,
+            )
+        }
+    }
+
+    private fun MessageEntity.toHistoryMergeBoundary() = HistoryMergeBoundary(
+        msgid,
+        serverTime,
+        id,
+        timelineOrder,
+    )
+
+    private data class HistoryMergeBoundary(
+        val msgid: String?,
+        val serverTime: Long,
+        val eventId: Long?,
+        val timelineOrder: Long?,
+    )
+
+    /** Resolve pre-move gap snapshots through any event coalescence performed during the move. */
+    private suspend fun canonicalizeMergedHistoryGaps(
+        winnerId: RoomId,
+        gaps: List<HistoryGapEntity>,
+    ): List<HistoryGapEntity> = gaps.mapNotNull { gap ->
+        val older = canonicalHistoryMergeBoundary(
+            winnerId,
+            gap.olderMsgid,
+            gap.olderServerTime,
+            gap.olderEventId,
+            gap.olderTimelineOrder,
+        )
+        val newer = canonicalHistoryMergeBoundary(
+            winnerId,
+            gap.newerMsgid,
+            gap.newerServerTime,
+            gap.newerEventId,
+            gap.newerTimelineOrder,
+        )
+        val olderAnchor = TimelineAnchor(
+            older.serverTime,
+            older.eventId ?: Long.MIN_VALUE,
+            older.timelineOrder ?: older.eventId ?: Long.MIN_VALUE,
+        )
+        val newerAnchor = TimelineAnchor(
+            newer.serverTime,
+            newer.eventId ?: Long.MAX_VALUE,
+            newer.timelineOrder ?: newer.eventId ?: Long.MAX_VALUE,
+        )
+        if (olderAnchor > newerAnchor || (olderAnchor == newerAnchor && gap.recoverable)) {
+            null
+        } else {
+            gap.copy(
+                olderMsgid = older.msgid,
+                olderServerTime = older.serverTime,
+                olderEventId = older.eventId,
+                olderTimelineOrder = older.timelineOrder,
+                newerMsgid = newer.msgid,
+                newerServerTime = newer.serverTime,
+                newerEventId = newer.eventId,
+                newerTimelineOrder = newer.timelineOrder,
+            )
+        }
+    }
+
+    private suspend fun canonicalHistoryMergeBoundary(
+        winnerId: RoomId,
+        msgid: String?,
+        serverTime: Long,
+        eventId: Long?,
+        timelineOrder: Long?,
+    ): HistoryMergeBoundary {
+        val canonical = msgid?.let { db.messageDao().byMsgid(winnerId, it) }
+            ?: eventId?.let { db.messageDao().byCanonicalId(it) }?.takeIf { it.bufferId == winnerId }
+        return canonical?.let { row ->
+            HistoryMergeBoundary(row.msgid ?: msgid, row.serverTime, row.id, row.timelineOrder)
+        } ?: HistoryMergeBoundary(msgid, serverTime, eventId, timelineOrder)
+    }
+
+    private fun gapBoundary(gap: HistoryGapEntity, older: Boolean): TimelineAnchor {
+        val time = if (older) gap.olderServerTime else gap.newerServerTime
+        val eventId = if (older) gap.olderEventId else gap.newerEventId
+        val order = if (older) gap.olderTimelineOrder else gap.newerTimelineOrder
+        val fallback = if (older) Long.MIN_VALUE else Long.MAX_VALUE
+        return TimelineAnchor(time, eventId ?: fallback, order ?: eventId ?: fallback)
+    }
+
+    /** Coalesce only provably overlapping intervals after both rooms' local islands are retained. */
+    private suspend fun replaceMergedHistoryGaps(
+        winnerId: RoomId,
+        loserId: RoomId,
+        gaps: List<HistoryGapEntity>,
+    ) {
+        val dao = db.historyGapDao()
+        val merged = mutableListOf<HistoryGapEntity>()
+        gaps.sortedWith(compareBy<HistoryGapEntity> { it.olderServerTime }.thenBy { it.newerServerTime })
+            .forEach { gap ->
+                val previous = merged.lastOrNull()
+                // Opaque msgids have no sortable order. Merely touching at one millisecond cannot
+                // prove two intervals overlap, especially when an entire server page shares time.
+                if (
+                    previous == null ||
+                    gap.recoverable != previous.recoverable ||
+                    gap.olderServerTime >= previous.newerServerTime
+                ) {
+                    merged += gap.copy(id = 0, roomId = winnerId)
+                } else if (
+                    gap.olderServerTime == previous.olderServerTime &&
+                    !sameOlderHistoryBoundary(previous, gap)
+                ) {
+                    merged += gap.copy(id = 0, roomId = winnerId)
+                } else if (gap.newerServerTime > previous.newerServerTime) {
+                    merged[merged.lastIndex] = previous.copy(
+                        newerMsgid = gap.newerMsgid,
+                        newerServerTime = gap.newerServerTime,
+                        newerEventId = gap.newerEventId,
+                        newerTimelineOrder = gap.newerTimelineOrder,
+                    )
+                } else if (
+                    gap.newerServerTime == previous.newerServerTime &&
+                    !sameNewerHistoryBoundary(previous, gap)
+                ) {
+                    merged += gap.copy(id = 0, roomId = winnerId)
+                }
+            }
+        dao.deleteForRoom(winnerId)
+        dao.deleteForRoom(loserId)
+        merged.forEach { dao.insert(it.copy(id = 0)) }
+    }
+
+    private fun sameNewerHistoryBoundary(
+        left: HistoryGapEntity,
+        right: HistoryGapEntity,
+    ): Boolean = when {
+        left.newerMsgid != null && right.newerMsgid != null ->
+            left.newerMsgid == right.newerMsgid
+        left.newerEventId != null && right.newerEventId != null ->
+            left.newerEventId == right.newerEventId &&
+                left.newerTimelineOrder == right.newerTimelineOrder
+        else -> false
+    }
+
+    private fun sameOlderHistoryBoundary(
+        left: HistoryGapEntity,
+        right: HistoryGapEntity,
+    ): Boolean = when {
+        left.olderMsgid != null && right.olderMsgid != null ->
+            left.olderMsgid == right.olderMsgid
+        left.olderEventId != null && right.olderEventId != null ->
+            left.olderEventId == right.olderEventId &&
+                left.olderTimelineOrder == right.olderTimelineOrder
+        else -> false
     }
 
     /** Apply an IRCv3 channel rename while retiring the old channel alias. */

@@ -11,7 +11,7 @@ import io.github.trevarj.motd.data.repo.NetworkRepository
 import io.github.trevarj.motd.data.prefs.BouncerKindPrefs
 import io.github.trevarj.motd.data.prefs.NoopBouncerKindPrefs
 import io.github.trevarj.motd.data.prefs.PresetEnrollmentPrefs
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.service.ConnectionManager
 import io.github.trevarj.motd.ui.onboarding.AuthForm
 import io.github.trevarj.motd.ui.onboarding.AuthMode
@@ -39,7 +39,7 @@ data class AddNetworkUiState(
     val phase: AddNetworkPhase = AddNetworkPhase.FORM,
     val networkId: Long? = null,          // created row during the connect test
     val provisionalCreated: Boolean = false,
-    val connState: IrcClientState? = null,
+    val connState: ConnectionState? = null,
     val error: String? = null,
     val presetId: NetworkPresetId = NetworkPresetId.CUSTOM,
     val showPlaintextWarning: Boolean = false,
@@ -186,12 +186,12 @@ class AddNetworkViewModel @Inject constructor(
                 val cs = states[networkId] ?: return@collect
                 _state.value = _state.value.copy(connState = cs)
                 when (cs) {
-                    is IrcClientState.Ready -> if (!completionHandled) {
+                    is ConnectionState.Ready -> if (!completionHandled) {
                         completionHandled = true
                         if (_state.value.isZnc) bouncerKindPrefs.markZnc(networkId)
                         if (_state.value.isSoju) onOpenBouncerNetworks(networkId) else onDone()
                     }
-                    is IrcClientState.Failed ->
+                    is ConnectionState.Failed ->
                         _state.value = _state.value.copy(phase = AddNetworkPhase.FAILED, error = cs.reason)
                     else -> Unit
                 }

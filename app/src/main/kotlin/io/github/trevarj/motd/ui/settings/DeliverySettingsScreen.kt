@@ -15,6 +15,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,6 +45,17 @@ fun DeliverySettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(viewModel) { viewModel.refreshNotificationPermission() }
+    DisposableEffect(lifecycleOwner, viewModel) {
+        val observer = object : DefaultLifecycleObserver {
+            override fun onResume(owner: LifecycleOwner) {
+                viewModel.refreshNotificationPermission()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     DeliverySettingsContent(
         deliveryMode = state.settings.deliveryMode,
         pushAvailability = state.pushAvailability,
@@ -77,13 +93,17 @@ fun DeliverySettingsContent(
                 onInstallDistributor = { context.startActivity(Intent(Intent.ACTION_VIEW, distributorUrl.toUri())) },
                 onChooseDistributor = { showDistributorChooser = true },
                 onRetryPush = onRetryPush,
-                onFixNotifications = {
-                    context.startActivity(
-                        Intent(AndroidSettings.ACTION_APP_NOTIFICATION_SETTINGS)
-                            .putExtra(AndroidSettings.EXTRA_APP_PACKAGE, context.packageName),
-                    )
-                },
             )
+            if (!pushAvailability.notificationsGranted) {
+                NotificationPermissionWarning(
+                    onFixNotifications = {
+                        context.startActivity(
+                            Intent(AndroidSettings.ACTION_APP_NOTIFICATION_SETTINGS)
+                                .putExtra(AndroidSettings.EXTRA_APP_PACKAGE, context.packageName),
+                        )
+                    },
+                )
+            }
         }
         SettingsGroup(title = stringResource(R.string.settings_background_reliability)) {
             ListItem(
@@ -150,7 +170,6 @@ private fun DeliveryGroup(
     onInstallDistributor: () -> Unit,
     onChooseDistributor: () -> Unit,
     onRetryPush: () -> Unit,
-    onFixNotifications: () -> Unit,
 ) {
     Column(Modifier.selectableGroup()) {
         RadioRow(
@@ -211,7 +230,6 @@ private fun DeliveryGroup(
                 availability = availability,
                 onChooseDistributor = onChooseDistributor,
                 onRetry = onRetryPush,
-                onFixNotifications = onFixNotifications,
             )
         }
     }
@@ -222,7 +240,6 @@ private fun PushStatusCard(
     availability: PushAvailability,
     onChooseDistributor: () -> Unit,
     onRetry: () -> Unit,
-    onFixNotifications: () -> Unit,
 ) {
     val title = stringResource(
         when (availability.setupStatus) {
@@ -278,12 +295,27 @@ private fun PushStatusCard(
                     modifier = Modifier.testTag("settings_push_retry"),
                 ) { Text(stringResource(R.string.settings_delivery_push_retry)) }
             }
-            if (!availability.notificationsGranted) {
-                TextButton(
-                    onClick = onFixNotifications,
-                    modifier = Modifier.testTag("settings_push_fix_notifications"),
-                ) { Text(stringResource(R.string.settings_delivery_push_fix_notifications)) }
-            }
+        }
+    }
+}
+
+@Composable
+private fun NotificationPermissionWarning(onFixNotifications: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .testTag("settings_notification_permission_warning"),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text(
+                stringResource(R.string.settings_delivery_notifications_blocked),
+                style = androidx.compose.material3.MaterialTheme.typography.titleMedium,
+            )
+            Text(stringResource(R.string.settings_delivery_notifications_blocked_desc))
+            TextButton(
+                onClick = onFixNotifications,
+                modifier = Modifier.testTag("settings_fix_notifications"),
+            ) { Text(stringResource(R.string.settings_delivery_push_fix_notifications)) }
         }
     }
 }

@@ -15,19 +15,23 @@ import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.repo.BufferRepository
 import io.github.trevarj.motd.data.repo.NetworkIgnoreRepository
 import io.github.trevarj.motd.data.repo.NoopNetworkIgnoreRepository
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.irc.proto.IrcMessage
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
+import io.github.trevarj.motd.ircbackend.IrcSessions
 import io.github.trevarj.motd.service.ConnectionManager
 import io.github.trevarj.motd.service.RosterLoadState
 import io.github.trevarj.motd.ui.chat.ComposerDraftStore
+import io.github.trevarj.motd.service.parseWhois
 import io.github.trevarj.motd.ui.chat.NickSheetState
 import io.github.trevarj.motd.ui.chat.WhoisInfo
-import io.github.trevarj.motd.ui.chat.parseWhois
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
@@ -60,6 +64,26 @@ data class ChannelInfoUiState(
     val connected: Boolean = false,
 )
 
+/** Local write acceptance, distinct from a later server echo or numeric rejection. */
+sealed interface TopicMutationState {
+    data object Idle : TopicMutationState
+    data object Submitting : TopicMutationState
+    data object Accepted : TopicMutationState
+    data object Failed : TopicMutationState
+}
+
+/** Local PART write acceptance, distinct from a later self-PART echo or server rejection. */
+sealed interface LeaveMutationState {
+    data object Idle : LeaveMutationState
+    data object Submitting : LeaveMutationState
+    data object Failed : LeaveMutationState
+}
+
+/** One-shot screen effects emitted only after a local operation is accepted. */
+sealed interface ChannelInfoOperationEvent {
+    data object LeaveAccepted : ChannelInfoOperationEvent
+}
+
 internal data class RosterPresentation(val memberCount: Int?, val hasStaleMembers: Boolean)
 
 internal fun rosterPresentation(cachedCount: Int, state: RosterLoadState): RosterPresentation =
@@ -73,6 +97,7 @@ internal fun rosterPresentation(cachedCount: Int, state: RosterLoadState): Roste
 class ChannelInfoViewModel @Inject constructor(
     private val bufferRepository: BufferRepository,
     private val connectionManager: ConnectionManager,
+    private val ircSessions: IrcSessions,
     private val draftStore: ComposerDraftStore,
     private val settingsRepository: SettingsRepository,
     private val userDao: UserDao,
@@ -81,6 +106,12 @@ class ChannelInfoViewModel @Inject constructor(
 ) : ViewModel() {
 
     private val bufferIdFlow = MutableStateFlow<Long?>(null)
+    private val _topicMutation = MutableStateFlow<TopicMutationState>(TopicMutationState.Idle)
+    val topicMutation: StateFlow<TopicMutationState> = _topicMutation
+    private val _leaveMutation = MutableStateFlow<LeaveMutationState>(LeaveMutationState.Idle)
+    val leaveMutation: StateFlow<LeaveMutationState> = _leaveMutation
+    private val _operationEvents = MutableSharedFlow<ChannelInfoOperationEvent>(extraBufferCapacity = 1)
+    val operationEvents: SharedFlow<ChannelInfoOperationEvent> = _operationEvents.asSharedFlow()
 
     fun init(bufferId: Long) {
         bufferIdFlow.value = bufferId
@@ -142,7 +173,7 @@ class ChannelInfoViewModel @Inject constructor(
         } else {
             connectionManager.lagStates
                 .combine(connectionManager.connectionStates) { lags, states ->
-                    lags[buffer.networkId] to (states[buffer.networkId] is IrcClientState.Ready)
+                    lags[buffer.networkId] to (states[buffer.networkId] is ConnectionState.Ready)
                 }
         }
     }
@@ -152,9 +183,9 @@ class ChannelInfoViewModel @Inject constructor(
             bufferFlow,
             membersFlow,
             derivedRosterFlow,
-            connectionManager.rosterStates,
+            connectionManager.memberLoadStates,
             networkLagFlow,
-        ) { buffer, members, derived, rosterStates, networkLag ->
+        ) { buffer, members, derived, memberLoadStates, networkLag ->
             val (lagMs, connected) = networkLag
             val order = prefixOrderForBuffer(buffer)
             val identityRules = derived.identityRules
@@ -175,7 +206,7 @@ class ChannelInfoViewModel @Inject constructor(
                 foolMembers = emptyList()
                 searchResults = rankMembersFuzzy(derived.query, members, identityRules::normalize, lookup)
             }
-            val rosterState = buffer?.let { rosterStates[it.id] } ?: RosterLoadState.NOT_LOADED
+            val rosterState = buffer?.let { memberLoadStates[it.id] } ?: RosterLoadState.NOT_LOADED
             val presentation = rosterPresentation(members.size, rosterState)
             ChannelInfoUiState(
                 buffer = buffer,
@@ -206,7 +237,7 @@ class ChannelInfoViewModel @Inject constructor(
     // Resolve prefix order from the live client's ISUPPORT when connected; fallback otherwise.
     private fun prefixOrderForBuffer(buffer: BufferEntity?): String {
         val networkId = buffer?.networkId ?: return DEFAULT_PREFIX_ORDER
-        val client = connectionManager.clientFor(networkId) ?: return DEFAULT_PREFIX_ORDER
+        val client = ircSessions.sessionFor(networkId) ?: return DEFAULT_PREFIX_ORDER
         return prefixOrderFrom(client.isupport.prefixModes)
     }
 
@@ -218,9 +249,38 @@ class ChannelInfoViewModel @Inject constructor(
         state.value.buffer?.let { bufferRepository.setMuted(it.id, muted) }
     }
 
-    fun part(onDone: () -> Unit) = viewModelScope.launch {
-        state.value.buffer?.let { connectionManager.partChannel(it.id) }
-        onDone()
+    /** Reset a previous local PART failure before showing the leave confirmation. */
+    fun beginLeave() {
+        _leaveMutation.value = LeaveMutationState.Idle
+    }
+
+    /**
+     * Leave only after the live transport accepts PART. This is deliberately not durable: a
+     * later server rejection still needs labeled-response correlation (or the self-PART echo).
+     */
+    fun part() {
+        if (_leaveMutation.value is LeaveMutationState.Submitting) return
+        val bufferId = bufferIdFlow.value
+        if (bufferId == null) {
+            _leaveMutation.value = LeaveMutationState.Failed
+            return
+        }
+        _leaveMutation.value = LeaveMutationState.Submitting
+        viewModelScope.launch {
+            val accepted = try {
+                connectionManager.partChannelForClose(bufferId)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                false
+            }
+            if (accepted) {
+                _leaveMutation.value = LeaveMutationState.Idle
+                _operationEvents.emit(ChannelInfoOperationEvent.LeaveAccepted)
+            } else {
+                _leaveMutation.value = LeaveMutationState.Failed
+            }
+        }
     }
 
     /** Open (or create) a DM with [nick], then hand the buffer id to [onOpen]. */
@@ -276,8 +336,9 @@ class ChannelInfoViewModel @Inject constructor(
         _nickSheet.value = NickSheetState(nick = nick)
         val networkId = state.value.buffer?.networkId ?: return
         viewModelScope.launch { state.value.buffer?.let { connectionManager.requestMembers(it.id) } }
-        val client = connectionManager.clientFor(networkId)
-        val normalized = client?.isupport?.normalize(nick) ?: state.value.identityRules.normalize(nick)
+        val client = ircSessions.sessionFor(networkId)
+        val normalized =
+            (connectionManager.liveIdentityRules(networkId) ?: state.value.identityRules).normalize(nick)
         nickDetailsJob?.cancel()
         nickDetailsJob = viewModelScope.launch {
             combine(
@@ -317,7 +378,7 @@ class ChannelInfoViewModel @Inject constructor(
     fun setMemberMode(nick: String, mode: Char, grant: Boolean) = viewModelScope.launch {
         val buffer = state.value.buffer ?: return@launch
         val flag = (if (grant) "+" else "-") + mode
-        connectionManager.clientFor(buffer.networkId)
+        ircSessions.sessionFor(buffer.networkId)
             ?.send(IrcMessage(command = "MODE", params = listOf(buffer.ircTarget, flag, nick)))
     }
 
@@ -329,13 +390,13 @@ class ChannelInfoViewModel @Inject constructor(
         } else {
             listOf(buffer.ircTarget, nick, reason)
         }
-        connectionManager.clientFor(buffer.networkId)?.send(IrcMessage(command = "KICK", params = params))
+        ircSessions.sessionFor(buffer.networkId)?.send(IrcMessage(command = "KICK", params = params))
     }
 
     /** MODE <channel> +b <banMask(nick)>. */
     fun ban(nick: String) = viewModelScope.launch {
         val buffer = state.value.buffer ?: return@launch
-        connectionManager.clientFor(buffer.networkId)
+        ircSessions.sessionFor(buffer.networkId)
             ?.send(IrcMessage(command = "MODE", params = listOf(buffer.ircTarget, "+b", banMask(nick))))
     }
 
@@ -343,14 +404,14 @@ class ChannelInfoViewModel @Inject constructor(
         val buffer = state.value.buffer ?: return@launch
         val trimmed = mask.trim().takeIf(String::isNotBlank) ?: return@launch
         val flag = if (grant) "+b" else "-b"
-        connectionManager.clientFor(buffer.networkId)
+        ircSessions.sessionFor(buffer.networkId)
             ?.send(IrcMessage(command = "MODE", params = listOf(buffer.ircTarget, flag, trimmed)))
     }
 
     fun invite(nick: String) = viewModelScope.launch {
         val buffer = state.value.buffer ?: return@launch
         val trimmed = nick.trim().takeIf(String::isNotBlank) ?: return@launch
-        connectionManager.clientFor(buffer.networkId)
+        ircSessions.sessionFor(buffer.networkId)
             ?.send(IrcMessage(command = "INVITE", params = listOf(trimmed, buffer.ircTarget)))
     }
 
@@ -359,17 +420,40 @@ class ChannelInfoViewModel @Inject constructor(
         val trimmedModes = modes.trim().takeIf(String::isNotBlank) ?: return@launch
         val params = listOf(buffer.ircTarget, trimmedModes) +
             args.split(' ').map(String::trim).filter(String::isNotBlank)
-        connectionManager.clientFor(buffer.networkId)?.send(IrcMessage(command = "MODE", params = params))
+        ircSessions.sessionFor(buffer.networkId)?.send(IrcMessage(command = "MODE", params = params))
+    }
+
+    /** Reset a previous local result before opening the editor again. */
+    fun beginTopicEdit() {
+        _topicMutation.value = TopicMutationState.Idle
     }
 
     /**
-     * Set the channel topic (plans/16 §5.8). Always offered (op requirements vary per channel); a
-     * 482 error lands in the server buffer. The TopicChanged echo updates Room reactively.
+     * Set the channel topic. Acceptance only means a Ready client wrote TOPIC to its live
+     * transport; a later TopicChanged echo owns the Room update and numeric 482 stays separate.
      */
-    fun setTopic(topic: String) = viewModelScope.launch {
-        val buffer = state.value.buffer ?: return@launch
-        connectionManager.clientFor(buffer.networkId)
-            ?.send(IrcMessage(command = "TOPIC", params = listOf(buffer.ircTarget, topic)))
+    fun setTopic(topic: String) {
+        if (_topicMutation.value is TopicMutationState.Submitting) return
+        val bufferId = bufferIdFlow.value
+        if (bufferId == null) {
+            _topicMutation.value = TopicMutationState.Failed
+            return
+        }
+        _topicMutation.value = TopicMutationState.Submitting
+        viewModelScope.launch {
+            val accepted = try {
+                connectionManager.setChannelTopic(bufferId, topic)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                false
+            }
+            _topicMutation.value = if (accepted) {
+                TopicMutationState.Accepted
+            } else {
+                TopicMutationState.Failed
+            }
+        }
     }
 
     /**
@@ -378,8 +462,8 @@ class ChannelInfoViewModel @Inject constructor(
      */
     private fun viewerCanModerate(buffer: BufferEntity?, members: List<MemberEntity>, prefixOrder: String): Boolean {
         if (buffer?.type != BufferType.CHANNEL) return false
-        val client = connectionManager.clientFor(buffer.networkId) ?: return false
-        val myNick = (connectionManager.connectionStates.value[buffer.networkId] as? IrcClientState.Ready)?.nick
+        val client = ircSessions.sessionFor(buffer.networkId) ?: return false
+        val myNick = (connectionManager.connectionStates.value[buffer.networkId] as? ConnectionState.Ready)?.selfHandle
             ?: return false
         val normalize: (String) -> String = { client.isupport.normalize(it) }
         val me = members.firstOrNull { normalize(it.nick) == normalize(myNick) } ?: return false

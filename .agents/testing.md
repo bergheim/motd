@@ -21,7 +21,7 @@ FOSS lint and debug assembly:
 ```sh
 nix develop -c ./gradlew \
   :app:lintFossDebug :app:assembleFossDebug \
-  --stacktrace --no-daemon --max-workers=1
+  --stacktrace
 ```
 
 Full release-parity Gradle verification:
@@ -31,14 +31,18 @@ nix develop .#native -c ./gradlew \
   :irc:build \
   :app:testFossDebugUnitTest :app:testFossReleaseUnitTest \
   :app:lintFossDebug :app:lintFossRelease :app:assembleFossRelease \
-  --stacktrace --no-daemon --max-workers=1
+  --stacktrace
 ```
 
 The Google/FCM flavor is dormant. Do not run Google Gradle tasks or build a
 Google APK unless the maintainer explicitly reactivates that distribution.
 
-Lint warnings are errors. Keep the single-worker/no-daemon form for final lint
-and release checks because it avoids a known Android lint worker race.
+Lint warnings are errors. Run with the warm daemon and the repo's bounded worker
+cap (`org.gradle.workers.max` in `gradle.properties`); do not add
+`--no-daemon --max-workers=1`, which cost ~30x the wall-clock for no deterministic
+protection. Lint can still rarely hit the `ModifierDeclarationDetector`
+classloader race; just re-run (the warm daemon makes the retry ~10s). Required CI
+and release both wrap lint in a bounded retry for the same reason.
 
 ## Deterministic generated tests
 
@@ -57,6 +61,13 @@ effective counts, index ranges, and any manual overrides.
 - `MOTD_FUZZ_CASE=<index>` replays one independently seeded case.
 - `MOTD_FUZZ_PROFILE=pr|nightly` selects the bounded workload.
 - `MOTD_FUZZ_CASES=<count>` and `MOTD_FUZZ_STEPS=<count>` override campaign size.
+  Only positive values apply (`0` is ignored and falls back to the profile), so
+  the minimum is `1`. For the tightest inner loop when iterating on code
+  unrelated to the fuzzed surfaces, run e.g.
+  `MOTD_FUZZ_CASES=1 MOTD_FUZZ_STEPS=1 ./gradlew :app:testFossDebugUnitTest` to
+  shrink the generated campaign to a single case; the committed regression corpus
+  still runs. Never commit that reduced profile; leave the CI/default counts
+  intact so coverage is not silently lost.
 - `MOTD_FUZZ_SHARD=<zero-based index>` offsets generated case indices by one
   configured case-count, allowing parallel jobs to cover disjoint cases under
   the same reproducible seed. Exact `MOTD_FUZZ_CASE` replay ignores the shard.
@@ -72,8 +83,11 @@ version, seed, case, and fixture in that module's
 - Do not run the headless emulator suite during routine local development. It
   materially slows the maintainer's workstation. Local verification stops at
   the relevant unit/integration tests, lint, and builds in the matrix above.
-- `.github/workflows/ci.yml` calls reusable `headless-core.yml`, which runs exactly
-  three isolated `@FastHeadlessE2e` methods on API34 Pixel 6 AOSP as a required gate.
+- `.github/workflows/ci.yml` owns the complete required gate. Its `headless` job runs exactly
+  four isolated `@FastHeadlessE2e` methods on API34 Pixel 6 AOSP, while the parallel
+  `component-ui` job runs all 64 hermetic component instrumentation cases and excludes the
+  real-stack annotation. That count is the number `test/e2e/component-suite.sh` enforces
+  (`EXPECTED_CASES`); keep the two in sync when component tests are added or removed.
   Push the candidate commit and require the complete CI gate to pass before
   tagging a release.
 - Use a physical device for hardware- or OS-integration evidence: input latency,
@@ -81,14 +95,17 @@ version, seed, case, and fixture in that module's
   notifications and UnifiedPush, system pickers, certificates outside the
   fixture trust flow, and a real release installation. Only do this when the
   maintainer explicitly asks for device validation.
-- The manually runnable `.github/workflows/smoke.yml` exercises the same suite
-  with Gradle's managed-device path.
+- Run `./test/e2e/headless.sh fast` for the same focused suite locally; CI remains the only
+  hosted entry point so there is no second workflow to drift out of sync.
+- `test/e2e/component-suite.sh` is the canonical managed-device launcher for the hermetic
+  Compose/component instrumentation tier. It enforces the expected case count so new tests cannot
+  silently disappear from CI.
 - `test/e2e/fast-suite.sh` is the canonical fast-suite launcher and fixture
   argument source for local direct instrumentation, connected CI, and the
   managed-device smoke workflow. Do not duplicate its annotation or fixture
   arguments in workflow YAML.
 - Use `test/e2e/runbook.sh` for multi-screen interaction and crash sweeps. The
-  local headless `full` command runs its A-I phases on the isolated emulator;
+  local headless `full` command runs A-H/J/V/R before teardown phase I on the isolated emulator;
   the hermetic Docker stack is used by the scheduled/manual CI workflow.
 - Use `:app:assembleFossE2e` only for x86_64 emulator testing. It deliberately
   excludes the arm64-only embedded libbox core and is not representative of

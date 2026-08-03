@@ -8,8 +8,9 @@ import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkIgnoreEntity
 import io.github.trevarj.motd.data.repo.NetworkIgnoreRepository
 import io.github.trevarj.motd.data.repo.NetworkRepository
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.irc.proto.IrcMessage
+import io.github.trevarj.motd.ircbackend.IrcSessions
 import io.github.trevarj.motd.service.ConnectionManager
 import javax.inject.Inject
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -38,6 +39,7 @@ class NetworkToolsViewModel @Inject constructor(
     private val networkRepository: NetworkRepository,
     private val toolsRepository: NetworkIgnoreRepository,
     private val connectionManager: ConnectionManager,
+    private val ircSessions: IrcSessions,
 ) : ViewModel() {
     private val networkIdFlow = MutableStateFlow<Long?>(null)
     private val statusFlow = MutableStateFlow<String?>(null)
@@ -72,7 +74,7 @@ class NetworkToolsViewModel @Inject constructor(
                     network = network,
                     ignores = ignores,
                     buffers = buffers,
-                    connected = states[networkId] is IrcClientState.Ready,
+                    connected = states[networkId] is ConnectionState.Ready,
                 )
             },
             statusFlow,
@@ -139,7 +141,7 @@ class NetworkToolsViewModel @Inject constructor(
 
     private fun send(message: IrcMessage) = viewModelScope.launch {
         val networkId = state.value.networkId.takeIf { it != 0L } ?: return@launch
-        val client = connectionManager.clientFor(networkId)
+        val client = ircSessions.sessionFor(networkId)
         if (client == null) {
             statusFlow.value = "Network is not connected"
             return@launch

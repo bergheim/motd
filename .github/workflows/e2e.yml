@@ -1,4 +1,4 @@
-name: E2E (hermetic emulator)
+name: Nightly E2E
 
 # Slow, KVM-backed end-to-end acceptance run: boots a headless Android emulator,
 # stands up a self-contained soju+ergo bouncer stack, installs the debug APK, and
@@ -10,9 +10,9 @@ on:
   workflow_dispatch:
     inputs:
       phases:
-        description: 'Phases to run (space-separated, e.g. "a b c" or "a b c d e f g h i")'
+        description: 'Phases to run (space-separated, e.g. "a b c" or "a b c d e f g h j r i")'
         required: false
-        default: 'a b c d e f g h i'
+        default: 'a b c d e f g h j r i'
   schedule:
     # Nightly at 04:17 UTC (odd minute to avoid the top-of-hour stampede).
     - cron: '17 4 * * *'
@@ -25,9 +25,75 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  proxy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      MOTD_SKIP_ADB_REVERSE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install pinned Nix tooling
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+      - name: Prove Soju history through VLESS + REALITY
+        env:
+          MOTD_STACK_DIR: ${{ runner.temp }}/motd-vless-reality
+        run: |
+          ./test/e2e/local-stack.sh up
+          ./test/e2e/local-stack.sh history-check
+          ./test/e2e/local-stack.sh obfs-xray-up
+          ./test/e2e/local-stack.sh obfs-xray-validate
+          ./test/e2e/local-stack.sh obfs-xray-history-check
+          ./test/e2e/local-stack.sh obfs-xray-negative
+      - name: Upload proxy diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: proxy-diagnostics
+          path: ${{ runner.temp }}/motd-vless-reality/**/*.log
+          if-no-files-found: ignore
+      - name: Tear down proxy stack
+        if: always()
+        env:
+          MOTD_STACK_DIR: ${{ runner.temp }}/motd-vless-reality
+        run: |
+          ./test/e2e/local-stack.sh obfs-xray-down || true
+          ./test/e2e/local-stack.sh down || true
+
+  znc-playback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      MOTD_SKIP_ADB_REVERSE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install pinned Nix tooling
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+      - name: Prove ZNC native playback and reconnect behavior
+        env:
+          MOTD_ZNC_STACK_DIR: ${{ runner.temp }}/motd-znc-stack
+          MOTD_STACK_DIR: ${{ runner.temp }}/motd-znc-base
+        run: |
+          ./test/e2e/znc-stack.sh up
+          ./test/e2e/znc-stack.sh probe
+      - name: Upload ZNC diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: znc-playback-diagnostics
+          path: |
+            ${{ runner.temp }}/motd-znc-stack/**/*.log
+            ${{ runner.temp }}/motd-znc-base/**/*.log
+          if-no-files-found: ignore
+      - name: Tear down ZNC stack
+        if: always()
+        env:
+          MOTD_ZNC_STACK_DIR: ${{ runner.temp }}/motd-znc-stack
+          MOTD_STACK_DIR: ${{ runner.temp }}/motd-znc-base
+        run: ./test/e2e/znc-stack.sh down || true
+
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -61,7 +127,7 @@ jobs:
       # --- CI env for the runbook (runbook.sh sources test/e2e/.env) --------
       - name: Install CI env
         env:
-          E2E_PHASES_INPUT: ${{ github.event.inputs.phases || 'a b c d e f g h i' }}
+          E2E_PHASES_INPUT: ${{ github.event.inputs.phases || 'a b c d e f g h j r i' }}
         run: |
           cp test/e2e/.env.ci test/e2e/.env
           # Allow the workflow input to widen/narrow phase coverage.

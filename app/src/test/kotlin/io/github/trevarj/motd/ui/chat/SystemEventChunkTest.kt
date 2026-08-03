@@ -22,11 +22,18 @@ class SystemEventChunkTest {
         assertTrue(heads.all { systemRunChunkLimit(it) <= MAX_COLLAPSED_SYSTEM_EVENTS })
     }
 
-    @Test fun `tail append changes expanded-pill content identity`() {
+    @Test fun `tail append refreshes content without losing run expansion`() {
         // An expanded tail initially has two rows; append supplies older rows in that same chunk.
         val beforeAppend = SystemRunContentKey(newestId = 48, oldestId = 49, count = 2)
         val afterAppend = SystemRunContentKey(newestId = 48, oldestId = 51, count = 4)
+        val expandedIds = updateExpandedSystemEvents(
+            current = emptySet(),
+            runIds = listOf(48L, 49L),
+            expanded = true,
+        )
+
         assertTrue(beforeAppend != afterAppend)
+        assertTrue(systemRunExpanded(listOf(48L, 50L, 49L, 51L), expandedIds))
     }
 
     @Test fun `arbitrary chunk boundary keeps distinct content identities`() {

@@ -45,17 +45,17 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.trevarj.motd.R
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.irc.client.ChannelListing
-import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.ui.components.EmptyState
 import io.github.trevarj.motd.ui.theme.MotdTheme
 
 /**
  * Channel browser (plans/16 §5.7). LIST/ELIST-backed, scoped to [networkId].
  *
- * The busiest channels are auto-fetched on entry only when ELIST 'U' can bound the server reply.
- * Other networks start with targeted search so opening the screen cannot stream a full LIST.
- * Browsing is disabled for an unbound soju BOUNCER_ROOT (its connection can't LIST). Join delegates to
+ * The busiest channels are auto-fetched on entry. ELIST 'U' is used when available; otherwise
+ * the client retains a bounded top set from the LIST stream. Browsing is disabled for an unbound
+ * soju BOUNCER_ROOT (its connection can't LIST). Join delegates to
  * ConnectionManager.joinChannel and remains open; Room self-JOIN persistence is authoritative.
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -91,7 +91,6 @@ internal fun ChannelListContent(
     var text by rememberSaveable(state.networkId, stateSaver = TextFieldValue.Saver) {
         mutableStateOf(TextFieldValue(state.query))
     }
-    val canSubmitQuery = text.text.isNotBlank() || supportsPopularChannelList(state.connState)
     Scaffold(
         topBar = {
             TopAppBar(
@@ -117,8 +116,7 @@ internal fun ChannelListContent(
                 },
                 actions = {
                     if (state.availability == ChannelBrowserAvailability.READY &&
-                        !state.loading &&
-                        canSubmitQuery
+                        !state.loading
                     ) {
                         IconButton(
                             onClick = { onSearch(text.text) },
@@ -147,7 +145,7 @@ internal fun ChannelListContent(
                         trailingIcon = {
                             IconButton(
                                 onClick = { onSearch(text.text) },
-                                enabled = !state.loading && canSubmitQuery,
+                                enabled = !state.loading,
                             ) {
                                 Icon(
                                     Icons.Outlined.Search,
@@ -157,7 +155,7 @@ internal fun ChannelListContent(
                         },
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                         keyboardActions = KeyboardActions(
-                            onSearch = { if (canSubmitQuery) onSearch(text.text) },
+                            onSearch = { onSearch(text.text) },
                         ),
                         modifier = Modifier
                             .fillMaxWidth()
@@ -334,6 +332,8 @@ private fun NotReadyState(state: ChannelListUiState) {
             R.string.channel_list_checking to R.string.channel_list_checking_message
         ChannelBrowserAvailability.ROOT_UNAVAILABLE ->
             R.string.channel_list_title to R.string.channel_list_root_cant_browse
+        ChannelBrowserAvailability.UNSUPPORTED ->
+            R.string.channel_list_title to R.string.channel_list_unsupported
         ChannelBrowserAvailability.CONNECTING ->
             R.string.channel_list_connecting to R.string.channel_list_connecting_message
         ChannelBrowserAvailability.FAILED ->
@@ -364,7 +364,7 @@ private fun ChannelListLoadedPreview() {
     MotdTheme {
         ChannelListContent(
             state = ChannelListUiState(
-                connState = IrcClientState.Ready("me", emptySet(), emptyMap()),
+                connState = ConnectionState.Ready("me"),
                 initialized = true,
                 listings = PREVIEW_LISTINGS,
                 loaded = true,
@@ -384,7 +384,7 @@ private fun ChannelListNotReadyPreview() {
     MotdTheme {
         ChannelListContent(
             state = ChannelListUiState(
-                connState = IrcClientState.Disconnected,
+                connState = ConnectionState.Disconnected,
                 initialized = true,
             ),
             onBack = {},

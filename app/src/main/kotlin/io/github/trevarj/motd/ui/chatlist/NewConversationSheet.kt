@@ -47,6 +47,14 @@ import io.github.trevarj.motd.ui.theme.MotdTheme
  * Bottom sheet with two actions: join a channel or start a query. Network selection is a dropdown
  * (auto-selected when there is a single network). Emits the chosen network id + input; the caller
  * routes to [ConnectionManager.joinChannel] / [ConnectionManager.ensureQueryBuffer].
+ *
+ * Review fix (P2 finding): [onJoinChannel] now receives the trimmed input verbatim rather than an
+ * IRC-shaped `"#$input"` transform applied here — this shared, protocol-open composable must not
+ * assume a `#`-prefix channel-name convention (a bare XMPP room JID like
+ * `room@conference.example.org` has none). The caller applies whatever backend-specific room-target
+ * syntax is appropriate through [ConnectionManager.roomTargetSyntax]
+ * (docs/backend-neutral-xmpp-rollout.md capability list example "room-target syntax") before ever
+ * reaching [ConnectionManager.joinChannel].
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -103,7 +111,9 @@ internal fun NewConversationSheetContent(
         val value = input.trim()
         if (value.isEmpty()) return
         if (tab == 0) {
-            onJoinChannel(net.id, channelJoinTarget(value))
+            // Raw, trimmed input -- the caller (ChatListViewModel.joinChannel) applies whatever
+            // backend-specific room-target syntax is appropriate (review fix; see this file's KDoc).
+            onJoinChannel(net.id, value)
         } else {
             onMessageUser(net.id, value)
         }
@@ -193,8 +203,6 @@ internal fun NewConversationSheetContent(
         }
     }
 }
-
-internal fun channelJoinTarget(channelName: String): String = "#${channelName.trim()}"
 
 @Composable
 private fun NetworkDropdown(

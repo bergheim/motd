@@ -5,7 +5,8 @@ import androidx.test.core.app.ApplicationProvider
 import io.github.trevarj.motd.R
 import io.github.trevarj.motd.data.db.BufferEntity
 import io.github.trevarj.motd.data.db.BufferType
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
+import io.github.trevarj.motd.service.HistoryResyncState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -24,7 +25,7 @@ class ChatSubtitleTest {
     @Test
     fun transientFailureShowsCurrentReconnectStateWithoutStaleProxyDetail() {
         val state = ChatState(
-            connState = IrcClientState.Failed("SOCKS5 proxy not connected", fatal = false),
+            connState = ConnectionState.Failed("SOCKS5 proxy not connected", fatal = false),
         )
 
         assertEquals(context.getString(R.string.drawer_state_connecting), chatSubtitle(state, context))
@@ -32,7 +33,7 @@ class ChatSubtitleTest {
 
     @Test
     fun fatalFailureRemainsActionable() {
-        val state = ChatState(connState = IrcClientState.Failed("SASL authentication failed", fatal = true))
+        val state = ChatState(connState = ConnectionState.Failed("SASL authentication failed", fatal = true))
 
         assertEquals("SASL authentication failed", chatSubtitle(state, context))
     }
@@ -40,7 +41,7 @@ class ChatSubtitleTest {
     @Test
     fun readyConnectionReturnsToConversationSubtitle() {
         val state = ChatState(
-            connState = IrcClientState.Ready("me", emptySet(), emptyMap()),
+            connState = ConnectionState.Ready("me"),
             typingNicks = listOf("alice"),
         )
 
@@ -84,7 +85,7 @@ class ChatSubtitleTest {
             displayName = "#motd",
             type = BufferType.CHANNEL,
         ),
-        connState = IrcClientState.Ready("me", emptySet(), emptyMap()),
+        connState = ConnectionState.Ready("me"),
         memberCount = memberCount,
         typingNicks = typingNicks,
     )

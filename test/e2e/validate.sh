@@ -8,6 +8,10 @@ bash -n "${scripts[@]}"
   echo "fast-suite.sh must remain executable" >&2
   exit 1
 }
+[ -x "$E2E_DIR/component-suite.sh" ] || {
+  echo "component-suite.sh must remain executable" >&2
+  exit 1
+}
 "$E2E_DIR/tests/fast-suite-classifier-test.sh"
 "$E2E_DIR/tests/fast-suite-privacy-test.sh"
 if command -v docker >/dev/null 2>&1; then

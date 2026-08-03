@@ -1,11 +1,15 @@
 package io.github.trevarj.motd.ui.chat
 
 import android.content.res.AssetManager
+import android.graphics.Bitmap
+import android.graphics.BitmapShader
 import android.graphics.Canvas as AndroidCanvas
 import android.graphics.Color as AndroidColor
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path as AndroidPath
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffColorFilter
 import android.graphics.Shader
 import android.util.LruCache
 import android.util.Xml
@@ -14,25 +18,24 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.FilterQuality
-import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asAndroidPath
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntSize
-import androidx.compose.ui.unit.dp
 import androidx.core.graphics.createBitmap
 import androidx.core.graphics.withRotation
 import androidx.core.graphics.withScale
@@ -42,12 +45,12 @@ import io.github.trevarj.motd.data.prefs.WallpaperSelection
 import io.github.trevarj.motd.ui.components.isAppliedThemeDark
 import io.github.trevarj.motd.ui.theme.contrastSafeOverlay
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.xmlpull.v1.XmlPullParser
-import kotlin.coroutines.coroutineContext
 
-/** Theme-adaptive gradient plus a seamless monochrome SVG tile, cached as one draw-per-frame bitmap. */
+/** Theme-adaptive gradient plus a stable, repeated monochrome SVG tile. */
 @Composable
 fun ChatWallpaperBackground(
     wallpaper: WallpaperSelection,
@@ -60,13 +63,29 @@ fun ChatWallpaperBackground(
 
     val context = LocalContext.current
     val density = LocalDensity.current.density
+    val requestedTileKey = remember(wallpaper.preset, density) {
+        wallpaperTileKey(wallpaper.preset, density)
+    }
+    val tile by produceState<WallpaperTile?>(
+        initialValue = WallpaperTileCache[requestedTileKey]?.let { WallpaperTile(requestedTileKey, it) },
+        requestedTileKey,
+    ) {
+        value = WallpaperTile(
+            requestedTileKey,
+            withContext(Dispatchers.Default) {
+                WallpaperTileCache.getOrRender(context.assets, requestedTileKey)
+            },
+        )
+    }
+    // A preset switch keeps the previous complete wallpaper until its replacement tile is ready.
+    val renderedPreset = tile?.key?.preset ?: wallpaper.preset
     val dark = isAppliedThemeDark()
     val scheme = MaterialTheme.colorScheme
     val base = scheme.background
     val foregrounds = listOf(scheme.onBackground, scheme.onSurface, scheme.onSurfaceVariant)
-    val gradient = remember(wallpaper.preset, scheme) {
+    val gradient = remember(renderedPreset, scheme) {
         gradientColors(
-            wallpaper.preset,
+            renderedPreset,
             base,
             scheme.primary,
             scheme.secondary,
@@ -84,53 +103,57 @@ fun ChatWallpaperBackground(
         requestedAlpha = maxAlpha * wallpaper.intensity.coerceIn(0, 100) / 100f,
         foregrounds = foregrounds,
     )
-    var rasterCoverage by remember { mutableStateOf(IntSize.Zero) }
-    val rasterKey = remember(wallpaper, rasterCoverage, density, gradient, pattern) {
-        rasterCoverage.takeIf { it.width > 0 && it.height > 0 }?.let {
-            WallpaperRasterKey(
-                preset = wallpaper.preset,
-                width = rasterDimension(it.width),
-                height = rasterDimension(it.height),
-                gradientArgb = gradient.map(Color::toArgb),
-                patternArgb = pattern.toArgb(),
-                tileSizePx = (TILE_SIZE_DP * density * WALLPAPER_RASTER_SCALE).toInt().coerceAtLeast(1),
-            )
-        }
-    }
-    val raster by produceState<ImageBitmap?>(initialValue = null, rasterKey) {
-        val key = rasterKey ?: return@produceState
-        WallpaperRasterCache.get(key)?.let {
-            value = it
-            return@produceState
-        }
-        // Keep drawing the previous raster while a larger or differently themed replacement is
-        // rendered. Clearing it here produced a visible plain-background frame between rasters.
-        value = withContext(Dispatchers.Default) {
-            WallpaperRasterCache.get(key) ?: renderWallpaperRaster(context.assets, key)
-                .also { WallpaperRasterCache.put(key, it) }
-        }
-    }
+    var gradientCoverage by remember { mutableStateOf(IntSize.Zero) }
 
     Box(
         modifier
             .fillMaxSize()
             .onSizeChanged {
-                val expanded = expandedRasterCoverage(rasterCoverage, it)
-                if (rasterCoverage != expanded) rasterCoverage = expanded
+                val expanded = expandedWallpaperCoverage(gradientCoverage, it)
+                if (gradientCoverage != expanded) gradientCoverage = expanded
             }
-            .drawBehind {
-                val image = raster
-                if (image == null) drawRect(base) else drawImage(
-                    image = image,
-                    srcSize = wallpaperRasterSourceSize(
-                        rasterSize = IntSize(image.width, image.height),
-                        canvasSize = IntSize(size.width.toInt(), size.height.toInt()),
-                    ),
-                    dstSize = IntSize(size.width.toInt(), size.height.toInt()),
-                    filterQuality = FilterQuality.Medium,
-                )
+            .drawWithCache {
+                val canvasSize = IntSize(size.width.toInt(), size.height.toInt())
+                val coverage = expandedWallpaperCoverage(gradientCoverage, canvasSize)
+                val gradientPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    shader = LinearGradient(
+                        0f,
+                        0f,
+                        coverage.width.toFloat(),
+                        coverage.height.toFloat(),
+                        gradient.map(Color::toArgb).toIntArray(),
+                        null,
+                        Shader.TileMode.CLAMP,
+                    )
+                }
+                val patternPaint = tile?.bitmap?.let { bitmap ->
+                    Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+                        shader = BitmapShader(bitmap, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT)
+                        colorFilter = PorterDuffColorFilter(pattern.toArgb(), PorterDuff.Mode.SRC_IN)
+                    }
+                }
+                onDrawBehind {
+                    drawIntoCanvas { canvas ->
+                        canvas.nativeCanvas.drawRect(0f, 0f, size.width, size.height, gradientPaint)
+                        patternPaint?.let {
+                            canvas.nativeCanvas.drawRect(0f, 0f, size.width, size.height, it)
+                        }
+                    }
+                }
             },
     )
+}
+
+/** Warm the selected motif before a chat destination needs to draw it. */
+@Composable
+internal fun PreloadChatWallpaperTile(wallpaper: WallpaperSelection) {
+    if (wallpaper.preset == ChatWallpaperPreset.NONE) return
+    val assets = LocalContext.current.assets
+    val density = LocalDensity.current.density
+    val key = remember(wallpaper.preset, density) { wallpaperTileKey(wallpaper.preset, density) }
+    LaunchedEffect(key) {
+        withContext(Dispatchers.Default) { WallpaperTileCache.getOrRender(assets, key) }
+    }
 }
 
 private fun gradientColors(
@@ -173,18 +196,25 @@ private data class PatternPath(
     val opacity: Float,
 )
 
-private data class WallpaperRasterKey(
+internal data class WallpaperTileKey(
     val preset: ChatWallpaperPreset,
-    val width: Int,
-    val height: Int,
-    val gradientArgb: List<Int>,
-    val patternArgb: Int,
     val tileSizePx: Int,
 )
 
-private object WallpaperRasterCache : LruCache<WallpaperRasterKey, ImageBitmap>(12 * 1024) {
-    override fun sizeOf(key: WallpaperRasterKey, value: ImageBitmap): Int =
-        (value.width * value.height * 4) / 1024
+private data class WallpaperTile(val key: WallpaperTileKey, val bitmap: Bitmap)
+
+private object WallpaperTileCache : LruCache<WallpaperTileKey, Bitmap>(4 * 1024) {
+    private val renderMutex = Mutex()
+
+    override fun sizeOf(key: WallpaperTileKey, value: Bitmap): Int =
+        (value.allocationByteCount / 1024).coerceAtLeast(1)
+
+    suspend fun getOrRender(assets: AssetManager, key: WallpaperTileKey): Bitmap {
+        get(key)?.let { return it }
+        return renderMutex.withLock {
+            get(key) ?: renderWallpaperTile(assets, key).also { put(key, it) }
+        }
+    }
 }
 
 private object PatternCache {
@@ -193,50 +223,47 @@ private object PatternCache {
     @Synchronized fun put(preset: ChatWallpaperPreset, value: List<PatternPath>) { cache[preset] = value }
 }
 
-private suspend fun renderWallpaperRaster(assets: AssetManager, key: WallpaperRasterKey): ImageBitmap {
-    val bitmap = createBitmap(key.width, key.height)
+internal fun renderWallpaperTile(assets: AssetManager, key: WallpaperTileKey): Bitmap {
+    // The mask is color-independent, so theme and intensity changes never rebuild GPU texture data.
+    val bitmap = createBitmap(key.tileSizePx, key.tileSizePx, Bitmap.Config.ALPHA_8)
     val canvas = AndroidCanvas(bitmap)
-    val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        shader = LinearGradient(
-            0f, 0f, key.width.toFloat(), key.height.toFloat(),
-            key.gradientArgb.toIntArray(), null, Shader.TileMode.CLAMP,
-        )
-    }
-    canvas.drawRect(0f, 0f, key.width.toFloat(), key.height.toFloat(), fill)
-    if (AndroidColor.alpha(key.patternArgb) == 0) return bitmap.asImageBitmap()
-
     val paths = PatternCache.get(key.preset) ?: parsePattern(assets, key.preset).also {
         PatternCache.put(key.preset, it)
     }
     val tileScale = key.tileSizePx / SVG_TILE_SIZE
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = key.patternArgb
+        color = AndroidColor.WHITE
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
     }
-    var tileY = -key.tileSizePx
-    while (tileY < key.height + key.tileSizePx) {
-        coroutineContext.ensureActive()
-        var tileX = -key.tileSizePx
-        while (tileX < key.width + key.tileSizePx) {
-            for (item in paths) {
-                paint.alpha = (AndroidColor.alpha(key.patternArgb) * item.opacity).toInt().coerceIn(0, 255)
-                paint.strokeWidth = item.strokeWidth
-                canvas.withTranslation(tileX + item.x * tileScale, tileY + item.y * tileScale) {
-                    withRotation(item.rotation, 32f * tileScale, 32f * tileScale) {
-                        withScale(item.scale * tileScale, item.scale * tileScale) {
-                            drawPath(item.path, paint)
-                        }
-                    }
+    for (item in paths) {
+        paint.alpha = (255 * item.opacity).toInt().coerceIn(0, 255)
+        paint.strokeWidth = item.strokeWidth
+        canvas.withTranslation(item.x * tileScale, item.y * tileScale) {
+            withRotation(item.rotation, 32f * tileScale, 32f * tileScale) {
+                withScale(item.scale * tileScale, item.scale * tileScale) {
+                    drawPath(item.path, paint)
                 }
             }
-            tileX += key.tileSizePx
         }
-        tileY += key.tileSizePx
     }
-    return bitmap.asImageBitmap()
+    return bitmap
 }
+
+internal fun wallpaperTileKey(
+    preset: ChatWallpaperPreset,
+    density: Float,
+): WallpaperTileKey = WallpaperTileKey(
+    preset = preset,
+    tileSizePx = (TILE_SIZE_DP * density).toInt().coerceAtLeast(1),
+)
+
+/** Keep the gradient stationary when a transient inset shrinks the chat viewport. */
+internal fun expandedWallpaperCoverage(current: IntSize, measured: IntSize): IntSize = IntSize(
+    width = maxOf(current.width, measured.width),
+    height = maxOf(current.height, measured.height),
+)
 
 internal fun assetName(preset: ChatWallpaperPreset): String = when (preset) {
     ChatWallpaperPreset.NONE -> error("NONE has no SVG asset")
@@ -281,20 +308,5 @@ private fun parseTransform(value: String): FloatArray {
     return FloatArray(4) { match.groupValues[it + 1].toFloat() }
 }
 
-/** A shrinking chat viewport crops the existing raster instead of starting a new render. */
-internal fun expandedRasterCoverage(current: IntSize, measured: IntSize): IntSize = IntSize(
-    width = maxOf(current.width, measured.width),
-    height = maxOf(current.height, measured.height),
-)
-
-/** Crop a retained raster at its native scale so layout changes do not stretch the pattern. */
-internal fun wallpaperRasterSourceSize(rasterSize: IntSize, canvasSize: IntSize): IntSize = IntSize(
-    width = minOf(rasterSize.width, rasterDimension(canvasSize.width)),
-    height = minOf(rasterSize.height, rasterDimension(canvasSize.height)),
-)
-
-private fun rasterDimension(fullSize: Int) = (fullSize * WALLPAPER_RASTER_SCALE).toInt().coerceAtLeast(1)
-
 private const val SVG_TILE_SIZE = 512f
 private const val TILE_SIZE_DP = 244f
-private const val WALLPAPER_RASTER_SCALE = .5f

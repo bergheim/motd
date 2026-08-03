@@ -18,6 +18,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -104,6 +105,17 @@ fun SearchContent(
     var text by rememberSaveable(stateSaver = TextFieldValue.Saver) {
         mutableStateOf(TextFieldValue(state.rawQuery))
     }
+    // The ViewModel publishes a new key immediately, but Compose may render this local edit one
+    // frame before the collected state advances. Never let that frame show old rows or highlights.
+    val visibleState = if (text.text == state.rawQuery) {
+        state
+    } else {
+        state.copy(
+            rawQuery = text.text,
+            groups = emptyList(),
+            searching = !isEmptySearchQuery(text.text),
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -119,7 +131,8 @@ fun SearchContent(
                         onValueChange = { text = it; onQueryChange(it.text) },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .focusRequester(focusRequester),
+                            .focusRequester(focusRequester)
+                            .testTag("search_field"),
                         placeholder = { Text(stringResource(R.string.search_hint)) },
                         trailingIcon = if (text.text.isNotEmpty()) {
                             {
@@ -153,7 +166,7 @@ fun SearchContent(
         },
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-            if (state.hasBufferScope) {
+            if (visibleState.hasBufferScope) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -161,12 +174,12 @@ fun SearchContent(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     FilterChip(
-                        selected = state.scope == SearchScope.ALL,
+                        selected = visibleState.scope == SearchScope.ALL,
                         onClick = { onScopeChange(SearchScope.ALL) },
                         label = { Text(stringResource(R.string.search_chip_all)) },
                     )
                     FilterChip(
-                        selected = state.scope == SearchScope.CURRENT,
+                        selected = visibleState.scope == SearchScope.CURRENT,
                         onClick = { onScopeChange(SearchScope.CURRENT) },
                         label = { Text(stringResource(R.string.search_chip_current)) },
                     )
@@ -174,21 +187,27 @@ fun SearchContent(
             }
 
             when {
-                state.rawQuery.isBlank() -> EmptyState(
+                visibleState.rawQuery.isBlank() -> EmptyState(
                     icon = Icons.Outlined.SearchOff,
                     title = stringResource(R.string.search_prompt_title),
                     message = stringResource(R.string.search_prompt_message),
                 )
 
-                state.groups.isEmpty() -> EmptyState(
+                visibleState.searching -> LinearProgressIndicator(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("search_loading"),
+                )
+
+                visibleState.groups.isEmpty() -> EmptyState(
                     icon = Icons.Outlined.SearchOff,
                     title = stringResource(R.string.search_empty_title),
                     message = stringResource(R.string.search_empty_message),
                 )
 
                 else -> SearchResults(
-                    groups = state.groups,
-                    query = parseSearchQuery(state.rawQuery).text,
+                    groups = visibleState.groups,
+                    query = parseSearchQuery(visibleState.rawQuery).text,
                     onOpenHit = onOpenHit,
                 )
             }
@@ -205,7 +224,7 @@ private fun SearchResults(
     query: String,
     onOpenHit: (SearchHit) -> Unit,
 ) {
-    LazyColumn(modifier = Modifier.fillMaxSize()) {
+    LazyColumn(modifier = Modifier.fillMaxSize().testTag("search_results")) {
         groups.forEach { group ->
             item(key = "h-${group.bufferId}") {
                 Text(

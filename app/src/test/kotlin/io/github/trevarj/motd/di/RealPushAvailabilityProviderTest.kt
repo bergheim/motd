@@ -1,13 +1,11 @@
 package io.github.trevarj.motd.di
 
 import app.cash.turbine.test
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
-import io.github.trevarj.motd.irc.client.IrcClient
-import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.push.NetworkPushHealth
 import io.github.trevarj.motd.push.PushRegistrationState
-import io.github.trevarj.motd.push.WebPushRegistrar
 import io.github.trevarj.motd.service.CertPrompt
 import io.github.trevarj.motd.service.ConnectionManager
 import io.github.trevarj.motd.ui.settings.PushSetupStatus
@@ -23,19 +21,15 @@ import org.junit.Test
 /**
  * Availability truth table (distributor present/absent × bouncer webpush cap present/absent) and
  * reactivity: selecting UNIFIED_PUSH is gated on the bouncer cap only; a missing distributor is
- * surfaced as guidance, and the toggle enables live once a connection reaches Ready with the cap.
+ * surfaced as guidance, and the toggle enables live once [ConnectionManager.serverPushAvailable]
+ * flips true (the neutral seam's summary of a connected network accepting server-side push).
  */
 class RealPushAvailabilityProviderTest {
 
-    private val readyWithCap =
-        IrcClientState.Ready(nick = "me", caps = setOf(WebPushRegistrar.WEBPUSH_CAP, "sasl"), isupport = emptyMap())
-    private val readyNoCap =
-        IrcClientState.Ready(nick = "me", caps = setOf("sasl"), isupport = emptyMap())
-
     private class FakeConnectionManager(
-        override val connectionStates: MutableStateFlow<Map<Long, IrcClientState>>,
+        override val serverPushAvailable: MutableStateFlow<Boolean> = MutableStateFlow(false),
     ) : ConnectionManager {
-        override fun clientFor(networkId: Long): IrcClient? = null
+        override val connectionStates: StateFlow<Map<Long, ConnectionState>> = MutableStateFlow(emptyMap())
         override suspend fun startAll() = Unit
         override suspend fun stopAll() = Unit
         override suspend fun connect(networkId: Long) = Unit
@@ -57,9 +51,9 @@ class RealPushAvailabilityProviderTest {
     }
 
     private fun provider(
-        states: MutableStateFlow<Map<Long, IrcClientState>>,
+        serverPushAvailable: MutableStateFlow<Boolean>,
         hasDistributor: Boolean,
-    ) = RealPushAvailabilityProvider(FakeConnectionManager(states)) { hasDistributor }
+    ) = RealPushAvailabilityProvider(FakeConnectionManager(serverPushAvailable)) { hasDistributor }
 
     private fun network(id: Long) = NetworkEntity(
         id = id,
@@ -74,8 +68,8 @@ class RealPushAvailabilityProviderTest {
 
     @Test
     fun cap_and_distributor_present_is_selectable_without_guidance() = runTest {
-        val states = MutableStateFlow<Map<Long, IrcClientState>>(mapOf(1L to readyWithCap))
-        provider(states, hasDistributor = true).availability().test {
+        val serverPushAvailable = MutableStateFlow(true)
+        provider(serverPushAvailable, hasDistributor = true).availability().test {
             val a = awaitItem()
             assertTrue("selectable when cap + distributor", a.selectable)
             assertFalse("no guidance when distributor present", a.needsDistributor)
@@ -84,8 +78,8 @@ class RealPushAvailabilityProviderTest {
 
     @Test
     fun cap_present_but_no_distributor_is_selectable_with_guidance() = runTest {
-        val states = MutableStateFlow<Map<Long, IrcClientState>>(mapOf(1L to readyWithCap))
-        provider(states, hasDistributor = false).availability().test {
+        val serverPushAvailable = MutableStateFlow(true)
+        provider(serverPushAvailable, hasDistributor = false).availability().test {
             val a = awaitItem()
             assertTrue("still selectable so registration self-heals", a.selectable)
             assertTrue("guidance shown to install a distributor", a.needsDistributor)
@@ -94,8 +88,8 @@ class RealPushAvailabilityProviderTest {
 
     @Test
     fun no_cap_is_not_selectable_regardless_of_distributor() = runTest {
-        val states = MutableStateFlow<Map<Long, IrcClientState>>(mapOf(1L to readyNoCap))
-        provider(states, hasDistributor = true).availability().test {
+        val serverPushAvailable = MutableStateFlow(false)
+        provider(serverPushAvailable, hasDistributor = true).availability().test {
             val a = awaitItem()
             assertFalse("not selectable without bouncer webpush", a.selectable)
             assertFalse(a.needsDistributor)
@@ -104,8 +98,8 @@ class RealPushAvailabilityProviderTest {
 
     @Test
     fun disconnected_state_is_not_selectable() = runTest {
-        val states = MutableStateFlow<Map<Long, IrcClientState>>(mapOf(1L to IrcClientState.Connecting))
-        provider(states, hasDistributor = true).availability().test {
+        val serverPushAvailable = MutableStateFlow(false)
+        provider(serverPushAvailable, hasDistributor = true).availability().test {
             assertFalse(awaitItem().selectable)
         }
     }
@@ -113,19 +107,18 @@ class RealPushAvailabilityProviderTest {
     @Test
     fun becomes_selectable_reactively_when_bouncer_reaches_ready() = runTest {
         // Settings opens before the soju root is Ready: starts unavailable, flips live on Ready.
-        val states = MutableStateFlow<Map<Long, IrcClientState>>(mapOf(1L to IrcClientState.Registering))
-        provider(states, hasDistributor = true).availability().test {
+        val serverPushAvailable = MutableStateFlow(false)
+        provider(serverPushAvailable, hasDistributor = true).availability().test {
             assertFalse("stale/false before Ready", awaitItem().selectable)
-            states.value = mapOf(1L to readyWithCap)
+            serverPushAvailable.value = true
             assertTrue("enables once bouncer advertises webpush", awaitItem().selectable)
         }
     }
 
     @Test
     fun endpoint_received_waiting_for_bouncer_is_not_reported_as_endpoint_request() = runTest {
-        val states = MutableStateFlow<Map<Long, IrcClientState>>(mapOf(1L to readyWithCap))
         val provider = RealPushAvailabilityProvider(
-            connectionManager = FakeConnectionManager(states),
+            connectionManager = FakeConnectionManager(MutableStateFlow(true)),
             hasDistributor = { true },
             networks = flowOf(listOf(network(1L))),
             health = flowOf(
@@ -139,5 +132,34 @@ class RealPushAvailabilityProviderTest {
         provider.availability().test {
             assertEquals(PushSetupStatus.WAITING_FOR_SERVER, awaitItem().setupStatus)
         }
+    }
+
+    @Test
+    fun notification_permission_flow_recomputes_without_other_delivery_emissions() = runTest {
+        val notificationPermission = MutableStateFlow(true)
+        val provider = RealPushAvailabilityProvider(
+            connectionManager = FakeConnectionManager(MutableStateFlow(true)),
+            hasDistributor = { true },
+            notificationPermission = notificationPermission,
+        )
+
+        provider.availability().test {
+            assertTrue(awaitItem().notificationsGranted)
+            notificationPermission.value = false
+            assertFalse(awaitItem().notificationsGranted)
+        }
+    }
+
+    @Test fun permission_refresh_delegates_to_the_status_controller() {
+        var refreshes = 0
+        val provider = RealPushAvailabilityProvider(
+            connectionManager = FakeConnectionManager(MutableStateFlow(false)),
+            hasDistributor = { false },
+            refreshNotificationPermission = { refreshes++ },
+        )
+
+        provider.refreshNotificationPermission()
+
+        assertEquals(1, refreshes)
     }
 }

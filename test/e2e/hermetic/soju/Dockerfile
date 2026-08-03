@@ -6,14 +6,27 @@
 #
 # Pinned versions (bump deliberately):
 #   - Go builder:  golang:1.24-alpine3.21
-#   - soju:        v0.10.1  (codeberg.org/emersion/soju)
+#   - soju:        v0.10.1 / ca81b9905e24aadd6a346a5ae72ae7e9d14db568
 
 FROM golang:1.24-alpine3.21 AS build
 ARG SOJU_VERSION=v0.10.1
+ARG SOJU_COMMIT=ca81b9905e24aadd6a346a5ae72ae7e9d14db568
 RUN apk add --no-cache git make build-base
 WORKDIR /src
-# Fetch the pinned tag only (shallow) for a reproducible, fast build.
-RUN git clone --depth 1 --branch "${SOJU_VERSION}" https://codeberg.org/emersion/soju.git .
+# Prefer upstream and fall back to its official mirror when Codeberg is unavailable.
+# Verify the commit so either host resolves the pinned tag to the expected source.
+RUN set -eu; \
+    for remote in \
+        https://codeberg.org/emersion/soju.git \
+        https://github.com/emersion/soju.git; do \
+      if git clone --depth 1 --branch "${SOJU_VERSION}" "${remote}" soju; then \
+        test "$(git -C soju rev-parse HEAD)" = "${SOJU_COMMIT}"; \
+        exit 0; \
+      fi; \
+      rm -rf soju; \
+    done; \
+    exit 1
+WORKDIR /src/soju
 # Build soju, sojuctl and sojudb. GOFLAGS pins module verification off-network
 # is unnecessary; the tag's go.sum is authoritative.
 RUN go build -o /out/soju    ./cmd/soju \

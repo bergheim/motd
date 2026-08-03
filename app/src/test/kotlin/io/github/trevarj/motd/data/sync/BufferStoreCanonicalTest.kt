@@ -2,6 +2,7 @@ package io.github.trevarj.motd.data.sync
 
 import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.db.HistoryCursorEntity
+import io.github.trevarj.motd.data.db.HistoryGapEntity
 import io.github.trevarj.motd.data.db.MessageEntity
 import io.github.trevarj.motd.data.db.MessageKind
 import io.github.trevarj.motd.data.db.MotdDatabase
@@ -13,6 +14,7 @@ import io.github.trevarj.motd.data.db.TimeProvenance
 import io.github.trevarj.motd.data.db.inMemoryDb
 import io.github.trevarj.motd.data.prefs.LayoutDensity
 import io.github.trevarj.motd.data.repo.ChatHistoryMediatorFactory
+import io.github.trevarj.motd.data.repo.HistoryWindowFocus
 import io.github.trevarj.motd.data.repo.MessageRepositoryImpl
 import androidx.paging.LoadType
 import androidx.paging.PagingState
@@ -175,6 +177,9 @@ class BufferStoreCanonicalTest {
                 ),
             ),
         )
+        db.historyGapDao().insert(
+            HistoryGapEntity(0, query.id, "old", 10, "query-history", 100),
+        )
         db.bufferDao().deleteBuffer(query.id)
 
         val channel = store.getOrCreate(networkId, "#room", "#room", BufferType.CHANNEL)
@@ -185,6 +190,7 @@ class BufferStoreCanonicalTest {
         assertEquals(null, channel.historyDiscardedThroughMsgid)
         assertEquals(null, channel.historyDiscardedThroughTime)
         assertEquals(null, db.historyCursorDao().byRoom(channel.id))
+        assertTrue(db.historyGapDao().forRoom(channel.id).isEmpty())
         assertFalse(db.bufferDao().isDiscardedMessageId(channel.id, "query-history"))
         assertTrue(db.bufferDao().observeChatList().first().any { it.bufferId == channel.id })
     }
@@ -336,13 +342,36 @@ class BufferStoreCanonicalTest {
             batchId = "overlap",
             timeProvenance = TimeProvenance.SERVER_TAG,
         )
-        timeline.ingest(observation(winner.id, msgid = null))
-        timeline.ingest(observation(loser.id, msgid = "source-msgid"))
+        val winnerEvent = timeline.ingest(observation(winner.id, msgid = null)).event
+        val loserEvent = timeline.ingest(observation(loser.id, msgid = "source-msgid")).event
+        db.bufferDao().update(
+            winner.copy(
+                localReadAnchorTime = winnerEvent.serverTime,
+                localReadAnchorEventId = winnerEvent.id,
+            ),
+        )
+        db.historyGapDao().insert(
+            HistoryGapEntity(
+                roomId = loser.id,
+                olderMsgid = "old",
+                olderServerTime = 100,
+                newerMsgid = "source-msgid",
+                newerServerTime = loserEvent.serverTime,
+                newerEventId = loserEvent.id,
+                newerTimelineOrder = loserEvent.timelineOrder,
+            ),
+        )
 
         val merged = store.mergeRooms(winner.id, loser.id)
 
         assertEquals(1, db.messageDao().countForBuffer(merged.id))
         assertEquals("source-msgid", db.messageDao().byMsgid(merged.id, "source-msgid")?.msgid)
+        val gap = db.historyGapDao().forRoom(merged.id).single()
+        assertEquals(winnerEvent.id, gap.newerEventId)
+        assertEquals(winnerEvent.timelineOrder, gap.newerTimelineOrder)
+        val row = db.bufferDao().observeChatList().first().single { it.bufferId == merged.id }
+        assertFalse(row.unreadCountIncomplete)
+        assertFalse(row.mentionCountIncomplete)
     }
 
     @Test
@@ -396,12 +425,13 @@ class BufferStoreCanonicalTest {
         val notifyingStore = BufferStore(
             db,
             object : MessageNotifier {
-                override suspend fun onIncoming(
+                override suspend fun onCanonicalIncoming(
                     networkId: Long,
                     bufferId: Long,
                     type: BufferType,
                     hasMention: Boolean,
-                    message: io.github.trevarj.motd.irc.event.IrcEvent.ChatMessage,
+                    eventId: Long,
+                    message: MessageEntity,
                 ) = Unit
 
                 override suspend fun onRoomsMerged(winnerId: Long, loserId: Long) {
@@ -531,7 +561,7 @@ class BufferStoreCanonicalTest {
             db.networkIdentityDao(),
             db.messageDao(),
             db.reactionDao(),
-            ChatHistoryMediatorFactory { roomId ->
+            ChatHistoryMediatorFactory { roomId, _ ->
                 mediatorRoomId = roomId
                 object : RemoteMediator<Int, MessageEntity>() {
                     override suspend fun load(
@@ -540,11 +570,193 @@ class BufferStoreCanonicalTest {
                     ) = MediatorResult.Success(endOfPaginationReached = true)
                 }
             },
+            db.historyGapDao(),
         )
 
         assertEquals(eventId, repository.byMsgid(loser.id, "redirected-message")?.id)
-        repository.messages(loser.id, io.github.trevarj.motd.data.visibility.MessageVisibilitySpec()).first()
+        // Scroll-driven paging attaches the mediator even for Recent focus, so the first collection
+        // must build it with the canonical winner id (the redirect target), not the losing room id.
+        repository.messages(
+            loser.id,
+            io.github.trevarj.motd.data.visibility.MessageVisibilitySpec(),
+            HistoryWindowFocus.Recent,
+        ).first()
         assertEquals(merged.id, mediatorRoomId)
+    }
+
+    @Test
+    fun `room merge transfers and coalesces durable history gaps`() = runTest {
+        val winner = store.getOrCreate(networkId, "old", "Old", BufferType.QUERY)
+        val loser = store.getOrCreate(networkId, "new", "New", BufferType.QUERY)
+        db.historyGapDao().insert(
+            HistoryGapEntity(0, winner.id, "m100", 100, "m500", 500),
+        )
+        db.historyGapDao().insert(
+            HistoryGapEntity(0, loser.id, "m400", 400, "m900", 900),
+        )
+
+        val merged = store.mergeRooms(winner.id, loser.id)
+
+        val gap = db.historyGapDao().forRoom(merged.id).single()
+        assertEquals("m100", gap.olderMsgid)
+        assertEquals(100L, gap.olderServerTime)
+        assertEquals("m900", gap.newerMsgid)
+        assertEquals(900L, gap.newerServerTime)
+        assertTrue(db.historyGapDao().forRoom(loser.id).isEmpty())
+    }
+
+    @Test
+    fun `room merge preserves opaque same timestamp gaps independently`() = runTest {
+        val winner = store.getOrCreate(networkId, "old", "Old", BufferType.QUERY)
+        val loser = store.getOrCreate(networkId, "new", "New", BufferType.QUERY)
+        db.historyGapDao().insert(
+            HistoryGapEntity(0, winner.id, "a", 100, "b", 100),
+        )
+        db.historyGapDao().insert(
+            HistoryGapEntity(0, loser.id, "c", 100, "d", 100),
+        )
+
+        val merged = store.mergeRooms(winner.id, loser.id)
+
+        assertEquals(
+            setOf("a" to "b", "c" to "d"),
+            db.historyGapDao().forRoom(merged.id).map { it.olderMsgid to it.newerMsgid }.toSet(),
+        )
+    }
+
+    @Test
+    fun `room merge preserves distinct opaque older boundaries at the same timestamp`() = runTest {
+        val winner = store.getOrCreate(networkId, "old", "Old", BufferType.QUERY)
+        val loser = store.getOrCreate(networkId, "new", "New", BufferType.QUERY)
+        db.historyGapDao().insert(
+            HistoryGapEntity(0, winner.id, "a", 100, "b", 500),
+        )
+        db.historyGapDao().insert(
+            HistoryGapEntity(0, loser.id, "c", 100, "d", 900),
+        )
+
+        val merged = store.mergeRooms(winner.id, loser.id)
+
+        assertEquals(
+            setOf("a" to "b", "c" to "d"),
+            db.historyGapDao().forRoom(merged.id).map { it.olderMsgid to it.newerMsgid }.toSet(),
+        )
+    }
+
+    @Test
+    fun `room merge preserves overlapping gaps with distinct equal-time newer boundaries`() = runTest {
+        val winner = store.getOrCreate(networkId, "old", "Old", BufferType.QUERY)
+        val loser = store.getOrCreate(networkId, "new", "New", BufferType.QUERY)
+        db.historyGapDao().insert(
+            HistoryGapEntity(0, winner.id, "a", 100, "b", 500),
+        )
+        db.historyGapDao().insert(
+            HistoryGapEntity(0, loser.id, "c", 400, "d", 500),
+        )
+
+        val merged = store.mergeRooms(winner.id, loser.id)
+
+        assertEquals(
+            setOf("a" to "b", "c" to "d"),
+            db.historyGapDao().forRoom(merged.id).map { it.olderMsgid to it.newerMsgid }.toSet(),
+        )
+    }
+
+    @Test
+    fun `room merge preserves recoverable and exhausted overlapping gaps independently`() = runTest {
+        val winner = store.getOrCreate(networkId, "old", "Old", BufferType.QUERY)
+        val loser = store.getOrCreate(networkId, "new", "New", BufferType.QUERY)
+        db.historyGapDao().insert(
+            HistoryGapEntity(0, winner.id, "m100", 100, "m500", 500, recoverable = false),
+        )
+        db.historyGapDao().insert(
+            HistoryGapEntity(0, loser.id, "m400", 400, "m900", 900, recoverable = true),
+        )
+
+        val merged = store.mergeRooms(winner.id, loser.id)
+
+        assertEquals(
+            setOf((100L to 500L) to false, (400L to 900L) to true),
+            db.historyGapDao().forRoom(merged.id)
+                .map { (it.olderServerTime to it.newerServerTime) to it.recoverable }
+                .toSet(),
+        )
+    }
+
+    @Test
+    fun `room merge splits an exhausted gap around history supplied by the other room`() = runTest {
+        val winner = store.getOrCreate(networkId, "old", "Old", BufferType.QUERY)
+        val loser = store.getOrCreate(networkId, "new", "New", BufferType.QUERY)
+        val olderId = db.messageDao().insertAll(
+            listOf(MessageEntity(
+                bufferId = winner.id,
+                msgid = "older",
+                serverTime = 100,
+                sender = "alice",
+                kind = MessageKind.PRIVMSG,
+                text = "older",
+                dedupKey = "older",
+            )),
+        ).single()
+        val newerId = db.messageDao().insertAll(
+            listOf(MessageEntity(
+                bufferId = winner.id,
+                msgid = "newer",
+                serverTime = 900,
+                sender = "alice",
+                kind = MessageKind.PRIVMSG,
+                text = "newer",
+                dedupKey = "newer",
+            )),
+        ).single()
+        val islandIds = db.messageDao().insertAll(
+            listOf(
+                MessageEntity(
+                    bufferId = loser.id,
+                    msgid = "island-1",
+                    serverTime = 400,
+                    sender = "bob",
+                    kind = MessageKind.PRIVMSG,
+                    text = "visible island 1",
+                    dedupKey = "island-1",
+                ),
+                MessageEntity(
+                    bufferId = loser.id,
+                    msgid = "island-2",
+                    serverTime = 500,
+                    sender = "bob",
+                    kind = MessageKind.PRIVMSG,
+                    text = "visible island 2",
+                    dedupKey = "island-2",
+                ),
+            ),
+        )
+        db.historyGapDao().insert(
+            HistoryGapEntity(
+                roomId = winner.id,
+                olderMsgid = "older",
+                olderServerTime = 100,
+                newerMsgid = "newer",
+                newerServerTime = 900,
+                recoverable = false,
+                olderEventId = olderId,
+                olderTimelineOrder = olderId,
+                newerEventId = newerId,
+                newerTimelineOrder = newerId,
+            ),
+        )
+
+        val merged = store.mergeRooms(winner.id, loser.id)
+        val gaps = db.historyGapDao().forRoom(merged.id)
+
+        assertEquals(2, gaps.size)
+        assertEquals(setOf("older" to "island-1", "island-2" to "newer"),
+            gaps.map { it.olderMsgid to it.newerMsgid }.toSet())
+        islandIds.forEach { islandId ->
+            assertEquals(merged.id, db.messageDao().byCanonicalId(islandId)?.bufferId)
+        }
+        assertTrue(gaps.none { it.olderServerTime < 400 && it.newerServerTime > 500 })
+        assertTrue(gaps.none { it.olderMsgid == "island-1" && it.newerMsgid == "island-2" })
     }
 
     @Test

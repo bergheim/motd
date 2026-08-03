@@ -132,25 +132,47 @@ private class BoundedChannelListings(private val capacity: Int) {
 
 data class WhoxResult(val rows: List<IrcEvent.WhoxRow>, val completed: Boolean)
 
+/**
+ * An event observed through a bounded fan-out stream. Consumers must treat a non-contiguous
+ * [sequence] as lost state and recover from their own authoritative source.
+ */
+data class SequencedIrcEvent(val sequence: Long, val event: IrcEvent)
+
 /** One instance per physical socket. Restartable: start() after stop() reconnects fresh. */
 class IrcClient(
     val config: IrcClientConfig,
     private val factory: TransportFactory,
     private val scope: CoroutineScope,
+    private val observerBufferCapacity: Int = OBSERVER_EVENT_CAPACITY,
 ) {
     private val _state = MutableStateFlow<IrcClientState>(IrcClientState.Disconnected)
     val state: StateFlow<IrcClientState> = _state.asStateFlow()
     private val _targetClassificationReady = MutableStateFlow(false)
     /** True once CHANTYPES is explicit or the registration burst confirms protocol defaults. */
     val targetClassificationReady: StateFlow<Boolean> = _targetClassificationReady.asStateFlow()
+    private val _pendingFeatureCaps = MutableStateFlow<Set<String>>(emptySet())
+    /** Runtime/deferred CAP requests that have not received ACK or NAK yet. */
+    val pendingFeatureCaps: StateFlow<Set<String>> = _pendingFeatureCaps.asStateFlow()
 
     private val _events = MutableSharedFlow<IrcEvent>(
         replay = 0,
-        extraBufferCapacity = 4096,
+        extraBufferCapacity = observerBufferCapacity,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
     /** Best-effort fan-out for transient request correlation and UI-adjacent observers. */
     val broadcastEvents: SharedFlow<IrcEvent> = _events.asSharedFlow()
+
+    private val _sequencedEvents = MutableSharedFlow<SequencedIrcEvent>(
+        replay = 0,
+        extraBufferCapacity = observerBufferCapacity,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    /**
+     * Bounded, ordered fan-out for stateful observers. It intentionally does not consume
+     * [criticalEvents]; a slow observer is never allowed to stall the IRC reader.
+     */
+    val sequencedEvents: SharedFlow<SequencedIrcEvent> = _sequencedEvents.asSharedFlow()
+    private var nextObserverSequence = 0L
 
     private var criticalEventChannel = Channel<IrcEvent>(CRITICAL_EVENT_CAPACITY)
 
@@ -208,10 +230,13 @@ class IrcClient(
 
     fun start() {
         stop()
+        require(observerBufferCapacity > 0) { "observer buffer capacity must be positive" }
         val criticalEvents = Channel<IrcEvent>(CRITICAL_EVENT_CAPACITY)
         criticalEventChannel = criticalEvents
+        nextObserverSequence = 0L
         registered = false
         _targetClassificationReady.value = false
+        _pendingFeatureCaps.value = emptySet()
         _bouncerNetworks.value = emptyMap()   // drop any stale networks from a prior connection
         _state.value = IrcClientState.Connecting
         runJob = scope.launch { run(criticalEvents) }
@@ -233,6 +258,7 @@ class IrcClient(
         transport = null
         registered = false
         _targetClassificationReady.value = false
+        _pendingFeatureCaps.value = emptySet()
         ackedCaps.set(emptySet())
         runtimeAdvertisedCaps.clear()
         if (t != null) scope.launch { runCatching { t.close() } }
@@ -396,6 +422,7 @@ class IrcClient(
                 _targetClassificationReady.value =
                     a.isupport["CHANTYPES"] != null || a.assumeDefaultTargetClassification
                 ackedCaps.set(a.caps)
+                _pendingFeatureCaps.value = a.deferredCaps
                 registered = true
                 val isupportMap = isupportToMap(a.isupport)
                 _state.value = IrcClientState.Ready(a.nick, a.caps, isupportMap)
@@ -484,6 +511,7 @@ class IrcClient(
                     eventMapper.map(message, batchId = batchRef, historical = historical)
                 }
                 if (events.size == leaves.size) {
+                    val historyReference = historyReference(tree.opening)
                     return listOf(
                         IrcEvent.NetworkBatch(
                             kind = if (tree.type == "netsplit") {
@@ -494,6 +522,11 @@ class IrcClient(
                             serverA = tree.params[0],
                             serverB = tree.params[1],
                             events = events,
+                            historyMetadata = HistoryEventMetadata(
+                                isContext = "draft/chathistory-context" in tree.opening.tags,
+                                msgid = historyReference?.msgid,
+                                serverTime = historyReference?.serverTime,
+                            ),
                         ),
                     )
                 }
@@ -620,6 +653,7 @@ class IrcClient(
                 val alreadyAcked = ackedCaps.get().map { it.substringBefore('=') }.toSet()
                 val want = CapNegotiator.runtimeRequestSet(caps, alreadyAcked, config.extraCaps)
                 if (want.isNotEmpty()) {
+                    _pendingFeatureCaps.value += want
                     for (b in CapNegotiator.batches(want)) runCatching { sendSerialized(t, "CAP REQ :$b") }
                 }
             }
@@ -650,6 +684,10 @@ class IrcClient(
                     IrcEvent.CapsChanged(added.map { it.substringBefore('=') }.toSet(), removed),
                 )
             }
+            "NAK" -> Unit
+        }
+        if (sub == "ACK" || sub == "NAK" || sub == "DEL") {
+            _pendingFeatureCaps.value -= caps
         }
     }
 
@@ -703,7 +741,9 @@ class IrcClient(
         event: IrcEvent,
     ) {
         criticalEvents.send(event)
+        val sequenced = SequencedIrcEvent(++nextObserverSequence, event)
         _events.emit(event)
+        _sequencedEvents.emit(sequenced)
     }
 
     private suspend fun sendSerialized(t: IrcTransport, msg: IrcMessage) =
@@ -723,6 +763,16 @@ class IrcClient(
     suspend fun sendIfConnected(msg: IrcMessage): Boolean {
         val t = transport ?: return false
         sendSerialized(t, msg)
+        return true
+    }
+
+    /** Send a logical protocol message without allowing another coroutine to interleave lines. */
+    suspend fun sendAtomicallyIfConnected(messages: List<IrcMessage>): Boolean {
+        if (messages.isEmpty()) return false
+        val t = transport ?: return false
+        outboundLock.withLock {
+            messages.forEach { t.send(it.serialize()) }
+        }
         return true
     }
 
@@ -901,7 +951,15 @@ class IrcClient(
                         else -> null
                     }
                     if (event != null) {
-                        listOf(child.batch.opening to event)
+                        val reference = historyReference(child.batch.opening)
+                        val enriched = (event as? IrcEvent.NetworkBatch)?.copy(
+                            historyMetadata = HistoryEventMetadata(
+                                isContext = "draft/chathistory-context" in child.batch.opening.tags,
+                                msgid = reference?.msgid,
+                                serverTime = reference?.serverTime,
+                            ),
+                        ) ?: event
+                        listOf(child.batch.opening to enriched)
                     } else {
                         mapCorrelatedHistoryChildren(child.batch)
                     }
@@ -1011,13 +1069,17 @@ class IrcClient(
     // -- soju bouncer-networks --
 
     suspend fun bouncerListNetworks(): List<BouncerNetwork> {
-        val t = transport ?: return snapshotBouncerNetworks()
+        val t = transport ?: throw IrcDisconnectedException("BOUNCER LISTNETWORKS", null)
         // soju advertises no labeled-response, so sendLabeled would return empty. It instead
         // pushes BOUNCER NETWORK notifications (soju.im/bouncer-networks-notify) that we already
         // accumulate in _bouncerNetworks. Send an explicit LISTNETWORKS to force a refresh for
         // servers that do not push, then return the snapshot once it settles (notifications
         // usually arrive by the time the caller reaches Ready).
-        runCatching { sendSerialized(t, BouncerCommands.listNetworks()) }
+        // A failed write is materially different from an empty bouncer account. Do not swallow it
+        // into the snapshot: callers need to offer a retryable discovery error. soju does not
+        // negotiate labeled-response, so an unlabelled server-side LIST rejection cannot be
+        // correlated; an accepted request that produces no NETWORK notifications is Loaded(empty).
+        sendSerialized(t, BouncerCommands.listNetworks())
         if (_bouncerNetworks.value.isEmpty()) {
             withTimeoutOrNull(2000) { while (_bouncerNetworks.value.isEmpty()) delay(50) }
         }
@@ -1029,7 +1091,12 @@ class IrcClient(
 
     suspend fun bouncerAddNetwork(attrs: Map<String, String>): String {
         val response = sendLabeled(BouncerCommands.addNetwork(attrs))
-        return response.firstNotNullOfOrNull { BouncerCommands.parseAddReply(it) } ?: ""
+        return response.firstNotNullOfOrNull { BouncerCommands.parseAddReply(it) }
+            ?: throw IrcCommandException(
+                "BOUNCER ADDNETWORK",
+                "NO_RESPONSE",
+                "The bouncer did not confirm adding the network.",
+            )
     }
 
     suspend fun bouncerDeleteNetwork(netId: String) {
@@ -1310,6 +1377,7 @@ class IrcClient(
         const val WEBPUSH_TIMEOUT_MS = 30_000L
         const val WHOX_TIMEOUT_MS = 15_000L
         const val CRITICAL_EVENT_CAPACITY = 4096
+        const val OBSERVER_EVENT_CAPACITY = 4096
         const val DEFAULT_HISTORY_PAGE_LIMIT = 100
     }
 }

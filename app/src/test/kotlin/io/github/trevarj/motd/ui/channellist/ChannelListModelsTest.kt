@@ -1,7 +1,7 @@
 package io.github.trevarj.motd.ui.channellist
 
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.irc.client.ChannelListing
-import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -80,13 +80,13 @@ class ChannelListModelsTest {
 
     @Test
     fun `live ready client wins while manager snapshot is absent or stale`() {
-        val ready = IrcClientState.Ready("me", emptySet(), mapOf("ELIST" to "U"))
+        val ready = ConnectionState.Ready("me")
 
         assertEquals(ready, channelBrowserConnectionState(null, ready))
-        assertEquals(ready, channelBrowserConnectionState(IrcClientState.Disconnected, ready))
+        assertEquals(ready, channelBrowserConnectionState(ConnectionState.Disconnected, ready))
         assertEquals(
-            IrcClientState.Disconnected,
-            channelBrowserConnectionState(ready, IrcClientState.Disconnected),
+            ConnectionState.Disconnected,
+            channelBrowserConnectionState(ready, ConnectionState.Disconnected),
         )
     }
 
@@ -94,37 +94,66 @@ class ChannelListModelsTest {
     fun `browser does not present offline state before initialization`() {
         assertEquals(
             ChannelBrowserAvailability.INITIALIZING,
-            channelBrowserAvailability(false, false, IrcClientState.Disconnected),
+            channelBrowserAvailability(false, false, ConnectionState.Disconnected),
         )
         assertEquals(
             ChannelBrowserAvailability.READY,
-            channelBrowserAvailability(true, false, IrcClientState.Ready("me", emptySet(), emptyMap())),
+            channelBrowserAvailability(true, false, ConnectionState.Ready("me")),
+        )
+    }
+
+    /**
+     * Review fix (P2 finding): a backend with no room-discovery capability at all (XMPP's baseline)
+     * must settle on [ChannelBrowserAvailability.UNSUPPORTED] even once Ready, rather than presenting
+     * [ChannelBrowserAvailability.READY] and letting the fetch pipeline poll an IRC-owned accessor
+     * that backend never registers with.
+     */
+    @Test
+    fun `browser presents unsupported for a backend with no room-discovery capability`() {
+        assertEquals(
+            ChannelBrowserAvailability.UNSUPPORTED,
+            channelBrowserAvailability(true, false, ConnectionState.Ready("me"), supportsDiscovery = false),
+        )
+        // The default (omitted) parameter preserves every existing 3-arg caller's behavior.
+        assertEquals(
+            ChannelBrowserAvailability.READY,
+            channelBrowserAvailability(true, false, ConnectionState.Ready("me")),
         )
     }
 
     @Test
-    fun `popular channel list requires ELIST user-count filtering`() {
+    fun `ready server without ELIST still auto-fetches locally bounded popular channels`() {
         assertEquals(
             true,
-            supportsPopularChannelList(
-                IrcClientState.Ready("me", emptySet(), mapOf("ELIST" to "CMNTU")),
-            ),
-        )
-        assertEquals(
-            true,
-            supportsPopularChannelList(
-                IrcClientState.Ready("me", emptySet(), mapOf("ELIST" to "u")),
+            shouldAutoFetchPopularChannels(
+                connection = ConnectionState.Ready("me"),
+                loaded = false,
+                isRoot = false,
             ),
         )
         assertEquals(
             false,
-            supportsPopularChannelList(
-                IrcClientState.Ready("me", emptySet(), mapOf("ELIST" to "CMNT")),
+            shouldAutoFetchPopularChannels(
+                connection = ConnectionState.Disconnected,
+                loaded = false,
+                isRoot = false,
             ),
         )
         assertEquals(
             false,
-            supportsPopularChannelList(IrcClientState.Ready("me", emptySet(), emptyMap())),
+            shouldAutoFetchPopularChannels(
+                connection = ConnectionState.Ready("me"),
+                loaded = true,
+                isRoot = false,
+            ),
+        )
+        assertEquals(
+            false,
+            shouldAutoFetchPopularChannels(
+                connection = ConnectionState.Ready("me"),
+                loaded = false,
+                isRoot = true,
+            ),
         )
     }
 

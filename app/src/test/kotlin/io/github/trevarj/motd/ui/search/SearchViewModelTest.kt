@@ -9,7 +9,7 @@ import io.github.trevarj.motd.data.db.SearchHit
 import io.github.trevarj.motd.data.repo.SearchRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -20,10 +20,9 @@ import org.junit.Test
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Query pipeline: blank queries clear results immediately, non-blank queries are debounced before
- * hitting the FTS repo (so rapid typing launches one query, not one per keystroke), and results
- * still flow through and group by buffer. The visible TextField value is now local Compose state
- * (not unit-testable), so this only exercises the ViewModel's results/debounce seam.
+ * Query pipeline: every logical query/scope key immediately clears stale rows and publishes
+ * loading, while only the repository call is debounced. The component test covers the local IME
+ * value's one-frame coherence guard; these tests exercise keyed cancellation at the ViewModel seam.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class SearchViewModelTest {
@@ -44,6 +43,28 @@ class SearchViewModelTest {
         override fun search(query: String, bufferId: Long?): Flow<List<SearchHit>> {
             calls.incrementAndGet()
             return flowOf(result)
+        }
+    }
+
+    private data class SearchRequest(val query: String, val bufferId: Long?)
+
+    /** A keyed, replaying source lets tests deliver results after its collector was cancelled. */
+    private class ControlledSearchRepository : SearchRepository {
+        private val flows = mutableMapOf<SearchRequest, MutableSharedFlow<List<SearchHit>>>()
+        val calls = mutableListOf<SearchRequest>()
+
+        override fun search(query: String, bufferId: Long?): Flow<List<SearchHit>> {
+            val request = SearchRequest(query, bufferId)
+            calls += request
+            return flowFor(request)
+        }
+
+        fun emit(query: String, bufferId: Long?, hits: List<SearchHit>) {
+            check(flowFor(SearchRequest(query, bufferId)).tryEmit(hits))
+        }
+
+        private fun flowFor(request: SearchRequest) = flows.getOrPut(request) {
+            MutableSharedFlow(replay = 1)
         }
     }
 
@@ -72,14 +93,23 @@ class SearchViewModelTest {
 
             // Simulate keystrokes faster than the debounce window.
             vm.onQueryChange("c")
+            runCurrent()
+            assertEquals("c", awaitItem().rawQuery)
             advanceTimeBy(50)
             vm.onQueryChange("co")
+            runCurrent()
+            assertEquals("co", awaitItem().rawQuery)
             advanceTimeBy(50)
             vm.onQueryChange("cor")
+            runCurrent()
+            assertEquals("cor", awaitItem().rawQuery)
             advanceTimeBy(50)
             vm.onQueryChange("coroutine")
-            // Not yet past the debounce window: no query should have fired.
             runCurrent()
+            val loading = awaitItem()
+            assertEquals("coroutine", loading.rawQuery)
+            assertTrue(loading.searching)
+            // Not yet past the debounce window: no query should have fired.
             assertEquals("no DB hit before the typing pause", 0, repo.calls.get())
 
             // Past the debounce window: exactly one query fires and results arrive.
@@ -110,25 +140,114 @@ class SearchViewModelTest {
     }
 
     @Test
-    fun clearing_query_suppresses_late_results_from_cancelled_search() = runTest {
-        val pending = MutableStateFlow<List<SearchHit>>(emptyList())
-        val repo = object : SearchRepository {
-            override fun search(query: String, bufferId: Long?): Flow<List<SearchHit>> = pending
-        }
+    fun query_change_immediately_clears_old_results_and_ignores_late_results() = runTest {
+        val repo = ControlledSearchRepository()
+        repo.emit("alpha", null, listOf(hit(1, "alpha result")))
         val vm = SearchViewModel(repo)
 
         vm.state.test {
             awaitItem()
-            vm.onQueryChange("coroutine")
-            advanceTimeBy(300)
+            vm.onQueryChange("alpha")
             runCurrent()
-            assertEquals("coroutine", awaitItem().rawQuery)
+            val alphaLoading = awaitItem()
+            assertEquals("alpha", alphaLoading.rawQuery)
+            assertTrue(alphaLoading.searching)
+            assertTrue(alphaLoading.groups.isEmpty())
+
+            advanceTimeBy(250)
+            runCurrent()
+            val alphaResults = awaitItem()
+            assertEquals("alpha", alphaResults.rawQuery)
+            assertEquals(1, alphaResults.groups.size)
+
+            vm.onQueryChange("beta")
+            runCurrent()
+            val betaLoading = awaitItem()
+            assertEquals("beta", betaLoading.rawQuery)
+            assertTrue(betaLoading.searching)
+            assertTrue(betaLoading.groups.isEmpty())
+
+            repo.emit("alpha", null, listOf(hit(1, "late alpha result")))
+            runCurrent()
+            expectNoEvents()
+
+            advanceTimeBy(250)
+            runCurrent()
+            repo.emit("beta", null, listOf(hit(2, "beta result")))
+            runCurrent()
+            val betaResults = awaitItem()
+            assertEquals("beta", betaResults.rawQuery)
+            assertTrue(!betaResults.searching)
+            assertEquals("beta result", betaResults.groups.single().hits.single().message.text)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun scope_change_immediately_clears_old_results_and_ignores_late_scope_results() = runTest {
+        val repo = ControlledSearchRepository()
+        val vm = SearchViewModel(repo)
+
+        vm.state.test {
+            awaitItem()
+            vm.init(bufferId = 7L)
+            runCurrent()
+            awaitItem() // blank, current-buffer scope
+            vm.onScopeChange(SearchScope.ALL)
+            runCurrent()
+            awaitItem() // blank, global scope
+
+            repo.emit("alpha", null, listOf(hit(1, "global alpha result")))
+            vm.onQueryChange("alpha")
+            runCurrent()
+            awaitItem() // global loading
+            advanceTimeBy(250)
+            runCurrent()
+            assertEquals("global alpha result", awaitItem().groups.single().hits.single().message.text)
+
+            vm.onScopeChange(SearchScope.CURRENT)
+            runCurrent()
+            val currentLoading = awaitItem()
+            assertEquals(SearchScope.CURRENT, currentLoading.scope)
+            assertTrue(currentLoading.searching)
+            assertTrue(currentLoading.groups.isEmpty())
+
+            repo.emit("alpha", null, listOf(hit(1, "late global alpha result")))
+            runCurrent()
+            expectNoEvents()
+
+            advanceTimeBy(250)
+            runCurrent()
+            repo.emit("alpha", 7L, listOf(hit(7, "current alpha result")))
+            runCurrent()
+            val currentResults = awaitItem()
+            assertEquals(SearchScope.CURRENT, currentResults.scope)
+            assertTrue(!currentResults.searching)
+            assertEquals("current alpha result", currentResults.groups.single().hits.single().message.text)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun clear_immediately_removes_results_and_ignores_late_results() = runTest {
+        val repo = ControlledSearchRepository()
+        repo.emit("alpha", null, listOf(hit(1, "alpha result")))
+        val vm = SearchViewModel(repo)
+
+        vm.state.test {
+            awaitItem()
+            vm.onQueryChange("alpha")
+            runCurrent()
+            awaitItem() // alpha loading
+            advanceTimeBy(250)
+            runCurrent()
+            assertEquals(1, awaitItem().groups.size)
 
             vm.onQueryChange("")
             runCurrent()
             assertEquals(SearchUiState(), awaitItem())
 
-            pending.value = listOf(hit(1, "late coroutine result"))
+            repo.emit("alpha", null, listOf(hit(1, "late alpha result")))
             runCurrent()
             expectNoEvents()
             cancelAndIgnoreRemainingEvents()

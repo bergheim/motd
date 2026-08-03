@@ -20,8 +20,6 @@ import io.github.trevarj.motd.data.db.MessageKind
 import io.github.trevarj.motd.data.db.MotdDatabase
 import io.github.trevarj.motd.data.db.RoomEntity
 import io.github.trevarj.motd.data.db.TimelineAnchor
-import io.github.trevarj.motd.data.db.TimeProvenance
-import io.github.trevarj.motd.data.db.ircTarget
 import io.github.trevarj.motd.data.db.identityRules
 import io.github.trevarj.motd.data.prefs.AvatarStyle
 import io.github.trevarj.motd.data.prefs.Settings
@@ -35,10 +33,6 @@ import io.github.trevarj.motd.data.sync.parseRoomMergePresentationKey
 import io.github.trevarj.motd.data.visibility.MessageVisibilityPolicy
 import io.github.trevarj.motd.data.visibility.MessageVisibilitySpec
 import io.github.trevarj.motd.di.ApplicationScope
-import io.github.trevarj.motd.irc.event.IrcEvent
-import io.github.trevarj.motd.irc.event.MessageContext
-import io.github.trevarj.motd.irc.event.ServerTimeSource
-import io.github.trevarj.motd.irc.proto.Prefix
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -137,30 +131,7 @@ class MotdNotifications @Inject constructor(
                             type = buffer.type,
                             hasMention = event.hasMention,
                             eventId = event.id,
-                            message = IrcEvent.ChatMessage(
-                                ctx = MessageContext(
-                                    msgid = event.msgid,
-                                    serverTime = event.serverTime,
-                                    account = event.senderAccount,
-                                    batchId = null,
-                                    label = null,
-                                    serverTimeSource = when (event.timeProvenance) {
-                                        TimeProvenance.SERVER_TAG -> ServerTimeSource.TAG
-                                        TimeProvenance.LOCAL_CLOCK -> ServerTimeSource.LOCAL
-                                        TimeProvenance.UNKNOWN -> ServerTimeSource.UNKNOWN
-                                    },
-                                ),
-                                kind = when (event.kind) {
-                                    MessageKind.PRIVMSG -> IrcEvent.ChatKind.PRIVMSG
-                                    MessageKind.NOTICE -> IrcEvent.ChatKind.NOTICE
-                                    else -> IrcEvent.ChatKind.ACTION
-                                },
-                                source = Prefix(event.sender),
-                                target = buffer.ircTarget,
-                                text = event.text,
-                                isSelf = false,
-                                replyToMsgid = event.replyToMsgid,
-                            ),
+                            message = event,
                         )
                     }
                     MessageKind.INVITE -> onInvitation(buffer.networkId, buffer.id, event.id)
@@ -231,21 +202,13 @@ class MotdNotifications @Inject constructor(
 
     // -- MessageNotifier (message/mention notifications) --
 
-    override suspend fun onIncoming(
-        networkId: Long,
-        bufferId: Long,
-        type: BufferType,
-        hasMention: Boolean,
-        message: IrcEvent.ChatMessage,
-    ) = postIncoming(networkId, bufferId, type, hasMention, eventId = null, message)
-
     override suspend fun onCanonicalIncoming(
         networkId: Long,
         bufferId: Long,
         type: BufferType,
         hasMention: Boolean,
         eventId: Long,
-        message: IrcEvent.ChatMessage,
+        message: MessageEntity,
     ) = postIncoming(networkId, bufferId, type, hasMention, eventId, message)
 
     private suspend fun postIncoming(
@@ -254,7 +217,7 @@ class MotdNotifications @Inject constructor(
         type: BufferType,
         hasMention: Boolean,
         eventId: Long?,
-        message: IrcEvent.ChatMessage,
+        message: MessageEntity,
     ) {
         // Plain suspend reads: Room and DataStore dispatch off the main thread on their own. The
         // events collector runs on Dispatchers.Main, so the previous runBlocking { suspend query }
@@ -266,7 +229,7 @@ class MotdNotifications @Inject constructor(
             }
         }
         val canonicalEventId = canonicalEvent?.id
-        val canonicalEventTime = canonicalEvent?.serverTime ?: message.ctx.serverTime
+        val canonicalEventTime = canonicalEvent?.serverTime ?: message.serverTime
         // Friends/fools sets (single bounded DataStore read; null settings ⇒ empty sets).
         val settings = runCatching { settingsRepository.settings.first() }.getOrNull() ?: Settings()
         val identityRules = db.networkIdentityDao().byNetwork(networkId)?.identityRules
@@ -279,15 +242,15 @@ class MotdNotifications @Inject constructor(
         // Fools and explicit buffer mute are fully silent. Foreground suppression also applies.
         val foreground = foregroundBufferTracker.foregroundBufferId.value == bufferId
         val muted = buffer?.muted == true
-        val senderIsFriend = identityRules.matchesConfiguredNick(message.source.nick, settings.friends)
+        val senderIsFriend = identityRules.matchesConfiguredNick(message.sender, settings.friends)
         val senderIsFool = foolPolicy.matchesFoolIdentity(
-            canonicalEvent?.senderAccount ?: message.ctx.account,
-            canonicalEvent?.normalizedActor ?: identityRules.normalize(message.source.nick),
+            canonicalEvent?.senderAccount ?: message.senderAccount,
+            canonicalEvent?.normalizedActor ?: identityRules.normalize(message.sender),
         )
         val incomingAnchor = canonicalEvent?.let {
             TimelineAnchor(it.serverTime, it.id, it.timelineOrder)
         }
-            ?: TimelineAnchor(message.ctx.serverTime, 0L)
+            ?: TimelineAnchor(message.serverTime, 0L)
         val effectiveReadAnchor = buffer?.let { effectiveLocalReadAnchor(it) }
         val alreadyRead = effectiveReadAnchor?.let { incomingAnchor <= it } == true
         val decision = shouldPostNotification(foreground, muted, senderIsFriend, senderIsFool, alreadyRead)
@@ -295,8 +258,8 @@ class MotdNotifications @Inject constructor(
             mapOf(
                 "network_id" to networkId,
                 "buffer_id" to bufferId,
-                "msgid_fp" to diagnostics.fingerprint(message.ctx.msgid),
-                "sender_fp" to diagnostics.fingerprint(message.source.nick),
+                "msgid_fp" to diagnostics.fingerprint(message.msgid),
+                "sender_fp" to diagnostics.fingerprint(message.sender),
                 "body_fp" to diagnostics.fingerprint(message.text),
                 "foreground" to foreground,
                 "muted" to muted,
@@ -310,10 +273,15 @@ class MotdNotifications @Inject constructor(
         if (!decision) return
 
         val channel = if (hasMention) CHANNEL_MENTIONS else CHANNEL_MESSAGES
-        val title = buffer?.displayName ?: message.target
+        // No neutral equivalent to the old wire "target" fallback survives on MessageEntity (it
+        // carried the raw IRC channel/query string). buffer is looked up by this row's own bufferId
+        // FK, which Room enforces with ON DELETE CASCADE, so a persisted row without a resolvable
+        // buffer should not occur; this null path is therefore believed unreachable but is not
+        // proven so, so it degrades to no title rather than inventing a wire-shaped placeholder.
+        val title = buffer?.displayName
         val person = notificationPerson(
             networkId,
-            message.source.nick,
+            message.sender,
             settings.avatarStyle,
             identityRules,
         )
@@ -366,7 +334,7 @@ class MotdNotifications @Inject constructor(
                 diagnostics.record("notifications", "message_deduplicated") {
                     mapOf(
                         "buffer_id" to bufferId,
-                        "msgid_fp" to diagnostics.fingerprint(message.ctx.msgid),
+                        "msgid_fp" to diagnostics.fingerprint(message.msgid),
                         "body_fp" to diagnostics.fingerprint(message.text),
                         "existing_index" to existingIndex,
                     )
@@ -375,7 +343,7 @@ class MotdNotifications @Inject constructor(
             } else {
                 keys += key
                 if (keys.size > MAX_NOTIFICATION_MESSAGES) keys.removeAt(0)
-                conversation.also { it.addMessage(message.text, message.ctx.serverTime, person) }
+                conversation.also { it.addMessage(message.text, message.serverTime, person) }
             }
         }
         val notificationEventIds = synchronized(history) {
@@ -418,7 +386,7 @@ class MotdNotifications @Inject constructor(
                 .setAction(ACTION_OPEN_BUFFER)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 .putExtra(EXTRA_BUFFER_ID, bufferId)
-                .putExtra(EXTRA_JUMP_MSGID, message.ctx.msgid)
+                .putExtra(EXTRA_JUMP_MSGID, message.msgid)
                 .putExtra(EXTRA_JUMP_TIME, canonicalEventTime)
                 .putExtra(EXTRA_EVENT_ID, canonicalEventId),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
@@ -453,7 +421,7 @@ class MotdNotifications @Inject constructor(
         diagnostics.record("notifications", "message_post_finished") {
             mapOf(
                 "buffer_id" to bufferId,
-                "msgid_fp" to diagnostics.fingerprint(message.ctx.msgid),
+                "msgid_fp" to diagnostics.fingerprint(message.msgid),
                 "body_fp" to diagnostics.fingerprint(message.text),
                 "permission" to canPost,
             )
@@ -714,12 +682,12 @@ private data class NotificationMessageKey(
     )
 
     companion object {
-        fun from(eventId: Long?, message: IrcEvent.ChatMessage): NotificationMessageKey =
+        fun from(eventId: Long?, message: MessageEntity): NotificationMessageKey =
             NotificationMessageKey(
                 eventId = eventId,
-                msgid = message.ctx.msgid,
-                serverTime = message.ctx.serverTime,
-                sender = message.source.nick,
+                msgid = message.msgid,
+                serverTime = message.serverTime,
+                sender = message.sender,
                 text = message.text,
             )
 

@@ -26,6 +26,7 @@ done
 
 adb() {
   local binary
+  [ "${MOTD_SKIP_ADB_REVERSE:-0}" != "1" ] || return 1
   binary="$(type -P adb 2>/dev/null || true)"
   if [ -n "$binary" ]; then "$binary" "$@"; else nix develop "$REPO" -c adb "$@"; fi
 }
@@ -111,7 +112,8 @@ up() {
   setsid znc -f --no-color -d "$RUN" >"$RUN/znc.log" 2>&1 &
   echo $! >"$RUN/znc.pid"
   wait_port "$ZNC_PORT" ZNC
-  adb reverse "tcp:$ZNC_PORT" "tcp:$ZNC_PORT" >/dev/null
+  adb reverse "tcp:$ZNC_PORT" "tcp:$ZNC_PORT" >/dev/null \
+    || log "adb reverse skipped or unavailable; the host socket probe remains usable"
   python3 "$PROBE" caps --host 127.0.0.1 --port "$ZNC_PORT" \
     --output "$RUN/observed-caps.txt"
   log "ready: TLS 127.0.0.1:$ZNC_PORT, login $ZNC_USER/libera / $ZNC_PASS"

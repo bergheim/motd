@@ -8,8 +8,8 @@
 #             auto-join ##motdtest):
 #               1. account motd/motdupstream    (soju identifies to this)
 #               2. account motdadb2/motdadb2pass (the seed identity)
-#               3. as motdadb2: identify, join ##motdtest, register the channel,
-#                  set a topic.
+#               3. as motdadb2: identify and register ##motdtest plus the
+#                  browser-only #motd-browser fixture, then set their topics.
 #
 #   seed      Post the deterministic seed messages into ##motdtest. Runs AFTER
 #             soju is connected and joined, so soju OBSERVES the messages live
@@ -46,6 +46,7 @@ MODE="${1:-all}"
 ERGO_HOST="${ERGO_HOST:-ergo}"
 ERGO_PORT="${ERGO_PORT:-6667}"
 TEST_CHANNEL="${TEST_CHANNEL:-##motdtest}"
+BROWSER_CHANNEL="${BROWSER_CHANNEL:-#motd-browser}"
 APP_NICK="${APP_NICK:-motdadb}"
 SEED_HOLD_SECONDS="${SEED_HOLD_SECONDS:-1}"
 PUSH_TOKEN="${PUSH_TOKEN:-motd-unifiedpush}"
@@ -56,6 +57,7 @@ UP_ACCOUNT="${UP_ACCOUNT:-motd}"
 UP_PASS="${UP_PASS:-motdupstream}"
 SEED_NICK="${SEED_NICK:-motdadb2}"
 SEED_PASS="${SEED_PASS:-motdadb2pass}"
+RECONNECT_NICK="${RECONNECT_NICK:-motdhistory}"
 
 log() { printf '[ergo-provision:%s] %s\n' "$MODE" "$*" >&2; }
 
@@ -63,7 +65,7 @@ fixture_channels() {
   if [ "$STACK_PROFILE" = showcase ]; then
     printf '%s\n' $SHOWCASE_CHANNELS
   else
-    printf '%s\n' "$TEST_CHANNEL"
+    printf '%s\n' "$TEST_CHANNEL" "$BROWSER_CHANNEL"
   fi
 }
 
@@ -311,9 +313,8 @@ do_reconnect_gap() {
   token="$1"
   log "posting recovered reconnect gap tagged $token"
   {
-    printf 'NICK %s\r\n' "$SEED_NICK"
-    printf 'USER %s 0 * :motd reconnect gap fixture\r\n' "$SEED_NICK"
-    printf 'NICKSERV IDENTIFY %s %s\r\n' "$SEED_NICK" "$SEED_PASS"
+    printf 'NICK %s\r\n' "$RECONNECT_NICK"
+    printf 'USER %s 0 * :motd reconnect gap fixture\r\n' "$RECONNECT_NICK"
     sleep 2
     printf 'JOIN %s\r\n' "$TEST_CHANNEL"
     sleep 1
@@ -332,9 +333,8 @@ do_reconnect_current() {
   token="$1"
   log "posting current reconnect rows tagged $token"
   {
-    printf 'NICK %s\r\n' "$SEED_NICK"
-    printf 'USER %s 0 * :motd reconnect current fixture\r\n' "$SEED_NICK"
-    printf 'NICKSERV IDENTIFY %s %s\r\n' "$SEED_NICK" "$SEED_PASS"
+    printf 'NICK %s\r\n' "$RECONNECT_NICK"
+    printf 'USER %s 0 * :motd reconnect current fixture\r\n' "$RECONNECT_NICK"
     sleep 2
     printf 'JOIN %s\r\n' "$TEST_CHANNEL"
     sleep 1

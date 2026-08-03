@@ -8,6 +8,7 @@ import io.github.trevarj.motd.irc.client.HistoryAvailability
 import io.github.trevarj.motd.irc.client.HistoryReferenceType
 import io.github.trevarj.motd.irc.client.IrcCommandException
 import io.github.trevarj.motd.irc.ext.ChatHistorySelectors
+import io.github.trevarj.motd.data.sync.boundedToRequest
 
 /**
  * Resolves a search/deep-jump target to a 0-based reverse-list index (plans/11 §C).
@@ -149,7 +150,8 @@ internal suspend fun fetchAroundHistoryPage(
         request = request.copy(bound1 = timestampSelector)
         requestPage(request)
     }
-    val page = response as? ChatHistoryResponse.Messages ?: return false
+    val page = (response as? ChatHistoryResponse.Messages)
+        ?.boundedToRequest(request, preferredAroundMsgid = msgid) ?: return false
     persistPage(request, page)
     return true
 }

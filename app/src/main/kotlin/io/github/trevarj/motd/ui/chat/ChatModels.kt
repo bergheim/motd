@@ -4,13 +4,16 @@ import io.github.trevarj.motd.data.db.MessageEntity
 import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.db.MessageKind
 import io.github.trevarj.motd.data.db.ReactionEntity
+import io.github.trevarj.motd.data.db.TimelineAnchor
 import io.github.trevarj.motd.data.visibility.JOIN_PART_QUIT_KINDS
 import io.github.trevarj.motd.data.visibility.CONVERSATION_KINDS
 import io.github.trevarj.motd.data.visibility.MessageVisibilityPolicy
 import io.github.trevarj.motd.data.visibility.MessageVisibilitySpec
+import io.github.trevarj.motd.data.visibility.MessageWindowBounds
 import io.github.trevarj.motd.data.prefs.LayoutDensity
+import io.github.trevarj.motd.data.repo.HistoryWindowFocus
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.irc.client.HistoryAvailability
-import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 import io.github.trevarj.motd.ui.components.ReactionChip
 import androidx.paging.LoadState
@@ -30,6 +33,19 @@ val JPQ_KINDS: Set<MessageKind> = JOIN_PART_QUIT_KINDS
  * Behavioral filter spec derived from observed Settings and passed into each repository Pager.
  */
 typealias MessageFilterSpec = MessageVisibilitySpec
+
+/** Identity of the active paging island; bounds changes invalidate viewport-derived state. */
+data class ActiveHistoryWindow(
+    val focus: HistoryWindowFocus = HistoryWindowFocus.Recent,
+    val bounds: MessageWindowBounds = MessageWindowBounds(),
+)
+
+/** Frozen normal-entry boundary; [lowerBound] means older unread rows are not loaded yet. */
+data class UnreadEntrySnapshot(
+    val marker: TimelineAnchor,
+    val loadedCount: Int,
+    val lowerBound: Boolean,
+)
 
 /** Match a stored actor using its persisted account/casemapped identity, never display spelling. */
 fun MessageEntity.matchesConfiguredActor(
@@ -84,6 +100,15 @@ fun lagTone(lagMs: Long): LagTone = when {
 const val AUTOSCROLL_BOTTOM_TOLERANCE_PX: Int = 64
 internal const val MAX_PLACEHOLDER_PROBES: Int = 500
 internal const val TARGET_MATERIALIZATION_TIMEOUT_MS = 30_000L
+internal const val TOP_ALIGNMENT_TOLERANCE_PX = 1
+
+/**
+ * Upper bound on measure-correct passes when snapping the entry row to the viewport top. One pass
+ * suffices on a quiet layout; a pass whose scroll a racing Paging generation presentation clamps is
+ * observed on the next frame and re-corrected. The cap keeps a layout that legitimately cannot
+ * align (content shorter than the viewport) from spinning until the materialization timeout.
+ */
+internal const val TOP_ALIGNMENT_MAX_PASSES = 8
 
 /**
  * Decide whether an incoming message should pin the reverse list to the newest row (index 0). Only
@@ -99,7 +124,7 @@ fun shouldAutoscrollToNewest(atBottom: Boolean, oldCount: Int, newCount: Int): B
 /** Which jump the scroll-to-bottom FAB performs. */
 sealed interface ScrollToBottomFabJump {
     /** Jump to the nearest unread @mention below the viewport (the FAB's mention walk). */
-    data class Mention(val index: Int) : ScrollToBottomFabJump
+    data class Mention(val target: ChatPositionTarget) : ScrollToBottomFabJump
     /** Jump straight to the newest row. */
     object Newest : ScrollToBottomFabJump
 }
@@ -109,7 +134,10 @@ sealed interface ScrollToBottomFabJump {
  * newest; a tap follows the nearest unread [mentionTarget] when one is pending below the viewport,
  * otherwise it also goes to newest. Pure so the routing is unit-testable without composition.
  */
-fun scrollToBottomFabJump(longPress: Boolean, mentionTarget: Int?): ScrollToBottomFabJump =
+fun scrollToBottomFabJump(
+    longPress: Boolean,
+    mentionTarget: ChatPositionTarget?,
+): ScrollToBottomFabJump =
     if (longPress || mentionTarget == null) ScrollToBottomFabJump.Newest
     else ScrollToBottomFabJump.Mention(mentionTarget)
 
@@ -292,6 +320,29 @@ data class ChatPositionTarget(
     val requestToken: Long = 0,
 )
 
+/** Identity-free targets describe an insertion point, which may sit just past the last row. */
+internal fun materializableTargetIndex(
+    requestedIndex: Int,
+    itemCount: Int,
+    hasExactIdentity: Boolean,
+): Int? = when {
+    requestedIndex in 0 until itemCount -> requestedIndex
+    !hasExactIdentity && requestedIndex == itemCount && itemCount > 0 -> itemCount - 1
+    else -> null
+}
+
+/** Find a materialized row by the stable LazyColumn key, never by its pre-layout index. */
+internal fun materializedTargetVisibleIndex(
+    visibleItems: List<Pair<Any, Int>>,
+    eventId: Long,
+): Int? = visibleItems.firstOrNull { (key, _) -> key == eventId }?.second
+
+internal fun shouldShowNewestFab(
+    atBottom: Boolean,
+    hasNewerHistoryIsland: Boolean,
+    autoScrolling: Boolean,
+): Boolean = (!atBottom || hasNewerHistoryIsland) && !autoScrolling
+
 data class ChatScrollPosition(
     val index: Int,
     val offset: Int,
@@ -335,25 +386,47 @@ internal data class TargetMaterialization<T>(
     val generation: Any? = null,
 )
 
+/** Re-request cadence for a target whose Paging load hint produced no observable load. */
+internal const val TARGET_REHINT_INTERVAL_MS = 1_000L
+
 /** Request exactly one placeholder and wait for that position, without scanning the dataset. */
 internal suspend fun <T> requestAndAwaitTarget(
     index: Int,
     request: suspend (Int) -> Boolean,
     snapshots: Flow<TargetMaterialization<T>>,
+    rehintIntervalMs: Long = TARGET_REHINT_INTERVAL_MS,
 ): T? {
     val before = snapshots.first()
     if (!request(index)) return null
     var observedLoading = before.loading
     return withTimeoutOrNull(TARGET_MATERIALIZATION_TIMEOUT_MS) {
-        snapshots.firstOrNull { snapshot ->
-            observedLoading = observedLoading || snapshot.loading
-            val replaced = snapshot.generation != before.generation
-            val newFailure = snapshot.failed && (!before.failed || observedLoading || replaced)
-            snapshot.item != null || newFailure ||
-                (!snapshot.addressable && !snapshot.loading) ||
-                ((observedLoading || replaced) && !snapshot.loading)
+        while (true) {
+            var streamEnded = false
+            val terminal = withTimeoutOrNull(rehintIntervalMs) {
+                snapshots.firstOrNull { snapshot ->
+                    observedLoading = observedLoading || snapshot.loading
+                    val replaced = snapshot.generation != before.generation
+                    val newFailure = snapshot.failed && (!before.failed || observedLoading || replaced)
+                    snapshot.item != null || newFailure ||
+                        (!snapshot.addressable && !snapshot.loading) ||
+                        ((observedLoading || replaced) && !snapshot.loading)
+                }.also { streamEnded = it == null }
+            }
+            when {
+                terminal != null -> return@withTimeoutOrNull terminal.item
+                streamEnded -> return@withTimeoutOrNull null
+                // A whole interval passed with no terminal snapshot and no load ever observed for a
+                // parked placeholder viewport: Paging can drop the single viewport hint when it
+                // races the generation's initial prepend/refresh, and nothing else will ever load
+                // the target. Re-issue the idempotent request so the hint is re-recorded instead of
+                // sitting quiescent until the outer cap.
+                else -> if (!request(index)) return@withTimeoutOrNull null
+            }
         }
-    }?.item
+        // withTimeoutOrNull cancels the loop at the materialization cap.
+        @Suppress("UNREACHABLE_CODE")
+        null
+    }
 }
 
 data class ReplyJumpRequest(val msgid: String)
@@ -365,13 +438,6 @@ sealed interface ChatUiEvent {
     data object ReactionSendFailed : ChatUiEvent
     data object SendRejected : ChatUiEvent
     data object NotInChannel : ChatUiEvent
-    data object HistoryOffline : ChatUiEvent
-    data class HistoryUpdated(val inserted: Int) : ChatUiEvent
-    data object HistoryUpToDate : ChatUiEvent
-    data object HistoryUnsupported : ChatUiEvent
-    data object HistoryFailed : ChatUiEvent
-    data class HistoryIncomplete(val inserted: Int) : ChatUiEvent
-    data class HistoryCapped(val inserted: Int, val limit: Int) : ChatUiEvent
     data class ReplyJumpUnavailable(val request: ReplyJumpRequest) : ChatUiEvent
     data object ConversationLayoutWriteFailed : ChatUiEvent
 }
@@ -405,60 +471,52 @@ internal class ChatUiEventQueue {
 }
 
 internal fun ChatUiEvent.hasRetryAction(): Boolean =
-    this is ChatUiEvent.ReplyJumpUnavailable ||
-        this is ChatUiEvent.HistoryFailed ||
-        this is ChatUiEvent.HistoryIncomplete ||
-        this is ChatUiEvent.HistoryCapped
-
-/** Manual history-refresh outcomes use a transient banner below the chat title. */
-internal fun ChatUiEvent.isHistoryRefreshNotice(): Boolean = when (this) {
-    ChatUiEvent.HistoryOffline,
-    is ChatUiEvent.HistoryUpdated,
-    ChatUiEvent.HistoryUpToDate,
-    ChatUiEvent.HistoryUnsupported,
-    ChatUiEvent.HistoryFailed,
-    is ChatUiEvent.HistoryIncomplete,
-    is ChatUiEvent.HistoryCapped,
-    -> true
-    else -> false
-}
+    this is ChatUiEvent.ReplyJumpUnavailable
 
 /** Run a snackbar action before acknowledging its replay-safe queued event. */
 internal fun handleChatUiEventResult(
     event: QueuedChatUiEvent,
     actionPerformed: Boolean,
     retryReplyJump: (ReplyJumpRequest) -> Unit,
-    retryMissingHistory: () -> Unit,
     acknowledge: (Long) -> Unit,
 ) {
     if (actionPerformed) {
         when (val value = event.value) {
             is ChatUiEvent.ReplyJumpUnavailable -> retryReplyJump(value.request)
-            ChatUiEvent.HistoryFailed,
-            is ChatUiEvent.HistoryIncomplete,
-            is ChatUiEvent.HistoryCapped,
-            -> retryMissingHistory()
             else -> Unit
         }
     }
     acknowledge(event.id)
 }
 
+/**
+ * Footer state for the older end of the reverse timeline. Scroll-driven paging drives APPEND
+ * automatically, so the footer only reflects the current [LoadState.append] plus the connection's
+ * history availability — there is no explicit "load older" affordance.
+ */
 sealed interface ChatHistoryUiState {
+    /** Nothing to show: server/no buffer, or a Ready timeline mid-history. */
     data object Hidden : ChatHistoryUiState
+
+    /** An APPEND page is in flight (shimmer). */
     data object Loading : ChatHistoryUiState
-    data object Offline : ChatHistoryUiState
-    data object Negotiating : ChatHistoryUiState
+
+    /** A recoverable append error; the footer offers `items.retry()`. */
+    data object Retry : ChatHistoryUiState
+
+    /** History is unreachable: [offline] true when disconnected/fatal, false while negotiating. */
+    data class Unavailable(val offline: Boolean) : ChatHistoryUiState
+
+    /** The network does not advertise CHATHISTORY. */
     data object Unsupported : ChatHistoryUiState
-    data class Incomplete(val inserted: Int = 0) : ChatHistoryUiState
-    data class Capped(val inserted: Int, val limit: Int) : ChatHistoryUiState
-    data object Error : ChatHistoryUiState
+
+    /** Persisted protocol completion: the true start of history. */
     data object ConfirmedStart : ChatHistoryUiState
 }
 
 internal fun chatHistoryUiState(
     bufferType: BufferType?,
-    connectionState: IrcClientState?,
+    connectionState: ConnectionState?,
     availability: HistoryAvailability,
     append: LoadState,
     historyComplete: Boolean,
@@ -469,8 +527,9 @@ internal fun chatHistoryUiState(
     if (append is LoadState.Loading) return ChatHistoryUiState.Loading
     if (append is LoadState.Error) {
         return when (availability) {
-            HistoryAvailability.NegotiatingOrOffline -> historyUnavailableState(connectionState)
-            else -> ChatHistoryUiState.Error
+            HistoryAvailability.NegotiatingOrOffline ->
+                ChatHistoryUiState.Unavailable(offline = isHistoryOffline(connectionState))
+            else -> ChatHistoryUiState.Retry
         }
     }
     if (append.endOfPaginationReached && historyComplete) {
@@ -478,25 +537,19 @@ internal fun chatHistoryUiState(
     }
     return when (availability) {
         HistoryAvailability.Unsupported -> ChatHistoryUiState.Unsupported
-        HistoryAvailability.NegotiatingOrOffline -> historyUnavailableState(connectionState)
-        is HistoryAvailability.Ready -> if (append.endOfPaginationReached) {
-            ChatHistoryUiState.Incomplete()
-        } else {
-            ChatHistoryUiState.Hidden
-        }
+        HistoryAvailability.NegotiatingOrOffline ->
+            ChatHistoryUiState.Unavailable(offline = isHistoryOffline(connectionState))
+        // A Ready timeline pages older on scroll; end-of-pagination without persisted completion
+        // (e.g. an unrecoverable gap) has no affordance.
+        is HistoryAvailability.Ready -> ChatHistoryUiState.Hidden
     }
 }
 
-private fun historyUnavailableState(connectionState: IrcClientState?): ChatHistoryUiState =
-    when (connectionState) {
-        IrcClientState.Disconnected -> ChatHistoryUiState.Offline
-        is IrcClientState.Failed -> if (connectionState.fatal) {
-            ChatHistoryUiState.Offline
-        } else {
-            ChatHistoryUiState.Negotiating
-        }
-        else -> ChatHistoryUiState.Negotiating
-    }
+private fun isHistoryOffline(connectionState: ConnectionState?): Boolean = when (connectionState) {
+    ConnectionState.Disconnected -> true
+    is ConnectionState.Failed -> connectionState.fatal
+    else -> false
+}
 
 /** Retries each offline mediator failure once when its connection generation is Ready. */
 internal class HistoryReadyRetryGate {

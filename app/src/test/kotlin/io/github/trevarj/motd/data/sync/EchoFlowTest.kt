@@ -5,6 +5,7 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import io.github.trevarj.motd.data.db.BufferEntity
 import io.github.trevarj.motd.data.db.BufferType
+import io.github.trevarj.motd.data.db.MessageEntity
 import io.github.trevarj.motd.data.db.MessageKind
 import io.github.trevarj.motd.data.db.MotdDatabase
 import io.github.trevarj.motd.data.db.NetworkEntity
@@ -26,14 +27,15 @@ import org.robolectric.RobolectricTestRunner
 @RunWith(RobolectricTestRunner::class)
 class EchoFlowTest {
     private class RecordingNotifier : MessageNotifier {
-        val incoming = mutableListOf<IrcEvent.ChatMessage>()
+        val incoming = mutableListOf<MessageEntity>()
 
-        override suspend fun onIncoming(
+        override suspend fun onCanonicalIncoming(
             networkId: Long,
             bufferId: Long,
             type: BufferType,
             hasMention: Boolean,
-            message: IrcEvent.ChatMessage,
+            eventId: Long,
+            message: MessageEntity,
         ) {
             incoming += message
         }
@@ -356,8 +358,8 @@ class EchoFlowTest {
         assertEquals(durableId, rows().single().id)
         assertEquals("soju-history-a", rows().single().msgid)
         assertEquals(1, notifier.incoming.size)
-        assertEquals("soju-history-a", notifier.incoming.single().ctx.msgid)
-        assertEquals(600_000, notifier.incoming.single().ctx.serverTime)
+        assertEquals("soju-history-a", notifier.incoming.single().msgid)
+        assertEquals(600_000, notifier.incoming.single().serverTime)
     }
 
     @Test

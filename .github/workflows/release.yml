@@ -37,7 +37,7 @@ jobs:
           }
           printf 'MOTD_VERSION_NAME=%s\nMOTD_VERSION_CODE=%s\nMOTD_SOURCE_COMMIT=%s\n' \
             "$version_name" "$version_code" "$GITHUB_SHA" >> "$GITHUB_ENV"
-      - name: Full build, tests, lint, and signed release APK
+      - name: Full build, tests, and signed release APK
         env:
           MOTD_KEYSTORE_PATH: ${{ runner.temp }}/keystore.jks
           MOTD_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -46,8 +46,20 @@ jobs:
         run: >-
           ./gradlew :irc:build
           :app:testFossDebugUnitTest :app:testFossReleaseUnitTest
-          :app:lintFossDebug :app:lintFossRelease :app:assembleFossRelease
-          --stacktrace --no-daemon --max-workers=1
+          :app:assembleFossRelease
+          --stacktrace
+      # Lint is split out with a bounded retry: it can rarely hit the
+      # ModifierDeclarationDetector classloader race, and unlike required CI the
+      # release job has no other retry. Warm daemon + bounded workers keep each
+      # attempt fast (the old --no-daemon --max-workers=1 cost ~30x for no
+      # deterministic race protection).
+      - name: Android lint (warnings as errors)
+        run: |
+          for attempt in 1 2; do
+            ./gradlew :app:lintFossDebug :app:lintFossRelease --stacktrace && exit 0
+            echo "lint attempt $attempt failed; retrying" >&2
+          done
+          exit 1
       - name: Verify F-Droid-compatible APK signing blocks
         run: >-
           java .github/scripts/CheckApkSigningBlocks.java

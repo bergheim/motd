@@ -2,7 +2,9 @@ package io.github.trevarj.motd.service
 
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.ui.chat.entryHistoryReady
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
@@ -42,6 +44,16 @@ class ConnectionRegistryTest {
         override fun probe() { probes++ }
     }
 
+    private class FakeManagedConnection : ManagedConnection {
+        override val state =
+            kotlinx.coroutines.flow.MutableStateFlow<IrcClientState>(IrcClientState.Disconnected)
+        override val criticalEvents =
+            kotlinx.coroutines.channels.Channel<io.github.trevarj.motd.irc.event.IrcEvent>()
+        override fun start() = Unit
+        override fun stop() = Unit
+        override suspend fun awaitTermination() = Unit
+    }
+
     private fun network(id: Long = 1, host: String = "irc.example") = NetworkEntity(
         id = id,
         name = "network-$id",
@@ -52,6 +64,65 @@ class ConnectionRegistryTest {
         username = "me",
         realname = "Me",
     )
+
+    @Test
+    fun connectionActivityPublishesLifecycleStateAndProgressAtomically() = runTest {
+        val registry = ConnectionRegistry(
+            backgroundScope,
+            actorFactory = { _, _ -> FakeActor() },
+            isConfigurationFailure = { false },
+        )
+
+        registry.beginStart()
+        assertFalse(registry.connectionActivity.value.initializationComplete)
+        registry.reconcile(listOf(network() to "fp"), setOf(1), emptySet())
+        val generation = registry.snapshot.value.actors.getValue(1).generation
+        registry.actorState(1, generation, "fp", IrcClientState.Connecting)
+        runCurrent()
+
+        val activity = registry.connectionActivity.value
+        assertTrue(activity.initializationComplete)
+        assertTrue(activity.progressing.getValue(1))
+        assertEquals(ConnectionState.Connecting, activity.states.getValue(1))
+        val sessionSeqs = registry.snapshot.value.actors.mapValues { (_, actor) -> actor.sessionSeq }
+        assertEquals(
+            registry.connectionStates.value.mapValues { (networkId, state) ->
+                state.toConnectionState(sessionSeqs[networkId] ?: 0L)
+            },
+            activity.states,
+        )
+    }
+
+    @Test
+    fun historyCatchupReadinessStaysAtomicAcrossRecoverableReconnect() = runTest {
+        val registry = ConnectionRegistry(
+            backgroundScope,
+            actorFactory = { _, _ -> FakeActor() },
+            isConfigurationFailure = { false },
+        )
+        registry.beginStart()
+        registry.reconcile(listOf(network() to "fp"), setOf(1), emptySet())
+        val generation = registry.snapshot.value.actors.getValue(1).generation
+
+        registry.actorState(1, generation, "fp", IrcClientState.Ready("me", emptySet(), emptyMap()))
+        runCurrent()
+        assertFalse(entryHistoryReady(registry.connectionActivity.value, 1))
+
+        registry.actorState(1, generation, "fp", IrcClientState.Failed("retry", fatal = false))
+        runCurrent()
+        val retrying = registry.connectionActivity.value
+        assertTrue(retrying.states[1] is ConnectionState.Failed)
+        assertFalse(1 in retrying.historyCatchUpPending)
+        assertFalse(entryHistoryReady(retrying, 1))
+
+        registry.actorState(1, generation, "fp", IrcClientState.Ready("me", emptySet(), emptyMap()))
+        runCurrent()
+        assertFalse(entryHistoryReady(registry.connectionActivity.value, 1))
+
+        registry.historyCatchUpFinished(1, generation)
+        runCurrent()
+        assertTrue(entryHistoryReady(registry.connectionActivity.value, 1))
+    }
 
     @Test
     fun concurrentStartupAndReconcile_createOneObserverSetAndActor() = runTest {
@@ -319,5 +390,31 @@ class ConnectionRegistryTest {
 
         assertTrue(registry.snapshot.value.actors.isEmpty())
         assertTrue(registry.connectionStates.value.isEmpty())
+    }
+
+    @Test
+    fun redialOnTheSameActorAdvancesSessionSeq() = runTest {
+        val registry = ConnectionRegistry(
+            backgroundScope,
+            actorFactory = { _, _ -> FakeActor() },
+            isConfigurationFailure = { false },
+        )
+        registry.beginStart()
+        registry.reconcile(listOf(network() to "fp"), setOf(1), emptySet())
+        val generation = registry.snapshot.value.actors.getValue(1).generation
+
+        registry.actorConnection(1, generation, FakeManagedConnection())
+        runCurrent()
+        val firstSession = registry.snapshot.value.actors.getValue(1).sessionSeq
+
+        // A transparent redial attaches a new connection to the SAME actor. The per-session id
+        // must still advance so seam observers detect the reconnect even when the intermediate
+        // non-Ready state emission is conflated (codex review, group 1).
+        registry.actorConnection(1, generation, FakeManagedConnection())
+        runCurrent()
+        val secondSession = registry.snapshot.value.actors.getValue(1).sessionSeq
+
+        assertTrue(firstSession > 0)
+        assertTrue(secondSession > firstSession)
     }
 }

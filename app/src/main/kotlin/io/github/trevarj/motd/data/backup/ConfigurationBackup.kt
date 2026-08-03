@@ -552,6 +552,8 @@ private data class PortableNetwork(
     val obfsLink: String? = null,
     val hadObfsLink: Boolean = false,
     val znc: Boolean = false,
+    /** Backend discriminator; defaults to IRC so backups written before it existed still decode. */
+    val protocol: String = "irc",
 ) {
     override fun toString(): String =
         "PortableNetwork(exportId=$exportId, name=$name, role=$role, host=$host:$port)"
@@ -578,6 +580,7 @@ private fun NetworkEntity.toPortable(
     exportId = exportIds.getValue(id),
     name = name,
     role = role,
+    protocol = protocol,
     parentExportId = parentId?.let(exportIds::get),
     bouncerNetId = bouncerNetId,
     host = host,
@@ -622,6 +625,7 @@ private fun PortableNetwork.toEntity(
         id = local?.id ?: 0L,
         name = name,
         role = role,
+        protocol = protocol,
         parentId = parentId,
         bouncerNetId = bouncerNetId,
         host = host,

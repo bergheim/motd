@@ -1,6 +1,7 @@
 package io.github.trevarj.motd.e2e
 
 import androidx.test.core.app.ActivityScenario
+import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.platform.io.PlatformTestStorageRegistry
 import io.github.trevarj.motd.MainActivity
 import org.junit.rules.TestWatcher
@@ -30,9 +31,15 @@ class E2eFailureArtifactRule(
         try { if (failure != null) capture() } finally { holder.close() }
     }
 
+    /**
+     * Directory the running journey's structural artifacts live in, so a journey-owned diagnostic
+     * lands beside them under the same collected `required-e2e` tree instead of inventing a path.
+     */
+    fun artifactPrefix(): String = "required-e2e/${safeName()}"
+
     private fun capture() {
         val error = failure ?: return
-        val prefix = "required-e2e/${safeName()}"
+        val prefix = artifactPrefix()
         writeOutput(
             "$prefix/failure.json",
             "{\"test\":\"${safeName()}\",\"throwable\":\"${error::class.java.name}\",\"frames\":[" +
@@ -58,5 +65,19 @@ class E2eFailureArtifactRule(
 class ScenarioHolder {
     var scenario: ActivityScenario<MainActivity>? = null
     fun launch() { scenario = ActivityScenario.launch(MainActivity::class.java) }
-    fun close() { scenario?.close(); scenario = null }
+    fun close() {
+        val owned = scenario ?: return
+        scenario = null
+        val finishRequested = runCatching {
+            owned.onActivity { it.finishAndRemoveTask() }
+        }.isSuccess
+        if (finishRequested) {
+            // ActivityScenario's monitor can remain RESUMED after recreate even though the current
+            // activity accepted a terminal finish request. Waiting for idle is sufficient cleanup;
+            // calling close again would wait on the stale monitor until its hard timeout.
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+        } else {
+            owned.close()
+        }
+    }
 }

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # test/e2e/runbook.sh — device-driven E2E acceptance run for motd.
 #
-# Implements the A–I traversal documented in test/e2e/README.md against a
+# Implements the tiered traversal documented in test/e2e/README.md against a
 # physical device or emulator and a real soju test bouncer. Drives the app via
 # adb + uiautomator using the helpers in lib.sh.
 #
@@ -25,7 +25,7 @@ E2E_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _explicit_config=()
 for _name in \
   MOTD_PKG MOTD_APK MOTD_SOJU_HOST MOTD_SOJU_PORT MOTD_SOJU_USER MOTD_SOJU_PASS \
-  MOTD_NICK MOTD_TEST_CHANNEL MOTD_SECOND_NICK MOTD_RECONNECT_TOKEN MOTD_RECONNECT_STACK_KIND \
+  MOTD_NICK MOTD_TEST_CHANNEL MOTD_BROWSER_CHANNEL MOTD_SECOND_NICK MOTD_RECONNECT_TOKEN MOTD_RECONNECT_STACK_KIND \
   SERIAL E2E_OUT_DIR E2E_PHASES; do
   if [[ -v "$_name" ]]; then
     _explicit_config+=("$(declare -p "$_name")")
@@ -61,6 +61,7 @@ MOTD_ACTIVITY="${MOTD_PKG}/io.github.trevarj.motd.MainActivity"
 : "${MOTD_SOJU_PASS:=}"
 : "${MOTD_NICK:=motdadb}"
 : "${MOTD_TEST_CHANNEL:=##motdtest}"
+: "${MOTD_BROWSER_CHANNEL:=#motd-browser}"
 
 # Optional second identity (drives DM/mention/typing). When unset, those steps
 # are skipped without failing.
@@ -91,6 +92,64 @@ require_env() {
 }
 
 require_env MOTD_SOJU_HOST MOTD_SOJU_USER MOTD_SOJU_PASS
+
+# Topic editing has a multiline draft and can exceed the generic short-form clear budget in
+# lib.sh. Keep this journey-specific helper on the stable field tag, and accept an empty original
+# topic so Phase D can restore either seeded or manually configured channels.
+input_topic_draft() {
+  local text="$1" bounds xy i
+  dump || { fail "dump failed locating topic draft"; return 1; }
+  bounds="$(bounds_of_tag channelinfo_topic_edit_text)"
+  if [ -z "$bounds" ]; then
+    fail "topic draft field not found"
+    return 1
+  fi
+  xy="$(_e2e_center "$bounds")"
+  # shellcheck disable=SC2086 # _e2e_center intentionally returns x y
+  adb_shell input tap $xy
+  sleep 1
+  adb_shell input keyevent 123
+  local deletes=()
+  for ((i = 0; i < 160; i++)); do deletes+=(67); done
+  adb_shell input keyevent "${deletes[@]}"
+  _e2e_send_text "$text"
+  adb_shell input keyevent 4
+  ok "input topic draft <= \"${text}\""
+}
+
+topic_text_from_dump() {
+  local line text
+  # uiautomator often emits the entire hierarchy on one physical line. Isolate one node before
+  # extracting text, otherwise a greedy attribute match could read an unrelated trailing node.
+  line="$(grep -oE '<node[^>]* resource-id="[^"]*channelinfo_topic"[^>]*>' "$_E2E_DUMP" | head -n1 || true)"
+  [ -n "$line" ] || return 1
+  text="$(printf '%s\n' "$line" | sed -E 's/.* text="([^"]*)".*/\1/')"
+  printf '%s' "$text" | sed \
+    -e 's/&quot;/"/g' -e 's/&apos;/'"'"'/g' -e 's/&lt;/</g' -e 's/&gt;/>/g' -e 's/&amp;/\&/g'
+}
+
+capture_topic_from_dump() {
+  if [ -n "$(bounds_of_tag channelinfo_topic)" ]; then
+    topic_text_from_dump
+  else
+    printf ''
+  fi
+}
+
+# A draft field also exposes its text to uiautomator, so visible-text polling would falsely turn
+# a failed write into an apparent echo. Require both a closed editor and the Room-backed header.
+wait_for_topic_echo() {
+  local expected="$1" timeout="${2:-12}" waited=0 actual
+  while [ "$waited" -lt "$timeout" ]; do
+    if dump && [ -z "$(bounds_of_tag channelinfo_topic_edit_dialog)" ]; then
+      actual="$(capture_topic_from_dump || true)"
+      [ "$actual" = "$expected" ] && return 0
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  return 1
+}
 
 # --- teardown / summary trap ----------------------------------------------
 
@@ -271,14 +330,44 @@ phase_a() {
     note "cert dialog did not appear (already trusted or fast connect); continuing"
   fi
   # Wait for either the ready indicator or the bouncer section.
-  if wait_for_any_text 30 "Connected as " "Bouncer networks" >/dev/null; then
+  if wait_for_any_text 30 "Connected as $MOTD_NICK" "Bouncer networks" >/dev/null; then
     ok "connect settled (ready or bouncer section shown)"
   else
     fail "connect did not reach Ready / Bouncer networks within timeout"
   fi
   assert_no_crash
 
-  # 9. Bouncer import.
+  # 9. Discovery failure/retry. This is the real-stack authority for onboarding recovery: stop
+  # only the ephemeral soju fixture after its initial empty-or-populated LIST has settled, force
+  # a refresh, and require the retained-row retry UI before restarting it. No remote network or
+  # local child is created until the existing libera fixture is selected below.
+  step "Surface failed bouncer discovery and retry after soju restart"
+  wait_for_tag onboarding_bouncer_discovery_refresh 20 || true
+  assert_tag_present onboarding_bouncer_discovery_refresh
+  if reconnect_stack stop-soju; then
+    _reconnect_restore_armed=true
+    sleep 2
+    tap_tag onboarding_bouncer_discovery_refresh
+    wait_for_tag onboarding_bouncer_discovery_error 20 || true
+    assert_tag_present onboarding_bouncer_discovery_error
+    if reconnect_stack start-soju; then
+      _reconnect_restore_armed=false
+      if wait_for_text "Connected as $MOTD_NICK" 30; then
+        tap_tag onboarding_bouncer_discovery_retry
+        wait_for_tag onboarding_bouncer_discovery_refresh 25 || true
+        assert_tag_present onboarding_bouncer_discovery_refresh
+      else
+        fail "bouncer did not reconnect before discovery retry"
+      fi
+    else
+      fail "could not restart soju after discovery-failure exercise"
+    fi
+  else
+    fail "could not stop soju for discovery-failure exercise"
+  fi
+  assert_no_crash
+
+  # 10. Bouncer import.
   step "Import bouncer network 'libera'"
   wait_for_text "Bouncer networks" 20 || true
   assert_text "Bouncer networks"
@@ -294,7 +383,7 @@ phase_a() {
   note "selected libera for import"
   assert_no_crash
 
-  # 10. Finish.
+  # 11. Finish.
   step "Finish onboarding -> ChatList"
   # The forward button label varies (Next/Finish) and "Finish" also appears as the FINISH page
   # heading, so drive it by its stable testTag rather than by text.
@@ -597,13 +686,59 @@ phase_d() {
   fi
   assert_no_crash
 
-  # 31. Topic edit dialog.
-  step "Topic edit dialog (cancel)"
+  # 31. Topic edit dialog. A successful local write is not server authorization; this checks the
+  # later echoed Room/UI update, then restores the exact prior topic for the remaining phases.
+  step "Topic edit accepted write and echoed update (restore original)"
   if [ -n "$(bounds_of_desc "Edit topic")" ]; then
+    local topic_restore_needed=false
+    if ! dump; then
+      fail "could not capture the original topic; refusing topic mutation"
+      assert_no_crash
+      return
+    fi
+    local original_topic=""
+    original_topic="$(capture_topic_from_dump)"
+    local topic_probe="motd-topic-${MOTD_RECONNECT_TOKEN//[^[:alnum:]]/}"
+    [ -n "$topic_probe" ] || topic_probe="motd-topic-e2e"
     tap_desc "Edit topic"
     wait_for_text "Edit topic" 5 || true
     assert_text "Channel topic"
-    tap_text "Cancel"
+    if input_topic_draft "$topic_probe"; then
+      redump || true
+      # Once this is attempted, restoration is mandatory even if the subsequent selector or echo
+      # check fails: a tap may have reached the transport before the harness observed it.
+      topic_restore_needed=true
+      if tap_tag channelinfo_topic_edit_save && wait_for_topic_echo "$topic_probe" 12; then
+        ok "topic echo updated Room/UI after accepted write"
+      else
+        fail "accepted topic write did not echo into the Channel Info Room/UI header"
+      fi
+    else
+      fail "could not enter the topic probe draft"
+    fi
+
+    # Restore even after a failed echo assertion so this destructive mutation does not leak into
+    # later journeys or a maintainer's shared fixture channel.
+    redump || true
+    if [ "$topic_restore_needed" = true ] && [ -n "$(bounds_of_desc "Edit topic")" ]; then
+      if tap_desc "Edit topic"; then
+        wait_for_text "Edit topic" 5 || true
+        if input_topic_draft "$original_topic"; then
+          redump || true
+          if tap_tag channelinfo_topic_edit_save && wait_for_topic_echo "$original_topic" 12; then
+            ok "original topic restored after echoed update"
+          else
+            fail "original topic did not return after restoration write"
+          fi
+        else
+          fail "could not enter the original topic for restoration"
+        fi
+      else
+        fail "could not reopen the topic editor for restoration"
+      fi
+    elif [ "$topic_restore_needed" = true ]; then
+      fail "topic editor unavailable for restoring the original topic"
+    fi
   else
     note "Edit topic control not present"
   fi
@@ -650,15 +785,37 @@ phase_d() {
   fi
   assert_no_crash
 
-  # 36. Leave dialog (cancel).
-  step "Leave dialog (cancel)"
+  # 36. Stop the fixture before confirming Leave. A refused local write must keep the
+  # confirmation open with retry feedback; it must not imply that the channel was parted.
+  step "Confirmed offline Leave keeps Channel Info open with retry feedback"
   if [ -n "$(bounds_of_text "Leave")" ]; then
-    tap_text "Leave"
-    wait_for_text "Leave channel?" 5 || true
-    assert_text "Leave channel?"
-    tap_text "Cancel"
+    _reconnect_restore_armed=true
+    if reconnect_stack stop-soju; then
+      # The listener close is asynchronous at the app boundary. The required assertion below is
+      # the transport rejection itself: a stale socket that still accepts PART is not offline.
+      sleep 2
+      tap_text "Leave"
+      wait_for_text "Leave channel?" 5 || true
+      assert_text "Leave channel?"
+      if tap_tag channelinfo_leave_confirm && wait_for_tag channelinfo_leave_error 12; then
+        assert_tag_present channelinfo_leave_dialog
+        ok "offline Leave retained its confirmation with retryable feedback"
+      else
+        fail "offline Leave navigated away or did not show retryable feedback"
+      fi
+      if reconnect_stack start-soju; then
+        _reconnect_restore_armed=false
+      else
+        fail "could not restore soju after offline Leave check"
+      fi
+      # The failed confirmation never auto-retries after reconnection; leave the channel joined
+      # for the later runbook phases and dismiss it explicitly.
+      tap_text "Cancel"
+    else
+      fail "could not stop soju for offline Leave check"
+    fi
   else
-    note "Leave control not present"
+    fail "Leave control not present for required offline Leave check"
   fi
   assert_no_crash
 
@@ -682,37 +839,39 @@ phase_e() {
   reset_to_chatlist >/dev/null 2>&1 || true
   wait_for_text "motd" 6 || true
   tap_desc "New conversation"
-  if wait_for_text "Browse channels…" 5; then
-    tap_text "Browse channels…"
-    wait_for_text "Browse channels" 8 || true
-    # The browser can legitimately show a "Connect to browse channels" empty state, so assert the
-    # screen title (always present) rather than the conditionally-shown search field.
-    assert_text "Browse channels"
-  else
-    note "Browse channels… entry not found"
-  fi
+  wait_for_text "Browse channels…" 5 || true
+  assert_text "Browse channels…"
+  tap_text "Browse channels…"
+  wait_for_text "Browse channels" 8 || true
+  assert_text "Browse channels"
+  assert_tag_present channel_list_search_field
   assert_no_crash
 
-  # 39. Search channels.
-  step "Search channels"
-  if [ -n "$(bounds_of_text "Search channels")" ]; then
-    input_by_text_label "Search channels" "motd"
-    redump
-    if [ -n "$(bounds_of_text "No channels found")" ]; then
-      note "no channels found for mask"
-    else
-      note "channel list rendered (or loading)"
-    fi
-  fi
+  # 39. Search the registered browser-only fixture through the IME action. This is intentionally
+  # not joined by the app's upstream account, so it proves LIST results rather than recycling the
+  # already-open seed channel.
+  step "Search channels through IME"
+  tap_tag channel_list_search_field
+  adb_shell input keyevent 123
+  adb_shell input keyevent 67 67 67 67 67 67 67 67 67 67 67 67 67 67 67 67 67 67 67 67 67 67 67 67 67 67 67 67 67 67 67 67 67 67 67 67 67 67 67 67
+  _e2e_send_text "${MOTD_BROWSER_CHANNEL#\#}"
+  adb_shell input keyevent 66
+  wait_for_text "$MOTD_BROWSER_CHANNEL" 15 || true
+  assert_text "$MOTD_BROWSER_CHANNEL"
   assert_no_crash
 
-  # 40. Join from browser (if a result exists).
-  step "Join from browser (best-effort)"
-  note "join-from-browser depends on live LIST results; skipping tap to avoid state churn"
+  # 40. Join the unique result and wait for authoritative Room self-JOIN confirmation.
+  step "Join from browser"
+  tap_tag "channel_list_join_${MOTD_BROWSER_CHANNEL#\#}"
+  wait_for_text "Joined" 15 || true
+  assert_text "Joined"
+  assert_no_crash
 
-  # 41. Back.
+  # 41. Back and prove the joined buffer is routed into the chat list.
   step "Back from browser"
   adb_shell input keyevent 4
+  wait_for_text "$MOTD_BROWSER_CHANNEL" 10 || true
+  assert_text "$MOTD_BROWSER_CHANNEL"
   assert_no_crash
 }
 
@@ -749,8 +908,8 @@ phase_f() {
   # 44. Bouncer networks (root).
   step "Bouncer networks (root)"
   tap_tag network_settings_bouncer_networks
-  wait_for_text "Soju control center" 10 || true
-  assert_text "Soju control center"
+  wait_for_text "Soju Control Center" 10 || true
+  assert_text "Soju Control Center"
   if [ -n "$(bounds_of_tag bouncer_add_network)" ]; then
     tap_tag bouncer_add_network
     wait_for_text "Server address" 5 || true
@@ -783,15 +942,13 @@ phase_f() {
   wait_for_text "Appearance" 6 || true
   assert_tag_present settings_theme_picker
   tap_tag settings_theme_picker
-  # ModalBottomSheet is a separate Compose window. UIAutomator renders its visible text but does
-  # not consistently export testTags as resource ids (the same boundary as AlertDialog buttons),
-  # so use the sheet's exact localized labels here rather than leaving it open and cascading every
-  # later Settings check onto the wrong window.
+  # The exact visible label remains inside the search field as well as the filtered result. Theme
+  # sheet tags are not exported through UIAutomator, so target the last matching text node.
   wait_for_text "Search themes" 6 || true
   assert_text "Search themes"
   input_by_text_label "Search themes" "Ayu Dark"
   wait_for_text "Ayu Dark" 6 || true
-  tap_text "Ayu Dark"
+  tap_text_last "Ayu Dark"
   # Theme selection is intentionally non-dismissing so users can compare palettes in place.
   adb_shell input keyevent 4
   wait_for_text "Appearance" 6 || true
@@ -1087,8 +1244,8 @@ phase_j() {
   done
   assert_text "Bouncer networks"
   tap_text "Bouncer networks"
-  wait_for_text "Soju control center" 15 || true
-  assert_text "Soju control center"
+  wait_for_text "Soju Control Center" 15 || true
+  assert_text "Soju Control Center"
   assert_no_crash
 
   step "Wait for server-verified BouncerServ capabilities"
@@ -1125,6 +1282,60 @@ phase_j() {
     sleep 1
   done
   assert_tag_present bouncer_command_notice
+  assert_no_crash
+}
+
+# ==========================================================================
+# Phase V — persisted invitation inbox
+# ==========================================================================
+phase_v() {
+  echo ""
+  echo "${_C_CYA}########## Phase V: invitation inbox ##########${_C_RST}"
+  # Soju keeps upstream channel membership across app reinstalls. Give every journey fresh targets
+  # so rerunning against a retained local stack cannot turn an INVITE into ERR_USERONCHANNEL.
+  local invite_token="$$-$(date +%s)"
+  local ignored_channel="##motd-invite-ignore-$invite_token"
+  local joined_channel="##motd-invite-join-$invite_token"
+
+  step "Receive an invitation without opening its notification"
+  reset_to_chatlist || return 1
+  reconnect_stack invite-check "$ignored_channel"
+  wait_for_text "Invitations (1)" 15 || true
+  assert_text "Invitations (1)"
+  assert_tag_present chatlist_invitations_folder
+  assert_no_crash
+
+  step "Ignore from the chat-list invitation inbox"
+  tap_tag chatlist_invitations_folder
+  wait_for_text "Invitation to $ignored_channel" 10 || true
+  assert_text "Invitation to $ignored_channel"
+  tap_tag_prefix chatlist_invitation_ignore_
+  wait_for_text "Ignored" 10 || true
+  assert_text "Ignored"
+  assert_tag_prefix_count chatlist_invitation_ 1
+  assert_no_crash
+
+  step "Receive and join a second invitation from the inbox"
+  adb_shell input keyevent 4
+  wait_for_desc "New conversation" 8 || return 1
+  reconnect_stack invite-check "$joined_channel"
+  wait_for_text "Invitations (2)" 15 || true
+  assert_text "Invitations (2)"
+  tap_tag chatlist_invitations_folder
+  wait_for_text "Invitation to $joined_channel" 10 || true
+  assert_text "Invitation to $joined_channel"
+  tap_tag_prefix chatlist_invitation_join_
+  wait_for_text "Joined" 15 || true
+  assert_text "Joined"
+  assert_text "Ignored"
+  assert_no_crash
+
+  step "Keep resolved invitations dimmed and retain the joined channel"
+  adb_shell input keyevent 4
+  wait_for_desc "New conversation" 8 || return 1
+  assert_text "All invitations handled"
+  assert_text "$joined_channel"
+  assert_tag_present chatlist_invitations_folder
   assert_no_crash
 }
 
@@ -1360,16 +1571,18 @@ phase_r() {
   wait_for_desc "New conversation" 10 || return 1
   tap_desc "Open navigation drawer"
   dump || return 1
-  if [ -z "$(bounds_of_tag drawer_mark_all_read)" ]; then
-    fail "current-scope read action was absent after the baseline"
-    return 1
+  if [ -n "$(bounds_of_tag drawer_mark_all_read)" ]; then
+    tap_tag drawer_mark_all_read
+    wait_for_text "Mark all chats as read?" 8 || return 1
+    tap_text "Mark as read"
+    wait_for_desc "Open navigation drawer" 8 || return 1
+    tap_desc "Open navigation drawer"
+    dump || return 1
+  else
+    # A self-authored baseline does not necessarily create unread state. In that valid case the
+    # drawer deliberately omits the bulk action and is already in the state needed below.
+    ok "current scope was already read after the self-authored baseline"
   fi
-  tap_tag drawer_mark_all_read
-  wait_for_text "Mark all chats as read?" 8 || return 1
-  tap_text "Mark as read"
-  wait_for_desc "Open navigation drawer" 8 || return 1
-  tap_desc "Open navigation drawer"
-  dump || return 1
   if [ -z "$(bounds_of_tag_prefix_containing_text drawer_network_row_ "$MOTD_NICK")" ]; then
     fail "imported drawer network did not show ready nick '$MOTD_NICK' before listener shutdown"
     return 1
@@ -1427,22 +1640,35 @@ phase_r() {
 
   step "Seed three current rows and require the newest list preview"
   reconnect_stack reconnect-current "$MOTD_RECONNECT_TOKEN"
-  wait_for_text "${MOTD_SECOND_NICK}: $current_last" 20 || true
-  assert_text "${MOTD_SECOND_NICK}: $current_last"
+  # The modern chat-list row renders the sender chip and preview as separate semantics nodes.
+  wait_for_text "$current_last" 20 || true
+  assert_text "$current_last"
 
-  step "Open newest window without materializing the recovered oldest row"
+  step "Open within the recovered unread gap before the newest row"
   tap_tag_prefix_containing_text chatlist_row_ "$MOTD_TEST_CHANNEL"
+  wait_for_desc "Scroll to bottom" 12 || true
+  assert_desc_present "Scroll to bottom"
+  dump || return 1
+  local visible_gap=false gap_number gap_text
+  for gap_number in $(seq 1 40); do
+    gap_text="${MOTD_RECONNECT_TOKEN} g$(printf '%02d' "$gap_number")"
+    if [ -n "$(bounds_of_text "$gap_text")" ]; then
+      visible_gap=true
+      ok "entered within the recovered unread gap at $gap_text"
+      break
+    fi
+  done
+  if [ "$visible_gap" != true ]; then
+    fail "no recovered unread-gap row was visible on entry"
+  fi
+  assert_no_text "$current_last"
+  assert_no_crash
+
+  step "Jump to the newest row and retain exact-once ordering"
+  tap_desc "Scroll to bottom"
   wait_for_text "$current_last" 12 || true
   assert_text_exactly_once "$current_last"
   assert_no_text "$gap_first"
-  assert_no_crash
-
-  step "Scroll older history and find the recovered oldest row exactly once"
-  if scroll_to_text "$gap_first" 14; then
-    assert_text_exactly_once "$gap_first"
-  else
-    fail "recovered oldest row '$gap_first' never materialized while scrolling"
-  fi
   assert_no_crash
 }
 
@@ -1542,12 +1768,12 @@ main() {
   # leaves durable device state (networks, joined channel). Every later phase begins from the
   # chat-list anchor via reset_to_chatlist, so a subset run — e.g. E2E_PHASES="c" — picks up
   # where a prior full run left off without repeating onboarding (rapid dev cycle).
-  local phases="${E2E_PHASES:-a b c d e f g h i}"
+  # J, V, and R depend on the connected state from A and must precede I, which clears app data.
+  local phases="${E2E_PHASES:-a b c d e f g h j v r i}"
   local p phase_class phase_rc failures_before findings
   for p in $phases; do
     case "$p" in
-      a|b|c|i|j|r|s) phase_class=required ;;
-      d|e|f|g) phase_class=diagnostic ;;
+      a|b|c|d|e|f|g|i|j|r|s|v) phase_class=required ;;
       h|k) phase_class=conditional ;;
       *) fail "unknown phase '$p'"; continue ;;
     esac
@@ -1580,6 +1806,7 @@ main() {
       h) phase_h ;;
       i) phase_i ;;
       j) phase_j ;;
+      v) phase_v ;;
       k) phase_k ;;
       r) phase_r ;;
       s) phase_s ;;

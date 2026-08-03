@@ -8,9 +8,10 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import io.github.trevarj.motd.data.db.NetworkRole
 import io.github.trevarj.motd.data.repo.BufferRepository
 import io.github.trevarj.motd.data.repo.NetworkRepository
+import io.github.trevarj.motd.backend.ConnectionState
 import io.github.trevarj.motd.irc.client.ChannelListing
-import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
+import io.github.trevarj.motd.ircbackend.IrcSessions
 import io.github.trevarj.motd.service.ConnectionManager
 import io.github.trevarj.motd.ui.nav.ChannelListRoute
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -32,7 +33,7 @@ import javax.inject.Inject
 data class ChannelListUiState(
     val networkId: Long = 0,
     val networkName: String = "",
-    val connState: IrcClientState = IrcClientState.Disconnected,
+    val connState: ConnectionState = ConnectionState.Disconnected,
     val initialized: Boolean = false,
     val query: String = "",
     val listings: List<ChannelListing> = emptyList(),
@@ -50,10 +51,13 @@ data class ChannelListUiState(
     /** Persisted joined names normalized with [identityRules] for channel-browser matching. */
     val joinedChannels: Set<String> = emptySet(),
     val joinError: String? = null,
+    /** From [ConnectionManager.supportsRoomDiscovery] (review fix, P2 finding); defaults `true` so
+     *  the pre-[start] synthetic state never flashes [ChannelBrowserAvailability.UNSUPPORTED]. */
+    val supportsDiscovery: Boolean = true,
 ) {
-    val isReady: Boolean get() = connState is IrcClientState.Ready
+    val isReady: Boolean get() = connState is ConnectionState.Ready
     val availability: ChannelBrowserAvailability
-        get() = channelBrowserAvailability(initialized, isRoot, connState)
+        get() = channelBrowserAvailability(initialized, isRoot, connState, supportsDiscovery)
 }
 
 @HiltViewModel
@@ -62,6 +66,7 @@ class ChannelListViewModel @Inject constructor(
     private val networkRepository: NetworkRepository,
     private val bufferRepository: BufferRepository,
     private val connectionManager: ConnectionManager,
+    private val ircSessions: IrcSessions,
 ) : ViewModel() {
 
     private val networkId: Long = savedStateHandle.toRoute<ChannelListRoute>().networkId
@@ -74,19 +79,35 @@ class ChannelListViewModel @Inject constructor(
     private var activeFetchQuery: String? = null
     private var queuedFetchQuery: String? = null
 
-    /** Idempotent entry point: mirrors connection state and auto-fetches once Ready. */
+    /**
+     * Idempotent entry point: mirrors connection state and auto-fetches once Ready. Checks
+     * [ConnectionManager.supportsRoomDiscovery] first (review fix, P2 finding) and settles
+     * immediately on [ChannelBrowserAvailability.UNSUPPORTED] — `initialized = true` alongside it, so
+     * the screen does not get stuck showing [ChannelBrowserAvailability.INITIALIZING] forever — for a
+     * backend with no such capability, never reaching the IRC-owned [ircSessions] accessor or
+     * [fetch]'s poll-and-timeout at all.
+     */
     fun start() {
         if (started) return
         started = true
         viewModelScope.launch {
             val network = networkRepository.networkById(networkId)
+            val supportsDiscovery = connectionManager.supportsRoomDiscovery(networkId)
             _state.value = _state.value.copy(
                 networkName = network?.name.orEmpty(),
                 isRoot = network?.role == NetworkRole.BOUNCER_ROOT,
+                supportsDiscovery = supportsDiscovery,
+                initialized = true,
             )
+            if (!supportsDiscovery) return@launch
             connectionManager.connectionStates.collect { states ->
-                val clientState = connectionManager.clientFor(networkId)?.state?.value
-                val rules = connectionManager.clientFor(networkId)?.isupport?.identityRules
+                // Live-session freshness read via the IRC-owned accessor. Reachable only when
+                // supportsDiscovery is true (review fix — see start()'s KDoc): [ircSessions] itself
+                // stays IRC-owned, not neutralized, but a backend with no room-discovery capability
+                // now never reaches this collector, let alone this accessor, at all.
+                val rawClientState = ircSessions.sessionFor(networkId)?.state?.value
+                val clientState = rawClientState?.toConnectionState()
+                val rules = connectionManager.liveIdentityRules(networkId)
                     ?: _state.value.identityRules
                 val conn = channelBrowserConnectionState(states[networkId], clientState)
                 val current = _state.value
@@ -95,7 +116,7 @@ class ChannelListViewModel @Inject constructor(
                     current.pendingChannelNames,
                     normalizedJoined,
                     rules,
-                    conn is IrcClientState.Ready,
+                    conn is ConnectionState.Ready,
                 )
                 _state.value = current.copy(
                     connState = conn,
@@ -108,12 +129,13 @@ class ChannelListViewModel @Inject constructor(
                         rules,
                     ),
                 )
-                // A local result cap does not bound the server response. Only auto-fetch when
-                // ELIST U guarantees the broad request is filtered before transmission.
-                if (conn is IrcClientState.Ready &&
-                    supportsPopularChannelList(conn) &&
-                    !_state.value.loaded &&
-                    !_state.value.isRoot
+                // Auto-fetch a bounded set of the busiest channels. ELIST 'U' applies the
+                // population floor server-side; other servers stream into the bounded collector.
+                if (shouldAutoFetchPopularChannels(
+                        connection = conn,
+                        loaded = _state.value.loaded,
+                        isRoot = _state.value.isRoot,
+                    )
                 ) {
                     fetch()
                 }
@@ -127,7 +149,7 @@ class ChannelListViewModel @Inject constructor(
                     current.pendingChannelNames,
                     normalizedJoined,
                     current.identityRules,
-                    current.connState is IrcClientState.Ready,
+                    current.connState is ConnectionState.Ready,
                 )
                 _state.value = current.copy(
                     persistedJoinedChannels = joined,
@@ -150,7 +172,7 @@ class ChannelListViewModel @Inject constructor(
                     current.pendingChannelNames,
                     rejection.channel,
                     current.identityRules,
-                    current.connState is IrcClientState.Ready,
+                    current.connState is ConnectionState.Ready,
                 ) ?: return@collect
                 _state.value = current.copy(
                     pendingChannelNames = pendingChannelNames,
@@ -177,16 +199,6 @@ class ChannelListViewModel @Inject constructor(
             current.copy(query = requestedQuery).also { _state.value = it }
         }
         if (s.isRoot || !s.isReady) return
-        if (requestedQuery.isBlank() && !supportsPopularChannelList(s.connState)) {
-            // Never turn a blank refresh into a full-network LIST on servers without ELIST U.
-            _state.value = s.copy(
-                listings = emptyList(),
-                loading = false,
-                loaded = false,
-                error = null,
-            )
-            return
-        }
         if (fetchJob?.isActive == true) {
             if (shouldQueueChannelListFetch(activeFetchQuery, requestedQuery)) {
                 queuedFetchQuery = requestedQuery
@@ -204,10 +216,10 @@ class ChannelListViewModel @Inject constructor(
         _state.value = s.copy(loading = true, error = null)
         fetchJob = viewModelScope.launch {
             val client = withTimeoutOrNull(CLIENT_WAIT_TIMEOUT_MS) {
-                var current = connectionManager.clientFor(networkId)
+                var current = ircSessions.sessionFor(networkId)
                 while (current == null) {
                     delay(CLIENT_WAIT_POLL_MS)
-                    current = connectionManager.clientFor(networkId)
+                    current = ircSessions.sessionFor(networkId)
                 }
                 current
             }
@@ -285,4 +297,14 @@ class ChannelListViewModel @Inject constructor(
         const val CLIENT_WAIT_TIMEOUT_MS = 2_000L
         const val CLIENT_WAIT_POLL_MS = 50L
     }
+}
+
+// IRC-state mapper for the live-session freshness read above; goes away with the neutral
+// room-discovery capability (docs/backend-neutral-xmpp-rollout.md).
+private fun io.github.trevarj.motd.irc.event.IrcClientState.toConnectionState(): ConnectionState = when (this) {
+    io.github.trevarj.motd.irc.event.IrcClientState.Disconnected -> ConnectionState.Disconnected
+    io.github.trevarj.motd.irc.event.IrcClientState.Connecting -> ConnectionState.Connecting
+    io.github.trevarj.motd.irc.event.IrcClientState.Registering -> ConnectionState.Authenticating
+    is io.github.trevarj.motd.irc.event.IrcClientState.Ready -> ConnectionState.Ready(nick)
+    is io.github.trevarj.motd.irc.event.IrcClientState.Failed -> ConnectionState.Failed(reason, fatal)
 }

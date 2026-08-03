@@ -87,6 +87,8 @@ import io.github.trevarj.motd.avatar.AvatarStore
 import io.github.trevarj.motd.avatar.AvatarStoreImpl
 import io.github.trevarj.motd.bouncer.BouncerServClient
 import io.github.trevarj.motd.bouncer.BouncerServClientImpl
+import io.github.trevarj.motd.ui.onboarding.ConnectionManagerOnboardingBouncerOperations
+import io.github.trevarj.motd.ui.onboarding.OnboardingBouncerOperations
 import io.github.trevarj.motd.bouncer.BouncerServSessionProvider
 import io.github.trevarj.motd.bouncer.ConnectionBouncerServSessionProvider
 import io.github.trevarj.motd.data.backup.ConfigurationBackupRepository
@@ -202,6 +204,11 @@ internal abstract class AppModule {
     abstract fun bouncerServClient(impl: BouncerServClientImpl): BouncerServClient
 
     @Binds @Singleton
+    abstract fun onboardingBouncerOperations(
+        impl: ConnectionManagerOnboardingBouncerOperations,
+    ): OnboardingBouncerOperations
+
+    @Binds @Singleton
     abstract fun bouncerServSessionProvider(
         impl: ConnectionBouncerServSessionProvider,
     ): BouncerServSessionProvider
@@ -275,12 +282,14 @@ internal abstract class AppModule {
             db: io.github.trevarj.motd.data.db.MotdDatabase,
             healthStore: PushHealthStore,
             unifiedPush: UnifiedPushApi,
+            notificationPermission: NotificationPermissionStatus,
         ): PushAvailabilityProvider = RealPushAvailabilityProvider(
             context,
             connectionManager,
             db.networkDao(),
             healthStore,
             unifiedPush,
+            notificationPermission,
         )
     }
 }

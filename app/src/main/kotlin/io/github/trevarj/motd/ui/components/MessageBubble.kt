@@ -517,7 +517,7 @@ fun MessageBubble(
                 )
                 Text(
                     text = displayedTime,
-                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                    style = MaterialTheme.typography.labelSmall,
                     color = metadataColor,
                     modifier = Modifier.align(Alignment.CenterVertically),
                 )
@@ -686,7 +686,7 @@ private fun ComfortableActionBubble(
                     )
                     Text(
                         text = formattedTime,
-                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                        style = MaterialTheme.typography.labelSmall,
                         color = metadataColor,
                     )
                 }
@@ -852,7 +852,7 @@ private fun ActionMessageRow(
                     MessageStatusIcon(isSelf = isSelf, pending = pending, failed = failed)
                     Text(
                         text = formattedTime,
-                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                        style = MaterialTheme.typography.labelSmall,
                         color = if (failed) {
                             MaterialTheme.colorScheme.error
                         } else {
@@ -1094,7 +1094,7 @@ private fun TwoLineMessageRow(
                     MessageStatusIcon(isSelf = isSelf, pending = pending, failed = failed)
                     Text(
                         text = formattedTime,
-                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                        style = MaterialTheme.typography.labelSmall,
                         color = if (failed) MaterialTheme.colorScheme.error
                         else MaterialTheme.colorScheme.onSurfaceVariant,
                     )

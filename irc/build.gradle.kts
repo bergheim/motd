@@ -5,6 +5,7 @@ kotlin { jvmToolchain(21) }
 dependencies {
     implementation(libs.coroutines.core)
     implementation(libs.okio)
+    implementation(libs.serialization.json)
     testImplementation(libs.junit)
     testImplementation(libs.coroutines.test)
     testImplementation(libs.turbine)

@@ -3,6 +3,7 @@ package io.github.trevarj.motd.irc.client
 import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.irc.event.IrcEvent
 import io.github.trevarj.motd.irc.event.ServerTimeSource
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -75,6 +76,45 @@ class IrcClientTest {
         val accepted = client.sendMessage("#chan", "not sent", null, "motd-disconnected")
 
         assertFalse(accepted)
+    }
+
+    @Test
+    fun `bouncer list reports a disconnected or failed transport`() = runTest {
+        val disconnected = IrcClient(config(), FakeTransport().factory(), clientScope())
+        try {
+            disconnected.bouncerListNetworks()
+            fail("disconnected LISTNETWORKS must not look like an empty snapshot")
+        } catch (_: IrcDisconnectedException) {
+            // Expected: discovery can render a retryable connection failure.
+        }
+
+        val transport = FakeTransport()
+        val connected = IrcClient(config(), transport.factory(), clientScope())
+        connected.start()
+        runCurrent()
+        transport.sendFailure = IOException("socket closed")
+        try {
+            connected.bouncerListNetworks()
+            fail("failed LISTNETWORKS write must propagate")
+        } catch (error: IOException) {
+            assertEquals("socket closed", error.message)
+        }
+    }
+
+    @Test
+    fun `unconfirmed bouncer add is a server rejection`() = runTest {
+        val transport = FakeTransport()
+        val client = IrcClient(config(), transport.factory(), clientScope())
+        client.start()
+        runCurrent()
+
+        try {
+            client.bouncerAddNetwork(mapOf("name" to "New", "host" to "irc.new.example"))
+            fail("missing ADDNETWORK confirmation must not report success")
+        } catch (error: IrcCommandException) {
+            assertEquals("BOUNCER ADDNETWORK", error.ircCommand)
+            assertEquals("NO_RESPONSE", error.code)
+        }
     }
 
     @Test
@@ -221,6 +261,38 @@ class IrcClientTest {
         assertTrue(chat.isSelf)
         assertEquals(label, chat.ctx.label)
         assertEquals("abc", chat.ctx.msgid)
+    }
+
+    @Test
+    fun `sequenced observer exposes a gap when a slow subscriber overflows`() = runTest {
+        val ft = FakeTransport()
+        val client = registered(ft, observerBufferCapacity = 1)
+        val observed = mutableListOf<SequencedIrcEvent>()
+        val firstDelivered = CompletableDeferred<Unit>()
+        val releaseCollector = CompletableDeferred<Unit>()
+        val collector = launch {
+            client.sequencedEvents.collect { event ->
+                observed += event
+                if (observed.size == 1) {
+                    firstDelivered.complete(Unit)
+                    releaseCollector.await()
+                }
+            }
+        }
+        runCurrent()
+
+        ft.feed(":alice!u@h PRIVMSG #chan :first")
+        runCurrent()
+        firstDelivered.await()
+        ft.feed(":alice!u@h PRIVMSG #chan :dropped")
+        ft.feed(":alice!u@h PRIVMSG #chan :last")
+        runCurrent()
+        releaseCollector.complete(Unit)
+        runCurrent()
+        collector.cancelAndJoin()
+
+        assertEquals(listOf("first", "last"), observed.map { (it.event as IrcEvent.ChatMessage).text })
+        assertEquals(observed[0].sequence + 2, observed[1].sequence)
     }
 
     @Test
@@ -682,7 +754,7 @@ class IrcClientTest {
     @Test
     fun `CAP NEW mid session requests and emits CapsChanged`() = runTest {
         val ft = FakeTransport()
-        val client = registered(ft)
+        val client = registered(ft, caps = fullLs.replace(" draft/chathistory", ""))
 
         val collected = mutableListOf<IrcEvent>()
         val job = launch { client.broadcastEvents.toList(collected) }
@@ -692,10 +764,12 @@ class IrcClientTest {
         runCurrent()
         // We should REQ the newly advertised cap.
         assertTrue(ft.sent.any { it.startsWith("CAP REQ") && it.contains("draft/chathistory") })
+        assertTrue("draft/chathistory" in client.pendingFeatureCaps.value)
 
         ft.feed(":srv CAP motd ACK :draft/chathistory")
         runCurrent()
         assertTrue(client.hasCap("draft/chathistory"))
+        assertTrue(client.pendingFeatureCaps.value.isEmpty())
         job.cancel()
 
         assertTrue(collected.any { it is IrcEvent.CapsChanged && it.added.contains("draft/chathistory") })
@@ -796,6 +870,7 @@ class IrcClientTest {
         assertTrue(deferredRequests.none { it == "CAP REQ :message-tags" })
         assertTrue(deferredRequests.none { it == "CAP REQ :draft/chathistory" })
         assertTrue(deferredRequests.contains("CAP REQ :draft/read-marker"))
+        assertTrue("draft/read-marker" in client.pendingFeatureCaps.value)
 
         for (request in deferredRequests) {
             ft.feed(":srv CAP motd ACK :${request.substringAfter("CAP REQ :")}")
@@ -804,6 +879,7 @@ class IrcClientTest {
 
         val ready = client.state.value as IrcClientState.Ready
         assertTrue(ready.caps.contains("message-tags"))
+        assertTrue(client.pendingFeatureCaps.value.isEmpty())
     }
 
     @Test
@@ -837,6 +913,7 @@ class IrcClientTest {
             .filter { it.startsWith("CAP REQ :") }
             .drop(1)
         assertTrue(deferredRequests.any { it.contains("draft/read-marker") })
+        assertTrue(staleCap in client.pendingFeatureCaps.value)
         for (request in deferredRequests) {
             val caps = request.substringAfter("CAP REQ :")
             val reply = if (caps.split(' ').contains(staleCap)) "NAK" else "ACK"
@@ -846,6 +923,7 @@ class IrcClientTest {
 
         assertTrue(client.hasCap("draft/chathistory"))
         assertTrue(client.hasCap("draft/read-marker"))
+        assertTrue(client.pendingFeatureCaps.value.isEmpty())
     }
 
     @Test
@@ -1278,8 +1356,9 @@ class IrcClientTest {
     private suspend fun kotlinx.coroutines.test.TestScope.registered(
         ft: FakeTransport,
         caps: String = fullLs,
+        observerBufferCapacity: Int = 4096,
     ): IrcClient {
-        val client = IrcClient(config(), ft.factory(), clientScope())
+        val client = IrcClient(config(), ft.factory(), clientScope(), observerBufferCapacity)
         client.start()
         runCurrent()
         ft.feed(":srv CAP * LS :$caps")

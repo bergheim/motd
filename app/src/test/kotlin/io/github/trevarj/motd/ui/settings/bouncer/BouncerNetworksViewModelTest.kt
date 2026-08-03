@@ -12,7 +12,8 @@ import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
 import io.github.trevarj.motd.data.repo.NetworkRepository
 import io.github.trevarj.motd.irc.client.IrcClient
-import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.backend.ConnectionState
+import io.github.trevarj.motd.ircbackend.IrcSessions
 import io.github.trevarj.motd.service.CertPrompt
 import io.github.trevarj.motd.service.ConnectionManager
 import kotlinx.coroutines.CompletableDeferred
@@ -71,11 +72,15 @@ class BouncerNetworksViewModelTest {
             }
             override suspend fun childrenOf(rootId: Long) = emptyList<NetworkEntity>()
         }
-        val ready = IrcClientState.Ready("motd", emptySet(), emptyMap())
+        val ready = ConnectionState.Ready("motd")
         val connections = FakeConnectionManager(mapOf(root.id to ready))
+        val sessions = object : IrcSessions {
+            override fun sessionFor(networkId: Long) = connections.clientFor(networkId)
+        }
         val viewModel = BouncerNetworksViewModel(
             networkRepository = repository,
             connectionManager = connections,
+            ircSessions = sessions,
             bouncerServ = FakeBouncerServClient,
             messageDao = database.messageDao(),
         )
@@ -83,19 +88,19 @@ class BouncerNetworksViewModelTest {
         viewModel.init(root.id)
         runCurrent()
         assertTrue(lookupStarted.isCompleted)
-        assertTrue(viewModel.state.value.rootState is IrcClientState.Ready)
+        assertTrue(viewModel.state.value.rootState is ConnectionState.Ready)
 
         releaseLookup.complete(Unit)
         runCurrent()
 
         assertEquals(root, viewModel.state.value.root)
-        assertTrue(viewModel.state.value.rootState is IrcClientState.Ready)
+        assertTrue(viewModel.state.value.rootState is ConnectionState.Ready)
     }
 
-    private class FakeConnectionManager(initial: Map<Long, IrcClientState>) : ConnectionManager {
+    private class FakeConnectionManager(initial: Map<Long, ConnectionState>) : ConnectionManager {
         override val connectionStates = MutableStateFlow(initial)
         override val certPrompts = MutableStateFlow<List<CertPrompt>>(emptyList())
-        override fun clientFor(networkId: Long): IrcClient? = null
+        fun clientFor(networkId: Long): IrcClient? = null
         override suspend fun startAll() = Unit
         override suspend fun stopAll() = Unit
         override suspend fun connect(networkId: Long) = Unit

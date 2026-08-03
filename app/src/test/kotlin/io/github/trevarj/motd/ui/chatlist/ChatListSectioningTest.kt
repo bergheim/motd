@@ -5,12 +5,38 @@ import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.Unarchive
 import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.db.ChatListRow
+import io.github.trevarj.motd.data.db.InvitationEventRow
+import io.github.trevarj.motd.data.db.InviteState
+import io.github.trevarj.motd.data.sync.InvitePayloadV1
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatListSectioningTest {
+
+    @Test
+    fun `invitation projection decodes typed payload and distinguishes handled state`() {
+        fun event(state: InviteState) = InvitationEventRow(
+            messageId = 7,
+            bufferId = 8,
+            networkId = 9,
+            networkName = "libera",
+            text = "alice invited you",
+            eventPayload = InvitePayloadV1("alice", "me", "#secret").encode(),
+            inviteState = state,
+            serverTime = 10,
+        )
+
+        val pending = requireNotNull(toChatListInvitation(event(InviteState.PENDING)))
+        val joined = requireNotNull(toChatListInvitation(event(InviteState.JOINED)))
+
+        assertEquals("alice", pending.inviter)
+        assertEquals("#secret", pending.channel)
+        assertTrue(pending.actionable)
+        assertFalse(joined.actionable)
+        assertEquals(null, toChatListInvitation(event(InviteState.PENDING).copy(eventPayload = "broken")))
+    }
 
     @Test
     fun `archive action icon matches the action direction`() {

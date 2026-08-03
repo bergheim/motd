@@ -46,6 +46,13 @@ import io.github.trevarj.motd.irc.client.canSendClientTag
 import io.github.trevarj.motd.irc.client.canSendReactionTags
 import io.github.trevarj.motd.irc.client.preferredNoImplicitNames
 import io.github.trevarj.motd.irc.client.preferredExtendedMonitor
+import io.github.trevarj.motd.attachment.sojuFileHostEndpoint
+import io.github.trevarj.motd.backend.ConnectionState
+import io.github.trevarj.motd.backend.ProtocolCommands
+import io.github.trevarj.motd.backend.ReactionCapability
+import io.github.trevarj.motd.backend.RoomTargetSyntax
+import io.github.trevarj.motd.ircbackend.IrcChatBackend
+import io.github.trevarj.motd.ircbackend.IrcSessions
 import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.irc.event.IrcEvent
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
@@ -362,6 +369,68 @@ internal fun identityRulesFallback(
 ): IrcIdentityRules = live.takeIf { liveReady } ?: persisted?.identityRules ?: IrcIdentityRules()
 
 /**
+ * Narrow transport boundary for a TOPIC write. The caller deliberately does not mirror the draft
+ * into Room: only the server's TOPIC echo is IRC-derived state and is persisted by EventProcessor.
+ */
+internal suspend fun writeChannelTopicIfReady(
+    buffer: BufferEntity?,
+    topic: String,
+    client: IrcClient?,
+): Boolean {
+    val readyClient = client?.takeIf { it.state.value is IrcClientState.Ready } ?: return false
+    return attemptChannelTopicWrite(buffer, topic) { message -> readyClient.sendIfConnected(message) }
+}
+
+internal suspend fun attemptChannelTopicWrite(
+    buffer: BufferEntity?,
+    topic: String,
+    send: suspend (io.github.trevarj.motd.irc.proto.IrcMessage) -> Boolean,
+): Boolean {
+    if (buffer == null) return false
+    return send(
+        io.github.trevarj.motd.irc.proto.IrcMessage(
+            command = "TOPIC",
+            params = listOf(buffer.ircTarget, topic),
+        ),
+    )
+}
+
+/**
+ * Narrow transport boundary for a PART write. Acceptance means only that a Ready client wrote to
+ * its live transport; EventProcessor still waits for self-PART, while server rejection needs a
+ * labeled response (when available) or the server error path.
+ */
+internal suspend fun writeChannelPartIfReady(
+    buffer: BufferEntity?,
+    reason: String?,
+    client: IrcClient?,
+): Boolean {
+    val readyClient = client?.takeIf { it.state.value is IrcClientState.Ready } ?: return false
+    return attemptChannelPartWrite(buffer, reason) { message -> readyClient.sendIfConnected(message) }
+}
+
+internal suspend fun attemptChannelPartWrite(
+    buffer: BufferEntity?,
+    reason: String?,
+    send: suspend (io.github.trevarj.motd.irc.proto.IrcMessage) -> Boolean,
+): Boolean {
+    if (buffer == null) return false
+    val params = if (reason.isNullOrBlank()) listOf(buffer.ircTarget) else listOf(buffer.ircTarget, reason)
+    return send(io.github.trevarj.motd.irc.proto.IrcMessage(command = "PART", params = params))
+}
+
+/**
+ * IRC's [RoomTargetSyntax] transform (review fix — docs/backend-neutral-xmpp-rollout.md capability
+ * list example "room-target syntax"): preserves, byte-for-byte, the pre-capability shared-UI
+ * `NewConversationSheet.channelJoinTarget` behavior — a literal `#` is always prepended, even when
+ * the caller already typed one (`"#motd"` becomes `"##motd"`), matching a plain IRC channel-name
+ * convention. A top-level function (like [identityRulesFallback] above) rather than only a lambda
+ * wired into [ConnectionManagerImpl], so it stays directly unit-testable without instantiating the
+ * whole manager.
+ */
+internal fun ircRoomTargetSyntax(rawInput: String): String = "#${rawInput.trim()}"
+
+/**
  * Hilt @Singleton connection subsystem (plans/05). Outlives the foreground service — the service
  * is merely its keeper. Spawns one [ConnectionActor] per connectable network row (BOUNCER_ROOT
  * gets the root actor; each BOUNCER_CHILD a bound actor copying the root host/SASL with its
@@ -390,7 +459,7 @@ class ConnectionManagerImpl @Inject constructor(
     // Lazy to break the WebPushRegistrar <-> ConnectionManager ctor cycle.
     private val webPushRegistrar: dagger.Lazy<WebPushRegistrar>,
     private val bufferStore: BufferStore = BufferStore(db),
-) : ConnectionManager {
+) : ConnectionManager, IrcSessions {
 
     private val networkDao get() = db.networkDao()
     private val bufferDao get() = db.bufferDao()
@@ -412,13 +481,57 @@ class ConnectionManagerImpl @Inject constructor(
     // manual disconnect/connect is not undone by the next DB write. Reset by stopAll (not persisted).
     private val userIntents = java.util.concurrent.ConcurrentHashMap<Long, Boolean>()
 
-    override val connectionStates: StateFlow<Map<Long, IrcClientState>> = registry.connectionStates
+    // Sourced from the full snapshot, not the states map: a redial can attach a new session while
+    // the IRC state map compares equal (Ready -> Ready with the same payload), and only the
+    // snapshot's sessionSeq change would republish the new generation. MappedStateFlow dedups the
+    // mapped result, so collectors still see an emission exactly when this neutral map changes.
+    override val connectionStates: StateFlow<Map<Long, ConnectionState>> =
+        MappedStateFlow(registry.snapshot) { snapshot ->
+            snapshot.states.mapValues { (networkId, state) ->
+                state.toConnectionState(generation = snapshot.actors[networkId]?.sessionSeq ?: 0L)
+            }
+        }
+
+    override val connectionActivity: StateFlow<ConnectionActivitySnapshot> = registry.connectionActivity
+
+    override val serverPushAvailable: StateFlow<Boolean> =
+        MappedStateFlow(registry.connectionStates) { states ->
+            states.values.any { it is IrcClientState.Ready && it.caps.hasWebPushCap() }
+        }
+
+    override val attachmentUploadEndpoints: StateFlow<Map<Long, String>> =
+        MappedStateFlow(registry.connectionStates) { states ->
+            buildMap {
+                states.forEach { (networkId, state) ->
+                    if (state is IrcClientState.Ready) {
+                        sojuFileHostEndpoint(state.isupport)?.let { put(networkId, it) }
+                    }
+                }
+            }
+        }
+
+    override val reactionCapabilities: StateFlow<Map<Long, ReactionCapability>> =
+        MappedStateFlow(registry.connectionStates) { states ->
+            buildMap {
+                states.forEach { (networkId, state) ->
+                    if (state is IrcClientState.Ready) {
+                        put(
+                            networkId,
+                            ReactionCapability(
+                                canAdd = canSendReactionTags(state.caps, state.isupport, false),
+                                canRemoveOwn = canSendReactionTags(state.caps, state.isupport, true),
+                            ),
+                        )
+                    }
+                }
+            }
+        }
 
     private val _channelJoinOutcomes = MutableSharedFlow<ChannelJoinOutcome>(extraBufferCapacity = 16)
     override val channelJoinOutcomes: SharedFlow<ChannelJoinOutcome> = _channelJoinOutcomes.asSharedFlow()
 
-    private val _rosterStates = MutableStateFlow<Map<Long, RosterLoadState>>(emptyMap())
-    override val rosterStates: StateFlow<Map<Long, RosterLoadState>> = _rosterStates.asStateFlow()
+    private val _memberLoadStates = MutableStateFlow<Map<Long, RosterLoadState>>(emptyMap())
+    override val memberLoadStates: StateFlow<Map<Long, RosterLoadState>> = _memberLoadStates.asStateFlow()
     private val rosterRequests = java.util.concurrent.ConcurrentHashMap<Long, Deferred<Unit>>()
 
     private val _presenceStates = MutableStateFlow<Map<PresenceKey, PresenceState>>(emptyMap())
@@ -452,8 +565,49 @@ class ConnectionManagerImpl @Inject constructor(
         graceMs = EMBEDDED_REALITY_BACKGROUND_GRACE_MS,
     )
 
-    override fun clientFor(networkId: Long): IrcClient? =
+    /**
+     * The IRC manager's view of the network table: rows carrying the IRC discriminator only.
+     * Other backends' rows (docs/backend-neutral-xmpp-rollout.md) must never reach reconcile,
+     * wanted-set, or push logic here — their backends own them.
+     */
+    private fun observeIrcNetworks() = networkDao.observeAll().map { rows ->
+        rows.filter { it.protocol == IrcChatBackend.IRC_PROTOCOL.value }
+    }
+
+    /** Adapter-internal session accessor; external surfaces go through [IrcSessions]. */
+    internal fun clientFor(networkId: Long): IrcClient? =
         (registry.snapshot.value.actors[networkId]?.connection as? IrcClientConnection)?.client
+
+    override fun sessionFor(networkId: Long): IrcClient? = clientFor(networkId)
+
+    override fun liveIdentityRules(networkId: Long): IrcIdentityRules? =
+        clientFor(networkId)?.isupport?.identityRules
+
+    override fun historyAvailability(networkId: Long): HistoryAvailability? =
+        clientFor(networkId)?.historyAvailability
+
+    override fun protocolCommands(networkId: Long): ProtocolCommands? =
+        clientFor(networkId)?.let { IrcProtocolCommands(it, scope) }
+
+    /**
+     * IRC's [RoomTargetSyntax] (review fix — see [ConnectionManager.roomTargetSyntax]'s KDoc): by
+     * the time [CompositeConnectionManager] reaches this override it has already resolved [networkId]
+     * to the IRC backend through the persisted protocol discriminator, so this needs no live-session
+     * check of its own — unlike [historyAvailability]/[protocolCommands], which stay null while
+     * offline, an IRC channel target's `#`-prefix convention does not depend on being connected.
+     * Delegates to [ircRoomTargetSyntax], preserving byte-for-byte the shared UI transform this
+     * replaces (previously `NewConversationSheet.channelJoinTarget`).
+     */
+    override suspend fun roomTargetSyntax(networkId: Long): RoomTargetSyntax =
+        RoomTargetSyntax(::ircRoomTargetSyntax)
+
+    /** IRC always supports LIST/ELIST-based room discovery (review fix — see
+     *  [ConnectionManager.supportsRoomDiscovery]'s KDoc); like [roomTargetSyntax] this does not
+     *  depend on being connected right now. */
+    override suspend fun supportsRoomDiscovery(networkId: Long): Boolean = true
+
+    private fun Set<String>.hasWebPushCap(): Boolean =
+        any { it == WebPushRegistrar.WEBPUSH_CAP || it.startsWith("${WebPushRegistrar.WEBPUSH_CAP}=") }
 
     // -- lifecycle ----------------------------------------------------------
 
@@ -473,9 +627,9 @@ class ConnectionManagerImpl @Inject constructor(
             // Seed actors from the current full set (reconcile applies autoConnect + sticky intent),
             // then keep reconciling on every DB change. The collector no longer pre-filters: reconcile
             // owns the wanted-set computation so manual connect/disconnect intents survive DB writes.
-            reconcile(networkDao.observeAll().first())
+            reconcile(observeIrcNetworks().first())
             val reconcileJob = scope.launch {
-                networkDao.observeAll().collect { all ->
+                observeIrcNetworks().collect { all ->
                     reconcile(all)
                 }
             }
@@ -484,7 +638,7 @@ class ConnectionManagerImpl @Inject constructor(
             val deliveryModeJob = scope.launch {
                 settings.settings.map { it.deliveryMode }.distinctUntilChanged().collect { mode ->
                     if (mode == DeliveryMode.UNIFIED_PUSH) {
-                        val all = networkDao.observeAll().first()
+                        val all = observeIrcNetworks().first()
                         if (appForeground && hasWantedEmbeddedReality(all)) {
                             startForegroundKeeper()
                         } else if (!appForeground) {
@@ -494,7 +648,7 @@ class ConnectionManagerImpl @Inject constructor(
                     } else {
                         backgroundRetention.cancel()
                         pushSuspendedIds.clear()
-                        reconcile(networkDao.observeAll().first())
+                        reconcile(observeIrcNetworks().first())
                     }
                 }
             }
@@ -543,8 +697,8 @@ class ConnectionManagerImpl @Inject constructor(
             )
         ) return
         if (backgroundRetention.isRetaining) return
-        val all = networkDao.observeAll().first()
-        val wanted = wantedNetworkIds(all, userIntents, connectionStates.value)
+        val all = observeIrcNetworks().first()
+        val wanted = wantedNetworkIds(all, userIntents, registry.connectionStates.value)
         val endpoints = pushPrefs.endpoints()
         val health = pushHealthStore.snapshot()
         val suspend = pushSuspendedNetworkIds(all, wanted, endpoints, health)
@@ -571,7 +725,7 @@ class ConnectionManagerImpl @Inject constructor(
         backgroundRetention.cancel()
         pushSuspendedIds.clear()
         startAll()
-        val all = networkDao.observeAll().first()
+        val all = observeIrcNetworks().first()
         reconcile(all)
         if (settings.settings.first().deliveryMode == DeliveryMode.UNIFIED_PUSH &&
             hasWantedEmbeddedReality(all)
@@ -588,7 +742,7 @@ class ConnectionManagerImpl @Inject constructor(
     internal fun onAppBackgrounded() {
         appForeground = false
         scope.launch {
-            val all = networkDao.observeAll().first()
+            val all = observeIrcNetworks().first()
             beginEmbeddedRealityBackgroundRetention(all)
             if (deviceIdle) maybeStopForPush()
         }
@@ -620,7 +774,7 @@ class ConnectionManagerImpl @Inject constructor(
     }
 
     private fun hasWantedEmbeddedReality(all: List<NetworkEntity>): Boolean =
-        wantedNetworkIds(all, userIntents, connectionStates.value).any { networkId ->
+        wantedNetworkIds(all, userIntents, registry.connectionStates.value).any { networkId ->
             wantedNetworkUsesEmbeddedReality(networkId, all)
         }
 
@@ -630,8 +784,8 @@ class ConnectionManagerImpl @Inject constructor(
      */
     private suspend fun releaseKeeperWhenPushCanOwnEverything() {
         if (appForeground || settings.settings.first().deliveryMode != DeliveryMode.UNIFIED_PUSH) return
-        val all = networkDao.observeAll().first()
-        val wanted = wantedNetworkIds(all, userIntents, connectionStates.value)
+        val all = observeIrcNetworks().first()
+        val wanted = wantedNetworkIds(all, userIntents, registry.connectionStates.value)
         val pushOwned = pushSuspendedNetworkIds(
             all,
             wanted,
@@ -672,7 +826,7 @@ class ConnectionManagerImpl @Inject constructor(
             pushSuspendedIds.clear()
             rosterRequests.values.forEach { it.cancel() }
             rosterRequests.clear()
-            _rosterStates.value = emptyMap()
+            _memberLoadStates.value = emptyMap()
             monitoredTargets.clear()
             monitorInitialized.clear()
             monitorLocks.clear()
@@ -714,7 +868,7 @@ class ConnectionManagerImpl @Inject constructor(
         // current socket; a healthy Ready connection is never unconditionally rebuilt. No-op until
         // started.
         if (!registry.snapshot.value.started) return
-        reconcile(networkDao.observeAll().first())
+        reconcile(observeIrcNetworks().first())
         registry.wakeNonReady()
         registry.probeReady()
     }
@@ -780,10 +934,12 @@ class ConnectionManagerImpl @Inject constructor(
             onLag = { id, lag -> setLag(id, lag) },
             onStopped = { id -> registry.actorStopped(id, generation) },
             onReady = { conn ->
-                registry.runIfCurrent(row.id, generation) {
-                    onReady(row, (conn as IrcClientConnection).client) {
-                        registry.isCurrent(row.id, generation)
-                    }
+                if (registry.isCurrent(row.id, generation)) {
+                    onReady(
+                        row,
+                        (conn as IrcClientConnection).client,
+                        generation,
+                    ) { registry.isCurrent(row.id, generation) }
                 }
             },
             pendingCertFailure = {
@@ -908,7 +1064,7 @@ class ConnectionManagerImpl @Inject constructor(
         bufferStore.resolveChannelRoom(networkId, normalize(networkId, channel))
 
     private fun setRosterState(bufferId: Long, state: RosterLoadState) {
-        _rosterStates.update { it + (bufferId to state) }
+        _memberLoadStates.update { it + (bufferId to state) }
     }
 
     /** Publish one network's latest latency reading; a null [lag] clears it (#34). */
@@ -921,14 +1077,14 @@ class ConnectionManagerImpl @Inject constructor(
     private suspend fun clearRoster(networkId: Long, channel: String) {
         bufferForChannel(networkId, channel)?.let { buffer ->
             rosterRequests.remove(buffer.id)?.cancel()
-            _rosterStates.update { it - buffer.id }
+            _memberLoadStates.update { it - buffer.id }
         }
     }
 
     private suspend fun invalidateRosters(networkId: Long) {
         val ids = bufferDao.channelIds(networkId).toSet()
         ids.forEach { rosterRequests.remove(it)?.cancel() }
-        _rosterStates.update { states ->
+        _memberLoadStates.update { states ->
             states + ids.associateWith { RosterLoadState.NOT_LOADED }
         }
     }
@@ -1137,6 +1293,16 @@ class ConnectionManagerImpl @Inject constructor(
     private suspend fun onReady(
         row: NetworkEntity,
         client: IrcClient,
+        generation: Long,
+        isCurrent: () -> Boolean,
+    ) {
+        onReadySession(row, client, generation, isCurrent)
+    }
+
+    private suspend fun onReadySession(
+        row: NetworkEntity,
+        client: IrcClient,
+        generation: Long,
         isCurrent: () -> Boolean,
     ) {
         if (!isCurrent()) return
@@ -1202,17 +1368,38 @@ class ConnectionManagerImpl @Inject constructor(
         // feature waiters alive for the exact connection rather than treating an early snapshot as
         // final. ConnectionActor cancels this scope as soon as Ready ends.
         coroutineScope {
-            val readMarkers = async {
-                awaitReadMarkerCapability(client)
-                if (isCurrent()) reconcileReadMarkersForConnection(row, client, isCurrent)
+            val initialReadMarkers = async {
+                val negotiated = awaitReadMarkerCapabilityDecision(client)
+                if (negotiated && isCurrent()) {
+                    reconcileReadMarkersForConnection(row, client, isCurrent)
+                }
+                negotiated
+            }
+            // Runtime CAP NEW can introduce read-marker support after the entry-critical deferred
+            // CAP decision. Keep that convergence alive for the connection without extending the
+            // initial history barrier indefinitely on servers that do not support the extension.
+            launch {
+                if (!initialReadMarkers.await()) {
+                    awaitReadMarkerCapabilityAvailable(client)
+                    if (isCurrent()) reconcileReadMarkersForConnection(row, client, isCurrent)
+                }
             }
             launch {
-                if (!awaitHistoryReady(client)) return@launch
+                val historyReady = awaitHistoryReady(client)
+                // Marker settlement is entry-critical even when CHATHISTORY is unsupported: the
+                // frozen unread target must use the server marker before this gate is released.
+                initialReadMarkers.join()
                 if (!isCurrent()) return@launch
-                // If read-marker was already negotiated, establish the durable max before
-                // history rows arrive. If it appears later, its own watcher will still converge.
-                if (client.hasReadMarkerCap()) readMarkers.join()
-                if (isCurrent()) catchUpForConnection(row.id, client)
+                if (!historyReady) {
+                    if (isCurrent() && clientFor(row.id) === client) {
+                        registry.historyCatchUpFinished(row.id, generation)
+                    }
+                    return@launch
+                }
+                catchUpForConnection(row.id, client)
+                if (isCurrent() && clientFor(row.id) === client) {
+                    registry.historyCatchUpFinished(row.id, generation)
+                }
             }
             launch {
                 // A bouncer child publishes its post-BIND CAP ACK after the first Ready snapshot.
@@ -1363,10 +1550,11 @@ class ConnectionManagerImpl @Inject constructor(
                     // ConnectionActor's long-lived collector persists the same event through
                     // EventProcessor. Wait until that durable max-only write is visible before
                     // allowing CHATHISTORY to populate unread-count queries.
-                    withTimeoutOrNull(READ_MARKER_PERSIST_TIMEOUT_MS) {
-                        bufferDao.observe(request.bufferId).first { buffer ->
-                            buffer?.readMarkerTime?.let { it >= timestamp } == true
-                        }
+                    bufferDao.observe(request.bufferId).first { buffer ->
+                        buffer?.let {
+                            it.readMarkerTime?.let { marker -> marker >= timestamp } == true &&
+                                it.localReadAnchorTime?.let { anchor -> anchor >= timestamp } == true
+                        } == true
                     }
                 }
             }.awaitAll()
@@ -1387,10 +1575,18 @@ class ConnectionManagerImpl @Inject constructor(
      * their post-bind CAP ACK via successive Ready snapshots, so the filter matches whenever either
      * cap lands.
      */
-    private suspend fun awaitReadMarkerCapability(client: IrcClient) {
+    private suspend fun awaitReadMarkerCapabilityDecision(client: IrcClient): Boolean {
+        if (client.hasReadMarkerCap()) return true
+        client.pendingFeatureCaps.first { pending ->
+            client.hasReadMarkerCap() || pending.none(::isReadMarkerCap)
+        }
+        return client.hasReadMarkerCap()
+    }
+
+    private suspend fun awaitReadMarkerCapabilityAvailable(client: IrcClient) {
         if (client.hasReadMarkerCap()) return
         client.state.filterIsInstance<IrcClientState.Ready>().first { ready ->
-            ready.caps.any { isReadMarkerCap(it) }
+            ready.caps.any(::isReadMarkerCap)
         }
     }
 
@@ -1723,9 +1919,9 @@ class ConnectionManagerImpl @Inject constructor(
                 ) > 0
             },
             awaitReady = {
-                if (connectionStates.value[buffer.networkId] !is IrcClientState.Ready) connect(buffer.networkId)
+                if (registry.connectionStates.value[buffer.networkId] !is IrcClientState.Ready) connect(buffer.networkId)
                 withTimeoutOrNull(INVITE_READY_TIMEOUT_MS) {
-                    connectionStates.map { it[buffer.networkId] }
+                    registry.connectionStates.map { it[buffer.networkId] }
                         .filterIsInstance<IrcClientState.Ready>()
                         .first()
                 } != null
@@ -1758,7 +1954,7 @@ class ConnectionManagerImpl @Inject constructor(
         val buffer = bufferDao.observeById(bufferId) ?: return
         val canonicalBufferId = buffer.id
         if (buffer.type != BufferType.CHANNEL || !buffer.joined) return
-        if (!force && rosterStates.value[bufferId] == RosterLoadState.LOADED) return
+        if (!force && memberLoadStates.value[bufferId] == RosterLoadState.LOADED) return
         val client = clientFor(buffer.networkId) ?: run {
             setRosterState(bufferId, RosterLoadState.FAILED)
             return
@@ -1823,21 +2019,22 @@ class ConnectionManagerImpl @Inject constructor(
         false
     }
 
+    override suspend fun setChannelTopic(bufferId: Long, topic: String): Boolean = try {
+        sendTopic(bufferId, topic)
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        false
+    }
+
     private suspend fun sendPart(bufferId: Long, reason: String?): Boolean {
         val buffer = bufferDao.observeById(bufferId) ?: return false
-        // A close request is retried from the durable coordinator; never treat a disconnected
-        // client (or one still registering) as a successful PART write.
-        val client = clientFor(buffer.networkId) ?: return false
-        if (client.state.value !is IrcClientState.Ready) return false
-        // Append the reason as the PART trailing param when the user supplied one (/part <reason>).
-        val params = if (reason.isNullOrBlank()) {
-            listOf(buffer.ircTarget)
-        } else {
-            listOf(buffer.ircTarget, reason)
-        }
-        return client.sendIfConnected(
-            io.github.trevarj.motd.irc.proto.IrcMessage(command = "PART", params = params),
-        )
+        return writeChannelPartIfReady(buffer, reason, clientFor(buffer.networkId))
+    }
+
+    private suspend fun sendTopic(bufferId: Long, topic: String): Boolean {
+        val buffer = bufferDao.observeById(bufferId) ?: return false
+        return writeChannelTopicIfReady(buffer, topic, clientFor(buffer.networkId))
     }
 
     override suspend fun ensureQueryBuffer(networkId: Long, nick: String): Long {
@@ -1957,14 +2154,11 @@ class ConnectionManagerImpl @Inject constructor(
         const val SOJU_READ_CAP = "soju.im/read"
         const val WEBPUSH_CAP = "soju.im/webpush"
         const val READ_MARKER_RESPONSE_TIMEOUT_MS = 5_000L
-        const val READ_MARKER_PERSIST_TIMEOUT_MS = 2_000L
         const val ECHO_TIMEOUT_MS = 30_000L
         const val INVITE_READY_TIMEOUT_MS = 30_000L
         const val ROSTER_REQUEST_TIMEOUT_MS = 15_000L
         const val EMBEDDED_REALITY_BACKGROUND_GRACE_MS = 5 * 60 * 1000L
         const val MAX_BYTES = 400
-        // Stable, casemapping-invariant name for the per-network SERVER buffer.
-        const val SERVER_BUFFER_NAME = "*"
 
         /** Whether MainActivity/BootReceiver should keep the foreground service alive. */
         fun shouldRunService(deliveryPersistent: Boolean, hasNetworks: Boolean): Boolean =
@@ -2250,3 +2444,20 @@ internal fun childrenNeedingReconnect(
         }
         .map { it.id }
         .toSet()
+
+/** Maps IRC client states onto the neutral seam lifecycle; [generation] is the session sequence. */
+internal fun IrcClientState.toConnectionState(generation: Long): ConnectionState = when (this) {
+    IrcClientState.Disconnected -> ConnectionState.Disconnected
+    IrcClientState.Connecting -> ConnectionState.Connecting
+    IrcClientState.Registering -> ConnectionState.Authenticating
+    is IrcClientState.Ready -> ConnectionState.Ready(
+        selfHandle = nick,
+        generation = generation,
+        // Opaque negotiated-feature revision: a late CAP/ISUPPORT update must change the neutral
+        // projection, or the deduplicating seam flows would suppress it and capability re-pulls
+        // (history availability, live identity rules) would stay stale until the next lifecycle
+        // transition.
+        negotiationRevision = 31 * caps.hashCode() + isupport.hashCode(),
+    )
+    is IrcClientState.Failed -> ConnectionState.Failed(reason = reason, fatal = fatal)
+}

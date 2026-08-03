@@ -12,6 +12,7 @@ import dagger.hilt.components.SingletonComponent
 import io.github.trevarj.motd.data.db.BufferDao
 import io.github.trevarj.motd.data.db.DccTransferDao
 import io.github.trevarj.motd.data.db.HistoryCursorDao
+import io.github.trevarj.motd.data.db.HistoryGapDao
 import io.github.trevarj.motd.data.db.MemberDao
 import io.github.trevarj.motd.data.db.MessageDao
 import io.github.trevarj.motd.data.db.MIGRATION_1_2
@@ -34,6 +35,9 @@ import io.github.trevarj.motd.data.db.MIGRATION_17_18
 import io.github.trevarj.motd.data.db.MIGRATION_18_19
 import io.github.trevarj.motd.data.db.MIGRATION_19_20
 import io.github.trevarj.motd.data.db.MIGRATION_20_21
+import io.github.trevarj.motd.data.db.MIGRATION_21_22
+import io.github.trevarj.motd.data.db.MIGRATION_22_23
+import io.github.trevarj.motd.data.db.MIGRATION_23_24
 import io.github.trevarj.motd.data.db.MotdDatabase
 import io.github.trevarj.motd.data.db.NetworkDao
 import io.github.trevarj.motd.data.db.NetworkIdentityDao
@@ -80,6 +84,9 @@ internal object DbModule {
                 MIGRATION_18_19,
                 MIGRATION_19_20,
                 MIGRATION_20_21,
+                MIGRATION_21_22,
+                MIGRATION_22_23,
+                MIGRATION_23_24,
             )
             // Downgrades only happen in dev when switching between branches with different schema
             // versions (e.g. the obfs branch's v3 vs main's v2); released builds only ever move the
@@ -97,4 +104,5 @@ internal object DbModule {
     @Provides fun provideUserDao(db: MotdDatabase): UserDao = db.userDao()
     @Provides fun provideDccTransferDao(db: MotdDatabase): DccTransferDao = db.dccTransferDao()
     @Provides fun provideHistoryCursorDao(db: MotdDatabase): HistoryCursorDao = db.historyCursorDao()
+    @Provides fun provideHistoryGapDao(db: MotdDatabase): HistoryGapDao = db.historyGapDao()
 }
