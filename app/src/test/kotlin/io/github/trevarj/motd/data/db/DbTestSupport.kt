@@ -9,12 +9,18 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
-// Shared helpers for Robolectric in-memory DB tests.
-internal fun inMemoryDb(): MotdDatabase {
+/**
+ * Shared helper for Robolectric in-memory DB tests.
+ *
+ * [directCommit] runs queries on the caller's thread, so a write commits and releases its
+ * invalidation inline and its effect on a live observer is observable without awaiting an executor.
+ */
+internal fun inMemoryDb(directCommit: Boolean = false): MotdDatabase {
     val context = ApplicationProvider.getApplicationContext<Context>()
     return Room
         .inMemoryDatabaseBuilder(context, MotdDatabase::class.java)
         .allowMainThreadQueries()
+        .apply { if (directCommit) setQueryExecutor(Runnable::run) }
         .build()
 }
 

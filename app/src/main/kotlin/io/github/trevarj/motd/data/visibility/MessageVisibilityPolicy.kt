@@ -8,6 +8,7 @@ import io.github.trevarj.motd.data.prefs.FoolsMode
 import io.github.trevarj.motd.data.prefs.PresenceMode
 import io.github.trevarj.motd.data.prefs.SMART_PRESENCE_WINDOW_MS
 import io.github.trevarj.motd.data.prefs.Settings
+import io.github.trevarj.motd.irc.proto.IrcCaseMapping
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 
 /**
@@ -190,7 +191,7 @@ internal class MessageVisibilitySql(
             "AND spoke.serverTime >= $serverTime - $SMART_PRESENCE_WINDOW_MS))"
     }
 
-    internal fun notFool(alias: String): String = if (alias == "m") defaultNotFoolPredicate else buildNotFoolPredicate(alias)
+    private fun notFool(alias: String): String = if (alias == "m") defaultNotFoolPredicate else buildNotFoolPredicate(alias)
 
     private fun buildNotFoolPredicate(alias: String = "m"): String {
         if (foolIdentities.isEmpty()) return TRUE
@@ -201,6 +202,33 @@ internal class MessageVisibilitySql(
             "OR (${column(alias, "senderAccount")} IS NOT NULL " +
             "AND COALESCE(fool.column2, fool.column1) = " +
             "CAST(${column(alias, "senderAccount")} AS BLOB))))"
+    }
+
+    companion object {
+        /**
+         * Fool exclusion across networks. There are exactly three foldings, so three fixed terms
+         * keyed on [caseMappingExpr] cover every network and the SQL stays constant as the network
+         * list changes. A missing identity row means CASEMAPPING was never advertised: RFC1459 by
+         * protocol default.
+         */
+        fun notFoolAnyCasemap(
+            spec: MessageVisibilitySpec,
+            caseMappingExpr: String,
+            alias: String = "m",
+        ): String {
+            if (spec.fools.isEmpty()) return TRUE
+            val rfc1459 = IrcCaseMapping.Rfc1459.rawName
+            val strict = IrcCaseMapping.Rfc1459Strict.rawName
+            val casemap = "LOWER(COALESCE($caseMappingExpr,'$rfc1459'))"
+            return listOf(
+                "$casemap = '$rfc1459'" to IrcCaseMapping.Rfc1459,
+                "$casemap = '$strict'" to IrcCaseMapping.Rfc1459Strict,
+                // ASCII, plus every unrecognized advertisement.
+                "$casemap NOT IN ('$rfc1459','$strict')" to IrcCaseMapping.Ascii,
+            ).joinToString(separator = " OR ", prefix = "(", postfix = ")") { (test, mapping) ->
+                "($test AND ${MessageVisibilitySql(spec, IrcIdentityRules(mapping)).notFool(alias)})"
+            }
+        }
     }
 }
 
@@ -361,65 +389,83 @@ internal fun nearestUnreadMentionInPrefixQuery(
     )
 }
 
-/** One network's id paired with the identity rules that normalize nicks on it. */
-data class FirehoseNetwork(
-    val networkId: Long,
-    val identityRules: IrcIdentityRules = IrcIdentityRules(),
+/**
+ * Keyset cursor into the cross-buffer stream.
+ *
+ * `(serverTime, id)` is the only globally comparable ordering key. `timelineOrder` carries two
+ * incomparable scales — `CanonicalTimelineStore`'s playback settle rewrites dense per-(buffer,
+ * serverTime) indexes 0,1,2…, while every other writer stores the rowid — so it orders rows only
+ * WITHIN one buffer. Cross-buffer it would sink settled history below live rows on every
+ * same-second tie and flip a buffer's position whenever its history replays.
+ */
+data class FirehoseKey(
+    val serverTime: Long,
+    val id: Long,
 )
 
+/** Which side of a [FirehoseKey] a page reads, and whether the key row itself is included. */
+internal enum class FirehoseSeek { OLDER, OLDER_OR_AT, NEWER }
+
 /**
- * Cross-buffer reverse-chronological conversation stream (the "firehose"), derived entirely from
- * the shared messages table.
+ * Cross-buffer reverse-chronological conversation stream, newest first.
  *
- * Room lifecycle exclusions match [io.github.trevarj.motd.data.db.MessageDao.observeInvitations]:
- * no SERVER console, no dismissed query, no archived room, and nothing mid-close or redirected
- * away. The `event_redirects` anti-join keeps only canonical rows, so a message that lost
- * coalescence cannot appear a second time.
+ * Lifecycle exclusions match [io.github.trevarj.motd.data.db.MessageDao.observeInvitations]; the
+ * `event_redirects` anti-join is defensive only — `CanonicalTimelineStore.coalesce` already deletes
+ * the losing row.
  *
- * That anti-join is deliberate defensive parity with `observeInvitations` rather than a live
- * filter: `CanonicalTimelineStore.coalesce` deletes the losing `messages` row in the same
- * transaction that writes the redirect, so a committed database never holds a losing row for it
- * to match. It stays because this is a merged, user-facing stream — should any future writer
- * break that invariant, the firehose still cannot show the same line twice.
+ * Fools are excluded in both modes (preview semantics: a collapsed placeholder means nothing here),
+ * keyed on each row's own network casemap so the SQL never depends on which networks exist.
  *
- * Fools are excluded in both fools modes, unlike the per-buffer timeline: this view follows
- * `preview` semantics, where a collapsed placeholder would carry no meaning. The predicate is
- * composed per network so a nick muted on one network stays visible on another — each term
- * normalizes the configured fools with that network's own casemap. Any network absent from
- * [networks] is left unfiltered by the trailing `n.id NOT IN (...)` term, and with no fools
- * configured the whole clause collapses to `1`.
+ * [key] seeks one page without OFFSET; a null key reads the newest page. [FirehoseSeek.NEWER] is the
+ * prepend direction and returns rows oldest-first, so the caller reverses them.
  */
 internal fun firehosePagingQuery(
     spec: MessageVisibilitySpec,
-    networks: List<FirehoseNetwork>,
+    key: FirehoseKey? = null,
+    seek: FirehoseSeek = FirehoseSeek.OLDER,
+    limit: Int? = null,
 ): SimpleSQLiteQuery {
-    val foolClause =
-        if (spec.fools.isEmpty() || networks.isEmpty()) {
-            TRUE
-        } else {
-            val ids = networks.joinToString(",") { it.networkId.toString() }
-            networks.joinToString(
-                separator = " OR ",
-                prefix = "(",
-                postfix = " OR n.id NOT IN ($ids))",
-            ) { network ->
-                "(n.id = ${network.networkId} AND ${MessageVisibilitySql(spec, network.identityRules).notFool("m")})"
-            }
-        }
+    val direction = if (key != null && seek == FirehoseSeek.NEWER) "ASC" else "DESC"
+    val keyset = if (key == null) "" else "${keysetPredicate(seek)} "
+    val limitClause = if (limit == null) "" else " LIMIT ?"
     return SimpleSQLiteQuery(
-        "SELECT m.*, b.displayName AS bufferDisplayName, n.name AS networkName " +
+        "SELECT m.*, b.displayName AS bufferDisplayName, n.name AS networkName, " +
+            "b.type AS bufferType, b.networkId AS networkId, " +
+            "b.avatarOverrideModel AS avatarOverrideModel, " +
+            "ni.caseMapping AS caseMapping, ni.chanTypes AS chanTypes " +
             "FROM messages m " +
-            "JOIN buffers b ON b.id = m.bufferId " +
+            // CROSS JOIN pins join order, not semantics: driven from buffers the ORDER BY becomes
+            // a temp B-tree sort per page instead of a walk of index_messages_serverTime_id.
+            "CROSS JOIN buffers b ON b.id = m.bufferId " +
             "JOIN networks n ON n.id = b.networkId " +
+            "LEFT JOIN network_identity ni ON ni.networkId = b.networkId " +
             "LEFT JOIN event_redirects redirect ON redirect.losingEventId = m.id " +
-            "WHERE b.type IN ('CHANNEL','QUERY') AND lower(b.name) != 'bouncerserv' " +
-            "AND b.dismissed = 0 AND b.archived = 0 " +
+            "WHERE b.type IN ('CHANNEL','QUERY') AND b.dismissed = 0 AND b.archived = 0 " +
             "AND b.pendingCloseAt IS NULL AND b.redirectToRoomId IS NULL " +
             "AND redirect.losingEventId IS NULL " +
-            "AND m.kind IN ($CONVERSATION_KIND_SQL) AND $foolClause " +
-            "ORDER BY m.serverTime DESC, m.timelineOrder DESC, m.id DESC",
+            "AND m.kind IN ($CONVERSATION_KIND_SQL) " +
+            "AND ${MessageVisibilitySql.notFoolAnyCasemap(spec, "ni.caseMapping")} " +
+            keyset +
+            "ORDER BY m.serverTime $direction, m.id $direction" +
+            limitClause,
+        buildList<Any> {
+            key?.let { addAll(listOf(it.serverTime, it.serverTime, it.id)) }
+            limit?.let { add(it) }
+        }.toTypedArray(),
     )
 }
+
+/**
+ * Written as a leading-column range plus a tie-break rather than the row-value form
+ * `(serverTime, id) < (?, ?)`: SQLite gives no index guarantee for row values, while
+ * `serverTime <= ?` is a plain range constraint the `(serverTime, id)` index can seek on.
+ */
+private fun keysetPredicate(seek: FirehoseSeek): String =
+    when (seek) {
+        FirehoseSeek.OLDER -> "AND m.serverTime <= ? AND (m.serverTime < ? OR m.id < ?)"
+        FirehoseSeek.OLDER_OR_AT -> "AND m.serverTime <= ? AND (m.serverTime < ? OR m.id <= ?)"
+        FirehoseSeek.NEWER -> "AND m.serverTime >= ? AND (m.serverTime > ? OR m.id > ?)"
+    }
 
 private fun allOf(vararg clauses: String): String =
     clauses

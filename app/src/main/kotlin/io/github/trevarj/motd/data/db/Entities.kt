@@ -346,7 +346,8 @@ data class RoomAliasEntity(
         Index(value = ["bufferId", "normalizedActor", "serverTime"]),
         // The cross-buffer firehose orders every room's rows together. Every other index here is
         // bufferId-prefixed and cannot serve that scan, leaving it a full sort of the table.
-        Index(value = ["serverTime", "timelineOrder", "id"]),
+        // (serverTime, id) only: timelineOrder is per-buffer and not comparable across buffers.
+        Index(value = ["serverTime", "id"]),
     ],
     foreignKeys = [
         ForeignKey(

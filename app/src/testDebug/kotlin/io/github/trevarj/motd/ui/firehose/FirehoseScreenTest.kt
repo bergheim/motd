@@ -9,6 +9,7 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -20,9 +21,10 @@ import androidx.paging.PagingData
 import androidx.paging.PagingSource
 import androidx.paging.PagingState
 import androidx.paging.compose.collectAsLazyPagingItems
-import io.github.trevarj.motd.data.db.FirehoseRow
+import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.db.MessageEntity
 import io.github.trevarj.motd.data.db.MessageKind
+import io.github.trevarj.motd.data.db.SearchHit
 import io.github.trevarj.motd.ui.theme.LocalLottieMotionEnabled
 import io.github.trevarj.motd.ui.theme.MotdTheme
 import kotlinx.coroutines.flow.Flow
@@ -36,13 +38,9 @@ import org.robolectric.annotation.GraphicsMode
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Presentation contract of the merged stream: what a line shows, what a tap reports, and the two
- * states that are not a list.
- *
- * Drives [FirehoseContent] directly off a static [PagingData] rather than the screen, which owns a
- * Hilt ViewModel; the branch under test is entirely a function of the paging load state, which
- * `PagingData.from` sets exactly. Lives in `testDebug` because [createComposeRule] launches a
- * `ComponentActivity` that only the debug manifest declares — see `EmptyStateLayoutTest`.
+ * Presentation contract of the merged stream, driven off a static [PagingData] rather than the
+ * Hilt-owning screen. In `testDebug` because [createComposeRule] needs the debug-only
+ * `ComponentActivity` — see `EmptyStateLayoutTest`.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -61,7 +59,10 @@ class FirehoseScreenTest {
         text: String = "hello there",
         kind: MessageKind = MessageKind.PRIVMSG,
         serverTime: Long = 1_700_000_000_000L,
-    ) = FirehoseRow(
+        isSelf: Boolean = false,
+        failed: Boolean = false,
+        ircFormattedText: String? = null,
+    ) = SearchHit(
         message =
             MessageEntity(
                 id = id,
@@ -70,10 +71,15 @@ class FirehoseScreenTest {
                 sender = sender,
                 kind = kind,
                 text = text,
+                isSelf = isSelf,
+                failed = failed,
+                ircFormattedText = ircFormattedText,
                 dedupKey = "dedup-$id",
             ),
         bufferDisplayName = buffer,
         networkName = network,
+        bufferType = BufferType.CHANNEL,
+        networkId = 1L,
     )
 
     /** Source states for a stream that has finished refreshing, however that refresh ended. */
@@ -86,12 +92,11 @@ class FirehoseScreenTest {
 
     /** The stream is built by the caller, so recomposition cannot restart the collection. */
     private fun setContent(
-        stream: Flow<PagingData<FirehoseRow>>,
+        stream: Flow<PagingData<SearchHit>>,
         showNetwork: () -> Boolean = { false },
     ) {
         compose.setContent {
-            // Motion off: the empty state holds its caption back until the ghost rows' Lottie
-            // clock says so, and a stub composition never advances one.
+            // Motion off: the caption waits on a Lottie clock a stub composition never advances.
             CompositionLocalProvider(LocalLottieMotionEnabled provides false) {
                 MotdTheme(dynamicColor = false) {
                     FirehoseContent(
@@ -106,10 +111,7 @@ class FirehoseScreenTest {
         }
     }
 
-    /**
-     * The first paging emission lands after composition, so every assertion waits on the branch it
-     * expects rather than on a single idle pass.
-     */
+    /** The first paging emission lands after composition, so assertions wait on the branch. */
     private fun awaitText(text: String) =
         compose.waitUntil {
             compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()
@@ -124,22 +126,17 @@ class FirehoseScreenTest {
     fun aLineShowsItsConversationTagAndFormattedBodyAndReportsTheTappedRow() {
         setContent(
             flowOf(
-                PagingData.from(
-                    listOf(
-                        row(id = 11L, text = "hello there"),
-                        row(id = 12L, buffer = "#nix", sender = "ana", text = "waves", kind = MessageKind.ACTION),
-                    ),
-                ),
+                PagingData.from(listOf(row(id = 11L, text = "hello there"))),
             ),
         )
 
-        awaitText("#kotlin")
+        awaitTag("firehose_row_11")
+        compose.onNodeWithTag("firehose_list").assertIsDisplayed()
         compose.onNodeWithText("#kotlin").assertIsDisplayed()
-        compose.onNodeWithText("nick: hello there").assertIsDisplayed()
-        // ACTION renders as an emote, not as "sender: text".
-        compose.onNodeWithText("* ana waves").assertIsDisplayed()
+        compose.onNodeWithText("hello there").assertIsDisplayed()
+        compose.onNodeWithText("nick").assertIsDisplayed()
 
-        compose.onNodeWithText("nick: hello there").performClick()
+        compose.onNodeWithText("hello there").performClick()
 
         compose.runOnIdle {
             // Canonical row id for identity, serverTime only as the scroll anchor.
@@ -148,26 +145,50 @@ class FirehoseScreenTest {
     }
 
     @Test
+    fun aRunFromOneSenderShowsItsNickOnceAndTagsOnlyTheConversationChange() {
+        // Newest first: two lines from one nick, then another conversation.
+        setContent(
+            flowOf(
+                PagingData.from(
+                    listOf(
+                        row(id = 62L, serverTime = 1_700_000_060_000L),
+                        row(id = 61L, serverTime = 1_700_000_000_000L),
+                        row(id = 60L, bufferId = 9L, buffer = "#nix", sender = "ana", serverTime = 1_699_999_900_000L),
+                    ),
+                ),
+            ),
+        )
+
+        awaitTag("firehose_row_60")
+        // One group: the nick heads the opening line only; the tag marks the buffer change.
+        listOf(62L, 61L, 60L).forEach { compose.onNodeWithTag("firehose_row_$it").assertIsDisplayed() }
+        compose.onNodeWithText("nick").assertIsDisplayed()
+        assertEquals(1, compose.onAllNodesWithText("nick").fetchSemanticsNodes().size)
+        assertEquals(1, compose.onAllNodesWithText("#kotlin").fetchSemanticsNodes().size)
+        compose.onNodeWithText("ana").assertIsDisplayed()
+    }
+
+    @Test
     fun theNetworkLineAppearsOnlyWhileMoreThanOneNetworkExists() {
         var showNetwork by mutableStateOf(false)
         setContent(flowOf(PagingData.from(listOf(row(id = 21L)))), showNetwork = { showNetwork })
 
-        awaitText("#kotlin")
-        compose.onNodeWithText("Libera").assertDoesNotExist()
+        awaitTag("firehose_row_21")
+        compose.onNodeWithText("#kotlin · Libera").assertDoesNotExist()
 
         showNetwork = true
         compose.waitForIdle()
 
-        compose.onNodeWithText("Libera").assertIsDisplayed()
+        compose.onNodeWithText("#kotlin · Libera").assertIsDisplayed()
     }
 
     @Test
     fun aSettledEmptyStreamShowsTheEmptyState() {
-        // Explicitly settled: paging only publishes load states that differ from the presenter's
-        // own defaults, so a plain `from(emptyList())` would leave the refresh reading as loading.
+        // Explicit NotLoading: a plain from(emptyList()) leaves the refresh reading as loading.
         setContent(flowOf(PagingData.from(emptyList(), settled(LoadState.NotLoading(endOfPaginationReached = true)))))
 
         awaitTag("empty_state_ghost_rows")
+        compose.onNodeWithTag("firehose_list").assertDoesNotExist()
         compose.onNodeWithText("Nothing here yet").assertIsDisplayed()
     }
 
@@ -181,14 +202,45 @@ class FirehoseScreenTest {
         setContent(pager.flow)
 
         awaitText("Retry")
+        compose.onNodeWithTag("firehose_list").assertDoesNotExist()
         compose.onNodeWithText("Couldn't load the firehose").assertIsDisplayed()
         compose.onNodeWithText("Retry").assertIsEnabled().performClick()
 
-        // The tap reached the pager rather than merely being tappable: a second load ran, and its
-        // page is what takes the screen out of the error state.
-        awaitText("nick: hello there")
+        // Proves the tap reached the pager: the second load is what clears the error state.
+        awaitTag("firehose_row_31")
         compose.onNodeWithText("Couldn't load the firehose").assertDoesNotExist()
         assertEquals(2, loads.get())
+    }
+
+    /**
+     * The contentType pool already splits SELF_FAILED out, so the row has to render it: a send that
+     * failed must look failed here, not like an ordinary delivered line.
+     */
+    @Test
+    fun aFailedSelfLineShowsTheFailureAffordance() {
+        setContent(
+            flowOf(
+                PagingData.from(listOf(row(id = 51L, sender = "me", isSelf = true, failed = true))),
+            ),
+        )
+
+        awaitTag("firehose_row_51")
+        compose.onNodeWithContentDescription("Failed").assertIsDisplayed()
+    }
+
+    /** Same rule as the chat timeline: the stored IRC-formatted body wins over the raw text. */
+    @Test
+    fun aLineRendersItsIrcFormattedBodyRatherThanTheRawText() {
+        setContent(
+            flowOf(
+                PagingData.from(
+                    listOf(row(id = 52L, text = "\u0002bold\u0002 line", ircFormattedText = "bold line")),
+                ),
+            ),
+        )
+
+        awaitTag("firehose_row_52")
+        compose.onNodeWithText("bold line").assertIsDisplayed()
     }
 
     @Test
@@ -202,7 +254,7 @@ class FirehoseScreenTest {
             ),
         )
 
-        awaitText("nick: hello there")
+        awaitTag("firehose_row_41")
         compose.onNodeWithText("Couldn't load the firehose").assertDoesNotExist()
         compose.onNodeWithText("Retry").assertDoesNotExist()
     }
@@ -211,11 +263,11 @@ class FirehoseScreenTest {
 /** Fails its first load and serves [page] afterwards, so a retry shows up as a state change. */
 private class FailFirstPagingSource(
     private val loads: AtomicInteger,
-    private val page: List<FirehoseRow>,
-) : PagingSource<Int, FirehoseRow>() {
-    override fun getRefreshKey(state: PagingState<Int, FirehoseRow>): Int? = null
+    private val page: List<SearchHit>,
+) : PagingSource<Int, SearchHit>() {
+    override fun getRefreshKey(state: PagingState<Int, SearchHit>): Int? = null
 
-    override suspend fun load(params: LoadParams<Int>): LoadResult<Int, FirehoseRow> =
+    override suspend fun load(params: LoadParams<Int>): LoadResult<Int, SearchHit> =
         if (loads.incrementAndGet() == 1) {
             LoadResult.Error(IllegalStateException("boom"))
         } else {
