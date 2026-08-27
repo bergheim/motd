@@ -87,6 +87,8 @@ class SearchViewModelTest {
             ),
         bufferDisplayName = "#kotlin",
         networkName = "Libera",
+        bufferType = BufferType.CHANNEL,
+        networkId = 1,
     )
 
     /** Counts search() invocations so we can assert the debounce collapses rapid keystrokes. */
@@ -156,12 +158,35 @@ class SearchViewModelTest {
         type = type,
     )
 
+    private fun chatListRow(
+        bufferId: Long,
+        displayName: String,
+        type: BufferType = BufferType.CHANNEL,
+        archived: Boolean = false,
+        networkName: String = "Libera",
+    ) = ChatListRow(
+        bufferId = bufferId,
+        networkId = NETWORK_ID,
+        networkName = networkName,
+        displayName = displayName,
+        type = type,
+        pinned = false,
+        muted = false,
+        lastMessageText = null,
+        lastMessageSender = null,
+        lastMessageTime = null,
+        unreadCount = 0,
+        mentionCount = 0,
+        archived = archived,
+    )
+
     private class FakeBufferRepository(
         initial: BufferEntity? = null,
+        private val chatList: List<ChatListRow> = emptyList(),
     ) : BufferRepository {
         val buffers = MutableStateFlow(initial)
 
-        override fun observeChatList(): Flow<List<ChatListRow>> = flowOf(emptyList())
+        override fun observeChatList(): Flow<List<ChatListRow>> = flowOf(chatList)
 
         override fun observeBuffer(id: Long): Flow<BufferEntity?> = buffers
 
@@ -810,6 +835,58 @@ class SearchViewModelTest {
                 repo.emit("alpha", null, listOf(hit(1, "late alpha result")))
                 runCurrent()
                 expectNoEvents()
+                cancelAndIgnoreRemainingEvents()
+            }
+        }
+
+    @Test
+    fun matchingBufferRows_matches_displayName_case_insensitively_and_respects_the_limit() {
+        val rows =
+            listOf(
+                chatListRow(1, "#MotdChat"),
+                chatListRow(2, "#other"),
+                chatListRow(3, "motd-fan (DM)", type = BufferType.QUERY),
+                chatListRow(4, "#motd-archived", archived = true),
+                chatListRow(5, "Server", type = BufferType.SERVER),
+            )
+
+        val matches = matchingBufferRows(rows, "motd")
+
+        assertEquals(listOf(1L, 3L), matches.map(ChatListRow::bufferId))
+    }
+
+    @Test
+    fun matchingBufferRows_blank_query_matches_nothing() {
+        assertEquals(emptyList<ChatListRow>(), matchingBufferRows(listOf(chatListRow(1, "#motd")), " "))
+    }
+
+    @Test
+    fun matchingBufferRows_is_capped_at_the_limit() {
+        val rows = (1..10).map { chatListRow(it.toLong(), "#motd-$it") }
+
+        assertEquals(BUFFER_MATCH_LIMIT, matchingBufferRows(rows, "motd").size)
+    }
+
+    @Test
+    fun buffer_matches_populate_only_for_the_all_scope() =
+        runTest {
+            val repo = ControlledSearchRepository()
+            repo.emit("motd", null, emptyList())
+            val buffers = FakeBufferRepository(chatList = listOf(chatListRow(9, "#motd")))
+            val vm = viewModel(repo, buffers = buffers)
+
+            vm.state.test {
+                awaitItem()
+                vm.onQueryChange("motd")
+                runCurrent()
+                advanceTimeBy(250)
+                runCurrent()
+                val allScope = awaitStateWhere { it.bufferMatches.isNotEmpty() }
+                assertEquals(listOf(9L), allScope.bufferMatches.map(ChatListRow::bufferId))
+
+                vm.onScopeChange(SearchScope.SERVER)
+                runCurrent()
+                assertEquals(emptyList<ChatListRow>(), awaitStateWhere { it.scope == SearchScope.SERVER }.bufferMatches)
                 cancelAndIgnoreRemainingEvents()
             }
         }

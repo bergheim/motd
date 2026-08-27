@@ -308,6 +308,11 @@ interface SearchRepository {
     fun coverage(bufferId: Long?): Flow<SearchCoverage>
 }
 
+/** Read-only cross-buffer conversation stream over the shared messages table, newest first. */
+interface GlobalFeedRepository {
+    fun globalFeed(spec: MessageVisibilitySpec): Flow<PagingData<SearchHit>>
+}
+
 /**
  * A completed preview lookup kept in the process-lifetime cache. A nullable [preview] distinguishes
  * a known negative result from a cache miss, represented by a null [cachedPreview] return value.

@@ -44,6 +44,8 @@ import io.github.trevarj.motd.data.prefs.CertTrustStore
 import io.github.trevarj.motd.data.prefs.ContentPreviewPrefs
 import io.github.trevarj.motd.data.prefs.ContentPreviewPrefsImpl
 import io.github.trevarj.motd.data.prefs.DataStoreSettingsRepository
+import io.github.trevarj.motd.data.prefs.GlobalFeedPrefs
+import io.github.trevarj.motd.data.prefs.GlobalFeedPrefsImpl
 import io.github.trevarj.motd.data.prefs.HistorySyncPrefs
 import io.github.trevarj.motd.data.prefs.HistorySyncPrefsImpl
 import io.github.trevarj.motd.data.prefs.InviteEnrollmentCleanup
@@ -59,6 +61,8 @@ import io.github.trevarj.motd.data.prefs.SettingsRepository
 import io.github.trevarj.motd.data.repo.BufferRepository
 import io.github.trevarj.motd.data.repo.BufferRepositoryImpl
 import io.github.trevarj.motd.data.repo.ChatHistoryMediatorFactory
+import io.github.trevarj.motd.data.repo.GlobalFeedRepository
+import io.github.trevarj.motd.data.repo.GlobalFeedRepositoryImpl
 import io.github.trevarj.motd.data.repo.LinkPreviewFetchPolicy
 import io.github.trevarj.motd.data.repo.LinkPreviewRepository
 import io.github.trevarj.motd.data.repo.LinkPreviewRepositoryImpl
@@ -131,6 +135,9 @@ internal abstract class AppModule {
     abstract fun searchRepository(impl: SearchRepositoryImpl): SearchRepository
 
     @Binds @Singleton
+    abstract fun globalFeedRepository(impl: GlobalFeedRepositoryImpl): GlobalFeedRepository
+
+    @Binds @Singleton
     abstract fun linkPreviewRepository(impl: LinkPreviewRepositoryImpl): LinkPreviewRepository
 
     @Binds @Singleton
@@ -188,6 +195,10 @@ internal abstract class AppModule {
     /** Gesture lab store; kept out of configuration backup like the Agentwire lab flag. */
     @Binds @Singleton
     abstract fun gesturePrefs(impl: GesturePrefsImpl): GesturePrefs
+
+    /** Global Feed lab store; same backup-excluded rule as the other lab flags. */
+    @Binds @Singleton
+    abstract fun globalFeedPrefs(impl: GlobalFeedPrefsImpl): GlobalFeedPrefs
 
     @Binds @Singleton
     abstract fun voiceRecorder(impl: AndroidVoiceRecorder): VoiceRecorder

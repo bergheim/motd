@@ -187,7 +187,7 @@ interface NetworkIgnoreDao {
 @Dao
 interface BufferDao {
     // Chat-list projection: each non-SERVER buffer joins one newest preview-eligible message by
-    // identity. JOIN/PART/QUIT are timeline-only events and never become previews or activity.
+    // identity. Presence events are timeline-only and never become previews or activity.
     // Unread/mention counts remain chat kinds only; self messages never count as unread.
     // Counts are capped at 1000 (the badge renders 999+) so a buffer holding a huge unread
     // backlog cannot turn every invalidation into a full-buffer scan.
@@ -304,7 +304,8 @@ interface BufferDao {
         LEFT JOIN network_identity ni ON ni.networkId = b.networkId
         LEFT JOIN messages lm ON lm.id = (
             SELECT m.id FROM messages m
-            WHERE m.bufferId = b.id AND m.kind NOT IN ('JOIN', 'PART', 'QUIT', 'NETSPLIT', 'NETJOIN')
+            WHERE m.bufferId = b.id
+              AND m.kind NOT IN ('JOIN', 'PART', 'QUIT', 'AWAY', 'BACK', 'NETSPLIT', 'NETJOIN')
             ORDER BY m.serverTime DESC, m.timelineOrder DESC, m.id DESC
             LIMIT 1
         )
@@ -333,7 +334,7 @@ interface BufferDao {
         """UPDATE buffers SET monitorActivityTime = (
                SELECT m.serverTime FROM messages m
                WHERE m.bufferId = buffers.id
-                 AND m.kind NOT IN ('JOIN', 'PART', 'QUIT', 'NETSPLIT', 'NETJOIN')
+                 AND m.kind NOT IN ('JOIN', 'PART', 'QUIT', 'AWAY', 'BACK', 'NETSPLIT', 'NETJOIN')
                ORDER BY m.serverTime DESC, m.timelineOrder DESC, m.id DESC LIMIT 1
            ) WHERE id = :bufferId AND type = 'QUERY'""",
     )
@@ -383,9 +384,18 @@ interface BufferDao {
     )
     fun observeJoinedChannelNames(networkId: Long): Flow<List<String>>
 
+    /**
+     * History-resync targets. The soju console is the one SERVER row soju answers CHATHISTORY for, so
+     * it is admitted here — role-scoped, since elsewhere that nick is an ordinary user's query — and
+     * carries its server spelling like any other conversation.
+     */
     @Query(
-        """SELECT id, CASE WHEN type = 'SERVER' THEN name ELSE displayName END AS name, pinned
-           FROM buffers WHERE networkId = :networkId AND type != 'SERVER'
+        """SELECT id,
+                  CASE WHEN type = 'SERVER' AND lower(name) != 'bouncerserv' THEN name ELSE displayName END AS name,
+                  pinned
+           FROM buffers WHERE networkId = :networkId
+             AND (type != 'SERVER' OR (lower(name) = 'bouncerserv' AND EXISTS (
+                   SELECT 1 FROM networks n WHERE n.id = buffers.networkId AND n.role = 'BOUNCER_ROOT')))
              AND pendingCloseAt IS NULL AND redirectToRoomId IS NULL ORDER BY id""",
     )
     suspend fun openTargets(networkId: Long): List<BufferTargetRow>
@@ -752,7 +762,7 @@ interface BufferDao {
         """UPDATE buffers SET advertisedLatestTime = (
                SELECT m.serverTime FROM messages m
                WHERE m.bufferId = :id
-                 AND m.kind NOT IN ('JOIN', 'PART', 'QUIT', 'NETSPLIT', 'NETJOIN')
+                 AND m.kind NOT IN ('JOIN', 'PART', 'QUIT', 'AWAY', 'BACK', 'NETSPLIT', 'NETJOIN')
                ORDER BY m.serverTime DESC, m.timelineOrder DESC, m.id DESC
                LIMIT 1)
            WHERE id = :id AND advertisedLatestTime IS NOT NULL
@@ -760,7 +770,7 @@ interface BufferDao {
              AND advertisedLatestTime / 1000 > COALESCE((
                SELECT m.serverTime FROM messages m
                WHERE m.bufferId = :id
-                 AND m.kind NOT IN ('JOIN', 'PART', 'QUIT', 'NETSPLIT', 'NETJOIN')
+                 AND m.kind NOT IN ('JOIN', 'PART', 'QUIT', 'AWAY', 'BACK', 'NETSPLIT', 'NETJOIN')
                ORDER BY m.serverTime DESC, m.timelineOrder DESC, m.id DESC
                LIMIT 1), 0) / 1000""",
     )
@@ -1027,6 +1037,14 @@ interface MessageDao {
     /** Dynamic visibility predicates must run inside Room so placeholder counts match page rows. */
     @RawQuery(observedEntities = [MessageEntity::class])
     fun pagingSource(query: SupportSQLiteQuery): PagingSource<Int, MessageEntity>
+
+    /**
+     * One keyset page of the global feed, same projection and joins as [search].
+     * `GlobalFeedPagingSource` owns paging and observes the joined tables itself, so this stays a
+     * plain read: no COUNT, no OFFSET.
+     */
+    @RawQuery
+    suspend fun globalFeedPage(query: SupportSQLiteQuery): List<SearchHit>
 
     @RawQuery
     suspend fun rawMessage(query: SupportSQLiteQuery): MessageEntity?
@@ -1528,6 +1546,7 @@ interface MessageDao {
     @Query(
         """
         SELECT m.*, b.displayName AS bufferDisplayName, n.name AS networkName,
+               b.type AS bufferType, b.networkId AS networkId, b.avatarOverrideModel AS avatarOverrideModel,
                ni.caseMapping AS caseMapping, ni.chanTypes AS chanTypes
         FROM messages m
         JOIN messages_fts f ON m.id = f.rowid
@@ -1554,10 +1573,17 @@ interface MessageDao {
     fun observeBouncerTranscript(networkId: Long): Flow<List<BouncerTranscriptRow>>
 }
 
+/**
+ * One message plus its conversation tag and the identity columns needed to apply
+ * [io.github.trevarj.motd.data.visibility.MessageVisibilityPolicy] to a row from an unknown network.
+ */
 data class SearchHit(
     @Embedded val message: MessageEntity,
     val bufferDisplayName: String,
     val networkName: String,
+    val bufferType: BufferType,
+    val networkId: Long,
+    val avatarOverrideModel: String? = null,
     val caseMapping: String? = null,
     val chanTypes: String? = null,
 )

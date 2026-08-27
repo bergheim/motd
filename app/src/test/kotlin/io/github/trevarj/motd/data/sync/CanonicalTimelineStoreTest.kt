@@ -43,6 +43,8 @@ class CanonicalTimelineStoreTest {
                 )
 
             setup.store.ingest(tagged(setup.networkId, queryRoom, "monitor-msg", 12_345, "hello"))
+            val away = tagged(setup.networkId, queryRoom, "monitor-away", 12_999, "alice is away")
+            setup.store.ingest(away.copy(event = away.event.copy(kind = MessageKind.AWAY)))
 
             assertEquals(
                 12_345L,

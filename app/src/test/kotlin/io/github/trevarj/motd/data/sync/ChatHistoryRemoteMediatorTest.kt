@@ -1138,6 +1138,40 @@ class ChatHistoryRemoteMediatorTest {
             assertTrue(history.calls.isEmpty())
         }
 
+    /** soju answers CHATHISTORY for its console, so it is the one SERVER room that backfills. */
+    @Test
+    fun bouncerConsoleBacksFillLikeAnyOtherTarget() =
+        runTest {
+            val root = db.networkDao().byId(networkId)!!
+            db.networkDao().update(root.copy(role = NetworkRole.BOUNCER_ROOT))
+            db.bufferDao().insert(
+                BufferEntity(
+                    networkId = networkId,
+                    name = "bouncerserv",
+                    displayName = "BouncerServ",
+                    type = BufferType.SERVER,
+                ),
+            )
+            val consoleId = db.bufferDao().byName(networkId, "bouncerserv")!!.id
+            val history = FakeHistory(latest = listOf(chatMsg("a", 100)))
+            val mediator =
+                ChatHistoryRemoteMediator(
+                    consoleId,
+                    db.bufferDao(),
+                    db.messageDao(),
+                    processor,
+                    history,
+                    50,
+                    db.historyCursorDao(),
+                    db.historyGapDao(),
+                )
+
+            load(mediator, LoadType.APPEND)
+
+            assertEquals(listOf(ChatHistoryRequest.Subcommand.LATEST), history.calls)
+            assertEquals("bouncerserv", history.requests.single().target)
+        }
+
     @Test
     fun noCap_paginatesLocalOnly() =
         runTest {

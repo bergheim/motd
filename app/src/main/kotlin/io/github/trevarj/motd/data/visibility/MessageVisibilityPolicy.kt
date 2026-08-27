@@ -8,6 +8,7 @@ import io.github.trevarj.motd.data.prefs.FoolsMode
 import io.github.trevarj.motd.data.prefs.PresenceMode
 import io.github.trevarj.motd.data.prefs.SMART_PRESENCE_WINDOW_MS
 import io.github.trevarj.motd.data.prefs.Settings
+import io.github.trevarj.motd.irc.proto.IrcCaseMapping
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 
 /**
@@ -20,6 +21,8 @@ val ACTOR_PRESENCE_KINDS: Set<MessageKind> =
         MessageKind.PART,
         MessageKind.QUIT,
         MessageKind.NICK,
+        MessageKind.AWAY,
+        MessageKind.BACK,
     )
 
 /**
@@ -200,6 +203,33 @@ internal class MessageVisibilitySql(
             "AND COALESCE(fool.column2, fool.column1) = " +
             "CAST(${column(alias, "senderAccount")} AS BLOB))))"
     }
+
+    companion object {
+        /**
+         * Fool exclusion across networks. There are exactly three foldings, so three fixed terms
+         * keyed on [caseMappingExpr] cover every network and the SQL stays constant as the network
+         * list changes. A missing identity row means CASEMAPPING was never advertised: RFC1459 by
+         * protocol default.
+         */
+        fun notFoolAnyCasemap(
+            spec: MessageVisibilitySpec,
+            caseMappingExpr: String,
+            alias: String = "m",
+        ): String {
+            if (spec.fools.isEmpty()) return TRUE
+            val rfc1459 = IrcCaseMapping.Rfc1459.rawName
+            val strict = IrcCaseMapping.Rfc1459Strict.rawName
+            val casemap = "LOWER(COALESCE($caseMappingExpr,'$rfc1459'))"
+            return listOf(
+                "$casemap = '$rfc1459'" to IrcCaseMapping.Rfc1459,
+                "$casemap = '$strict'" to IrcCaseMapping.Rfc1459Strict,
+                // ASCII, plus every unrecognized advertisement.
+                "$casemap NOT IN ('$rfc1459','$strict')" to IrcCaseMapping.Ascii,
+            ).joinToString(separator = " OR ", prefix = "(", postfix = ")") { (test, mapping) ->
+                "($test AND ${MessageVisibilitySql(spec, IrcIdentityRules(mapping)).notFool(alias)})"
+            }
+        }
+    }
 }
 
 /** The PagingSource and its positional count deliberately share this exact timeline predicate. */
@@ -358,6 +388,84 @@ internal fun nearestUnreadMentionInPrefixQuery(
         ),
     )
 }
+
+/**
+ * Keyset cursor into the cross-buffer stream.
+ *
+ * `(serverTime, id)` is the only globally comparable ordering key. `timelineOrder` carries two
+ * incomparable scales — `CanonicalTimelineStore`'s playback settle rewrites dense per-(buffer,
+ * serverTime) indexes 0,1,2…, while every other writer stores the rowid — so it orders rows only
+ * WITHIN one buffer. Cross-buffer it would sink settled history below live rows on every
+ * same-second tie and flip a buffer's position whenever its history replays.
+ */
+data class GlobalFeedKey(
+    val serverTime: Long,
+    val id: Long,
+)
+
+/** Which side of a [GlobalFeedKey] a page reads, and whether the key row itself is included. */
+internal enum class GlobalFeedSeek { OLDER, OLDER_OR_AT, NEWER }
+
+/**
+ * Cross-buffer reverse-chronological conversation stream, newest first.
+ *
+ * Lifecycle exclusions match [io.github.trevarj.motd.data.db.MessageDao.observeInvitations]; the
+ * `event_redirects` anti-join is defensive only — `CanonicalTimelineStore.coalesce` already deletes
+ * the losing row.
+ *
+ * Fools are excluded in both modes (preview semantics: a collapsed placeholder means nothing here),
+ * keyed on each row's own network casemap so the SQL never depends on which networks exist.
+ *
+ * [key] seeks one page without OFFSET; a null key reads the newest page. [GlobalFeedSeek.NEWER] is the
+ * prepend direction and returns rows oldest-first, so the caller reverses them.
+ */
+internal fun globalFeedPagingQuery(
+    spec: MessageVisibilitySpec,
+    key: GlobalFeedKey? = null,
+    seek: GlobalFeedSeek = GlobalFeedSeek.OLDER,
+    limit: Int? = null,
+): SimpleSQLiteQuery {
+    val direction = if (key != null && seek == GlobalFeedSeek.NEWER) "ASC" else "DESC"
+    val keyset = if (key == null) "" else "${keysetPredicate(seek)} "
+    val limitClause = if (limit == null) "" else " LIMIT ?"
+    return SimpleSQLiteQuery(
+        "SELECT m.*, b.displayName AS bufferDisplayName, n.name AS networkName, " +
+            "b.type AS bufferType, b.networkId AS networkId, " +
+            "b.avatarOverrideModel AS avatarOverrideModel, " +
+            "ni.caseMapping AS caseMapping, ni.chanTypes AS chanTypes " +
+            "FROM messages m " +
+            // CROSS JOIN pins join order, not semantics: driven from buffers the ORDER BY becomes
+            // a temp B-tree sort per page instead of a walk of index_messages_serverTime_id.
+            "CROSS JOIN buffers b ON b.id = m.bufferId " +
+            "JOIN networks n ON n.id = b.networkId " +
+            "LEFT JOIN network_identity ni ON ni.networkId = b.networkId " +
+            "LEFT JOIN event_redirects redirect ON redirect.losingEventId = m.id " +
+            "WHERE b.type IN ('CHANNEL','QUERY') AND b.dismissed = 0 AND b.archived = 0 " +
+            "AND b.pendingCloseAt IS NULL AND b.redirectToRoomId IS NULL " +
+            "AND redirect.losingEventId IS NULL " +
+            "AND m.kind IN ($CONVERSATION_KIND_SQL) " +
+            "AND ${MessageVisibilitySql.notFoolAnyCasemap(spec, "ni.caseMapping")} " +
+            keyset +
+            "ORDER BY m.serverTime $direction, m.id $direction" +
+            limitClause,
+        buildList<Any> {
+            key?.let { addAll(listOf(it.serverTime, it.serverTime, it.id)) }
+            limit?.let { add(it) }
+        }.toTypedArray(),
+    )
+}
+
+/**
+ * Written as a leading-column range plus a tie-break rather than the row-value form
+ * `(serverTime, id) < (?, ?)`: SQLite gives no index guarantee for row values, while
+ * `serverTime <= ?` is a plain range constraint the `(serverTime, id)` index can seek on.
+ */
+private fun keysetPredicate(seek: GlobalFeedSeek): String =
+    when (seek) {
+        GlobalFeedSeek.OLDER -> "AND m.serverTime <= ? AND (m.serverTime < ? OR m.id < ?)"
+        GlobalFeedSeek.OLDER_OR_AT -> "AND m.serverTime <= ? AND (m.serverTime < ? OR m.id <= ?)"
+        GlobalFeedSeek.NEWER -> "AND m.serverTime >= ? AND (m.serverTime > ? OR m.id > ?)"
+    }
 
 private fun allOf(vararg clauses: String): String =
     clauses

@@ -11,6 +11,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
+import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.db.MessageEntity
 import io.github.trevarj.motd.data.db.MessageKind
 import io.github.trevarj.motd.data.db.SearchHit
@@ -65,6 +66,9 @@ class SearchScreenUiTest {
             bufferId = hit.message.bufferId,
             bufferDisplayName = "#kotlin",
             networkName = "Libera",
+            bufferType = BufferType.CHANNEL,
+            networkId = 1,
+            avatarOverrideModel = null,
             hits = listOf(hit),
         )
 
@@ -86,5 +90,7 @@ class SearchScreenUiTest {
             ),
         bufferDisplayName = "#kotlin",
         networkName = "Libera",
+        bufferType = BufferType.CHANNEL,
+        networkId = 1,
     )
 }

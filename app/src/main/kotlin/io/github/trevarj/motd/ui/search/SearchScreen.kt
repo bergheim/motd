@@ -6,14 +6,19 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.KeyboardActions
@@ -43,8 +48,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -53,22 +60,30 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.trevarj.motd.R
+import io.github.trevarj.motd.data.db.BufferType
+import io.github.trevarj.motd.data.db.ChatListRow
 import io.github.trevarj.motd.data.db.MessageEntity
 import io.github.trevarj.motd.data.db.MessageKind
 import io.github.trevarj.motd.data.db.SearchHit
 import io.github.trevarj.motd.data.prefs.TimeFormat
 import io.github.trevarj.motd.data.repo.SearchCoverage
 import io.github.trevarj.motd.ui.chatlist.relativeChatTime
+import io.github.trevarj.motd.ui.components.Avatar
 import io.github.trevarj.motd.ui.components.EmptyState
+import io.github.trevarj.motd.ui.components.NetworkChip
 import io.github.trevarj.motd.ui.components.rememberMessageTimeFormatter
 import io.github.trevarj.motd.ui.components.resolveIs24Hour
+import io.github.trevarj.motd.ui.theme.LocalMotdSemanticColors
+import io.github.trevarj.motd.ui.theme.LocalNickColors
 import io.github.trevarj.motd.ui.theme.LocalTimestampConfig
 import io.github.trevarj.motd.ui.theme.MotdMotion
+import io.github.trevarj.motd.ui.theme.MotdShapes
 import io.github.trevarj.motd.ui.theme.MotdTheme
 
 /** Stateful entry: wires the ViewModel, applies the nav buffer scope, drives navigation. */
@@ -103,6 +118,9 @@ fun SearchScreen(
             )
         },
         onOpenServerHit = { hit -> onOpenHit(hit.bufferId, hit.msgid, hit.serverTime, null) },
+        // A name match carries no message target — same "open the buffer, no jump" shape as a
+        // server hit missing both a time and an id would need, just without that ever happening.
+        onOpenBufferMatch = { bufferId -> onOpenHit(bufferId, null, 0L, null) },
     )
 }
 
@@ -116,6 +134,7 @@ fun SearchContent(
     onOpenHit: (SearchHit) -> Unit,
     onServerSearchSubmit: () -> Unit = {},
     onOpenServerHit: (ServerHitUi) -> Unit = {},
+    onOpenBufferMatch: (Long) -> Unit = {},
 ) {
     val focusRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
@@ -295,10 +314,12 @@ fun SearchContent(
 
                     SearchPane.RESULTS -> {
                         SearchResults(
+                            bufferMatches = visibleState.bufferMatches,
                             groups = visibleState.groups,
                             query = parseSearchQuery(visibleState.rawQuery).text,
                             truncated = visibleState.truncated,
                             onOpenHit = onOpenHit,
+                            onOpenBufferMatch = onOpenBufferMatch,
                         )
                     }
                 }
@@ -319,7 +340,7 @@ private fun searchPane(state: SearchUiState): SearchPane =
         state.scope == SearchScope.SERVER -> SearchPane.SERVER
         state.rawQuery.isBlank() -> SearchPane.PROMPT
         state.searching -> SearchPane.SEARCHING
-        state.groups.isEmpty() -> SearchPane.NO_RESULTS
+        state.groups.isEmpty() && state.bufferMatches.isEmpty() -> SearchPane.NO_RESULTS
         else -> SearchPane.RESULTS
     }
 
@@ -354,21 +375,66 @@ private fun emptyMessage(state: SearchUiState): Int =
 
 @Composable
 private fun SearchResults(
+    bufferMatches: List<ChatListRow>,
     groups: List<SearchGroup>,
     query: String,
     truncated: Boolean,
     onOpenHit: (SearchHit) -> Unit,
+    onOpenBufferMatch: (Long) -> Unit = {},
 ) {
     LazyColumn(modifier = Modifier.fillMaxSize().testTag("search_results")) {
-        groups.forEach { group ->
-            item(key = "h-${group.bufferId}") {
+        if (bufferMatches.isNotEmpty()) {
+            item(key = "buffer_matches_header") {
                 Text(
-                    text = "${group.bufferDisplayName} · ${group.networkName}",
+                    text = stringResource(R.string.search_section_buffers),
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.padding(start = 16.dp, top = 16.dp, bottom = 4.dp),
                 )
+            }
+            item(key = "buffer_matches_row") {
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth().testTag("search_buffer_matches"),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp),
+                ) {
+                    items(bufferMatches, key = { it.bufferId }) { row ->
+                        BufferMatchChip(row = row, onClick = { onOpenBufferMatch(row.bufferId) })
+                    }
+                }
+            }
+        }
+        groups.forEach { group ->
+            stickyHeader(key = "h-${group.bufferId}") {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.surface)
+                            .padding(start = 16.dp, top = 16.dp, bottom = 4.dp),
+                ) {
+                    Avatar(
+                        name = group.bufferDisplayName,
+                        isChannel = group.bufferType == BufferType.CHANNEL,
+                        networkId = group.networkId,
+                        conversationModel = group.avatarOverrideModel,
+                        size = 20.dp,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = group.bufferDisplayName,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    NetworkChip(name = group.networkName, dimmed = true)
+                }
             }
             items(group.hits, key = { it.message.id }) { hit ->
                 SearchHitRow(hit = hit, query = query, onClick = { onOpenHit(hit) })
@@ -390,6 +456,42 @@ private fun SearchResults(
     }
 }
 
+/** One name match in the "smart" row: avatar plus a two-line label (room name, then network). */
+@Composable
+private fun BufferMatchChip(
+    row: ChatListRow,
+    onClick: () -> Unit,
+) {
+    Column(
+        modifier =
+            Modifier
+                .width(72.dp)
+                .clickable(onClick = onClick)
+                .testTag("search_buffer_match_${row.bufferId}"),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Avatar(
+            name = row.displayName,
+            isChannel = row.type == BufferType.CHANNEL,
+            networkId = row.networkId,
+            conversationModel = row.avatarOverrideModel,
+            size = 48.dp,
+        )
+        Text(
+            text = row.displayName,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+        NetworkChip(
+            name = row.networkName,
+            dimmed = true,
+            modifier = Modifier.padding(top = 2.dp),
+        )
+    }
+}
+
 @Composable
 private fun SearchHitRow(
     hit: SearchHit,
@@ -402,6 +504,7 @@ private fun SearchHitRow(
     query = query,
     // Per-hit handle (sender+text can repeat); msgid when present, else the local row id.
     tag = "search_result_${hit.message.msgid ?: hit.message.id}",
+    networkId = hit.networkId,
     onClick = onClick,
 )
 
@@ -416,6 +519,7 @@ private fun ServerHitRow(
     serverTime = hit.serverTime,
     query = query,
     tag = "search_result_${hit.msgid ?: hit.serverTime}",
+    networkId = null,
     onClick = onClick,
 )
 
@@ -427,6 +531,7 @@ private fun SearchRow(
     serverTime: Long,
     query: String,
     tag: String,
+    networkId: Long?,
     onClick: () -> Unit,
 ) {
     // Search results always show a time, independent of the in-chat "show timestamps" toggle.
@@ -441,19 +546,31 @@ private fun SearchRow(
         modifier =
             Modifier
                 .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp)
+                .clip(MotdShapes.card)
+                .background(MaterialTheme.colorScheme.surfaceContainerLow)
                 .testTag(tag)
                 .clickable(onClick = onClick)
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 12.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        Avatar(
+            name = sender,
+            networkId = networkId,
+            // Matched to labelMedium's line height so the avatar reads as part of the nick line,
+            // not as its own bigger element.
+            size = 16.dp,
+            modifier = Modifier.align(Alignment.Top),
+        )
         Column(modifier = Modifier.weight(1f)) {
+            val nickColors = LocalNickColors.current
             Text(
                 text = sender,
                 style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = nickColors.nick(sender, MaterialTheme.colorScheme.onSurfaceVariant),
             )
             Text(
-                text = highlightSnippet(text, query),
+                text = highlightSnippet(text, query, LocalMotdSemanticColors.current.warningContainer),
                 style = MaterialTheme.typography.bodyMedium,
                 maxLines = 3,
             )
@@ -571,10 +688,11 @@ private fun ServerSearchSection(
     }
 }
 
-/** Bold every case-insensitive occurrence of [query]'s terms in [text]. */
+/** Bold and highlight every case-insensitive occurrence of [query]'s terms in [text]. */
 private fun highlightSnippet(
     text: String,
     query: String,
+    highlightColor: Color,
 ): AnnotatedString {
     val terms = query.split(Regex("\\s+")).map { it.trim() }.filter { it.length >= 2 }
     if (terms.isEmpty()) return AnnotatedString(text)
@@ -585,7 +703,11 @@ private fun highlightSnippet(
             val t = term.lowercase()
             var idx = lower.indexOf(t)
             while (idx >= 0) {
-                addStyle(SpanStyle(fontWeight = FontWeight.Bold), idx, idx + term.length)
+                addStyle(
+                    SpanStyle(fontWeight = FontWeight.Bold, background = highlightColor),
+                    idx,
+                    idx + term.length,
+                )
                 idx = lower.indexOf(t, idx + term.length)
             }
         }
@@ -608,6 +730,9 @@ private fun SearchContentPreview() {
                                 bufferId = 1,
                                 bufferDisplayName = "#kotlin",
                                 networkName = "Libera",
+                                bufferType = BufferType.CHANNEL,
+                                networkId = 1,
+                                avatarOverrideModel = null,
                                 hits =
                                     listOf(
                                         SearchHit(
@@ -623,6 +748,8 @@ private fun SearchContentPreview() {
                                                 ),
                                             bufferDisplayName = "#kotlin",
                                             networkName = "Libera",
+                                            bufferType = BufferType.CHANNEL,
+                                            networkId = 1,
                                         ),
                                     ),
                             ),

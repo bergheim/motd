@@ -11,6 +11,7 @@ import io.github.trevarj.motd.data.db.InvitationEventRow
 import io.github.trevarj.motd.data.db.InviteState
 import io.github.trevarj.motd.data.db.MuteBacklogSuppression
 import io.github.trevarj.motd.data.db.NetworkEntity
+import io.github.trevarj.motd.data.prefs.GlobalFeedPrefs
 import io.github.trevarj.motd.data.prefs.OnboardingPrefs
 import io.github.trevarj.motd.data.prefs.SettingsRepository
 import io.github.trevarj.motd.data.repo.BufferRepository
@@ -111,6 +112,8 @@ data class ChatListState(
     val drawerRows: List<DrawerRow> = emptyList(),
     val allUnread: Int = 0, // "All chats" unread rollup (non-muted)
     val allMentions: Int = 0, // "All chats" mention rollup
+    /** Global Feed lab flag; off hides both entry points into the feed. */
+    val globalFeedEnabled: Boolean = false,
 ) {
     val allUnreadIncomplete: Boolean
         get() = rows.any { !it.muted && it.unreadCountIncomplete }
@@ -157,6 +160,7 @@ class ChatListViewModel
         private val readMarkerRepository: ReadMarkerSnapshotter,
         private val settingsRepository: SettingsRepository,
         onboardingPrefs: OnboardingPrefs,
+        globalFeedPrefs: GlobalFeedPrefs,
         private val savedStateHandle: SavedStateHandle,
         private val appVisibility: AppVisibility,
     ) : ViewModel() {
@@ -230,7 +234,8 @@ class ChatListViewModel
             combine(
                 settingsRepository.settings,
                 onboardingPrefs.completed,
-                ::Pair,
+                globalFeedPrefs.enabled,
+                ::Triple,
             )
 
         val state: StateFlow<ChatListState> =
@@ -245,7 +250,7 @@ class ChatListViewModel
             ) { listData, networks, connectionAndPresence, settingsAndOnboarding, selectionAndOrder ->
                 val (rows, invitationEvents) = listData
                 val (connection, presence) = connectionAndPresence
-                val (settings, onboardingComplete) = settingsAndOnboarding
+                val (settings, onboardingComplete, globalFeedEnabled) = settingsAndOnboarding
                 val (selected, pending) = selectionAndOrder
                 // If the selected network was deleted, fall back to the unified list.
                 val validSelection = selected?.takeIf { id -> networks.any { it.id == id } }
@@ -291,6 +296,7 @@ class ChatListViewModel
                     drawerRows = applyDrawerOrder(storedDrawerRows, pending),
                     allUnread = rows.filterNot { it.muted || it.archived }.sumOf { it.unreadCount },
                     allMentions = rows.filterNot { it.muted || it.archived }.sumOf { it.mentionCount },
+                    globalFeedEnabled = globalFeedEnabled,
                 )
             }.stateIn(
                 scope = viewModelScope,

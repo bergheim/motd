@@ -10,7 +10,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Pure timeline-filter behavior: JPQ visibility, fools HIDE, exemptions. */
+/** Pure timeline-filter behavior: presence visibility, fools HIDE, exemptions. */
 class MessageFilterTest {
     private fun msg(
         sender: String = "alice",
@@ -53,6 +53,8 @@ class MessageFilterTest {
         assertTrue(keepMessage(msg(kind = MessageKind.PART), spec))
         assertTrue(keepMessage(msg(kind = MessageKind.QUIT), spec))
         assertTrue(keepMessage(msg(kind = MessageKind.NICK), spec))
+        assertTrue(keepMessage(msg(kind = MessageKind.AWAY), spec))
+        assertTrue(keepMessage(msg(kind = MessageKind.BACK), spec))
         assertTrue(keepMessage(msg(kind = MessageKind.NETSPLIT), spec))
         assertTrue(keepMessage(msg(kind = MessageKind.NETJOIN), spec))
     }
@@ -63,6 +65,8 @@ class MessageFilterTest {
         assertFalse(keepMessage(msg(kind = MessageKind.PART), spec))
         assertFalse(keepMessage(msg(kind = MessageKind.QUIT), spec))
         assertFalse(keepMessage(msg(kind = MessageKind.NICK), spec))
+        assertFalse(keepMessage(msg(kind = MessageKind.AWAY), spec))
+        assertFalse(keepMessage(msg(kind = MessageKind.BACK), spec))
         assertFalse(keepMessage(msg(kind = MessageKind.NETSPLIT), spec))
         assertFalse(keepMessage(msg(kind = MessageKind.NETJOIN), spec))
     }
@@ -76,6 +80,8 @@ class MessageFilterTest {
         assertTrue(keepMessage(msg(kind = MessageKind.JOIN), spec))
         assertTrue(keepMessage(msg(kind = MessageKind.NICK), spec))
         assertTrue(keepMessage(msg(kind = MessageKind.QUIT), spec))
+        assertTrue(keepMessage(msg(kind = MessageKind.AWAY), spec))
+        assertTrue(keepMessage(msg(kind = MessageKind.BACK), spec))
     }
 
     @Test fun `non-presence system kinds always kept regardless of the mode`() {

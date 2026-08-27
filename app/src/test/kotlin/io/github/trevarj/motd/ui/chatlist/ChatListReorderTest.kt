@@ -9,6 +9,7 @@ import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
 import io.github.trevarj.motd.data.prefs.AvatarStyle
 import io.github.trevarj.motd.data.prefs.FoolsMode
+import io.github.trevarj.motd.data.prefs.GlobalFeedPrefs
 import io.github.trevarj.motd.data.prefs.LayoutDensity
 import io.github.trevarj.motd.data.prefs.NickColorPalette
 import io.github.trevarj.motd.data.prefs.OnboardingPrefs
@@ -263,6 +264,12 @@ class ChatListReorderTest {
                     override val completed = flowOf(true)
 
                     override suspend fun markCompleted() = Unit
+                },
+            globalFeedPrefs =
+                object : GlobalFeedPrefs {
+                    override val enabled = flowOf(false)
+
+                    override suspend fun setEnabled(enabled: Boolean) = Unit
                 },
             savedStateHandle = SavedStateHandle(),
             appVisibility = AlwaysOnScreen,

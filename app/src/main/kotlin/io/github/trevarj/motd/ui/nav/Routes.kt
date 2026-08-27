@@ -63,6 +63,9 @@ import kotlinx.serialization.Serializable
     val bufferId: Long? = null,
 )
 
+// Read-only merged stream of conversation lines from every channel and DM.
+@Serializable data object GlobalFeedRoute
+
 @Serializable data class ChannelInfoRoute(
     val bufferId: Long,
 )

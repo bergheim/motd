@@ -8,6 +8,7 @@ import androidx.core.content.ContextCompat
 import androidx.room.withTransaction
 import dagger.hilt.android.qualifiers.ApplicationContext
 import io.github.trevarj.motd.avatar.AvatarCoordinator
+import io.github.trevarj.motd.bouncer.isBouncerConsole
 import io.github.trevarj.motd.bouncer.redactBouncerServCommand
 import io.github.trevarj.motd.data.db.BufferEntity
 import io.github.trevarj.motd.data.db.BufferType
@@ -86,6 +87,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -300,8 +302,8 @@ internal fun isGenericRetryEligible(
     message: MessageEntity,
 ): Boolean =
     message.isSelf && message.failed && message.msgid == null &&
+        // SERVER covers the bouncer console; a user merely nicked BouncerServ elsewhere may retry.
         buffer.type != BufferType.SERVER &&
-        !buffer.ircTarget.equals("BouncerServ", ignoreCase = true) &&
         !message.text.contains("<redacted>")
 
 internal data class CurrentReadTarget(
@@ -1522,7 +1524,7 @@ class ConnectionManagerImpl
             val pending = eventProcessor.pendingOutgoingByLabel(networkId, event.label) ?: return
             if (pending.kind != MessageKind.PRIVMSG || !pending.isSelf || pending.msgid != null || pending.failed) return
             val buffer = bufferDao.observeById(pending.bufferId) ?: return
-            if (buffer.networkId != networkId || buffer.ircTarget.equals("BouncerServ", ignoreCase = true)) return
+            if (buffer.networkId != networkId || buffer.isBouncerConsole) return
             val client = clientFor(networkId)
             val ready = client?.state?.value as? IrcClientState.Ready
             val wireReply =
@@ -1693,6 +1695,24 @@ class ConnectionManagerImpl
             isCurrent: () -> Boolean,
         ) {
             if (!isCurrent()) return
+            // Some DIRECT-configured endpoints (a WeeChat relay-irc listener behind a real ircd
+            // session, or any other stateful backend not modeled as a bouncer role) replay a
+            // synthetic self JOIN (+332/353/366) for every already-joined channel unprompted, right
+            // after registration — sometimes before this method's other Ready-edge work (avatar sync,
+            // MONITOR reconciliation, STS, preset enrollment) has even started. Start listening for
+            // that replay immediately, in parallel with the rest of Ready, and only settle/consume it
+            // right before the recovery JOIN loop below — starting the collector any later risks
+            // missing replay events emitted while this method was still doing other suspending work.
+            val replayedChannels = mutableSetOf<String>()
+            val replayCapture =
+                scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    withTimeoutOrNull(JOIN_REPLAY_SETTLE_TIMEOUT_MS) {
+                        client.broadcastEvents
+                            .filterIsInstance<IrcEvent.Joined>()
+                            .filter { it.isSelf }
+                            .collect { replayedChannels += client.isupport.normalize(it.channel) }
+                    }
+                }
             avatarCoordinator.onReady(row.id, client)
             if (!isCurrent()) return
             reconcileMonitor(
@@ -1728,18 +1748,45 @@ class ConnectionManagerImpl
             }
             // A fresh direct socket has no channel membership. Restore only channels whose durable
             // self JOIN state is still true; explicit PART/KICK rows set joined=false. Bouncer children
-            // remain entirely bouncer-managed.
+            // remain entirely bouncer-managed. Skip re-JOINing whatever the server already replayed
+            // (captured above) and send the rest as few JOIN lines as possible (comma-separated
+            // channel lists, IRC allows this) rather than one command per channel: an unbatched burst
+            // of dozens of JOINs queues up behind a shared connection's own outbound flood control
+            // (observed with WeeChat's relay-irc) and delays unrelated traffic multiplexed over that
+            // same connection for up to a minute.
             if (row.role == NetworkRole.DIRECT) {
-                for (channel in recoveryReader.joinedChannels(row.id)) {
-                    if (!isCurrent()) return
-                    val key = inviteEnrollmentStore.channelKey(row.id, client.isupport.normalize(channel))
-                    client.send(
-                        io.github.trevarj.motd.irc.proto.IrcMessage(
-                            command = "JOIN",
-                            params = listOfNotNull(channel, key),
-                        ),
-                    )
+                val remembered = recoveryReader.joinedChannels(row.id)
+                if (remembered.isNotEmpty()) {
+                    replayCapture.join()
+                    val toJoin = channelsNeedingJoin(remembered, replayedChannels, client.isupport::normalize)
+                    val (keyed, keyless) =
+                        toJoin.partition {
+                            inviteEnrollmentStore.channelKey(row.id, client.isupport.normalize(it)) != null
+                        }
+                    for (channel in keyed) {
+                        if (!isCurrent()) return
+                        val key = inviteEnrollmentStore.channelKey(row.id, client.isupport.normalize(channel))
+                        client.send(
+                            io.github.trevarj.motd.irc.proto.IrcMessage(
+                                command = "JOIN",
+                                params = listOfNotNull(channel, key),
+                            ),
+                        )
+                    }
+                    for (batch in chunkChannelsForJoin(keyless)) {
+                        if (!isCurrent()) return
+                        client.send(
+                            io.github.trevarj.motd.irc.proto.IrcMessage(
+                                command = "JOIN",
+                                params = listOf(batch.joinToString(",")),
+                            ),
+                        )
+                    }
+                } else {
+                    replayCapture.cancel()
                 }
+            } else {
+                replayCapture.cancel()
             }
             if (!isCurrent()) return
             // A bound soju child becomes Ready before its post-bind feature CAP ACKs. Keep these
@@ -2151,7 +2198,8 @@ class ConnectionManagerImpl
                 val buffer =
                     bufferDao.observeById(bufferId)
                         ?: return@sending SendAcceptance.Rejected(SendRejectionReason.BUFFER_NOT_FOUND)
-                if (buffer.type == BufferType.SERVER) {
+                // The soju console is the one SERVER-typed room that accepts writes.
+                if (buffer.type == BufferType.SERVER && !buffer.isBouncerConsole) {
                     return@sending SendAcceptance.Rejected(SendRejectionReason.UNSUPPORTED_BUFFER)
                 }
                 // The composer is disabled when a channel is parted, but joined can flip during a submit
@@ -2184,11 +2232,11 @@ class ConnectionManagerImpl
                         visibleChannelPrefix = parent?.let { replyPrefs.config.first().visibleChannelPrefix } == true,
                         replyTagAllowed = replyTagAllowed,
                     )
-                val isBouncerServ = buffer.ircTarget.equals("BouncerServ", ignoreCase = true)
+                val bouncerServConsole = buffer.isBouncerConsole
                 val preferLogicalMultiline =
                     client != null &&
                         ready != null &&
-                        !isBouncerServ &&
+                        !bouncerServConsole &&
                         !delivery.text
                             .replace("\r\n", "\n")
                             .replace('\r', '\n')
@@ -2197,7 +2245,7 @@ class ConnectionManagerImpl
                 val chunks =
                     prepareOutgoingMessageChunks(
                         delivery.text,
-                        isBouncerServ,
+                        bouncerServConsole,
                         preferLogicalMultiline = preferLogicalMultiline,
                     )
                 if (chunks.isEmpty()) {
@@ -3002,6 +3050,62 @@ internal const val HISTORY_CAP_DECISION_TIMEOUT_MS = 15_000L
  * that never answers its CAP REQ must not be able to hold chat entry for the whole Ready session.
  */
 internal const val READ_MARKER_SETTLE_TIMEOUT_MS = 10_000L
+
+/**
+ * How long a DIRECT-role Ready session waits, right after registration, for the server to replay a
+ * synthetic self JOIN of a remembered channel before falling back to self-JOINing it. Some
+ * DIRECT-configured stateful backends (e.g. WeeChat's relay-irc listener) unconditionally mirror
+ * already-joined channels back to a freshly connecting client without being asked; waiting here
+ * avoids firing a redundant, unpaced JOIN burst that would otherwise queue behind that backend's own
+ * outgoing flood control and delay unrelated traffic sharing the same underlying connection.
+ */
+internal const val JOIN_REPLAY_SETTLE_TIMEOUT_MS = 1_500L
+
+/**
+ * Which of [remembered] still need a self-JOIN: those the server did NOT already replay (per
+ * [replayedNormalized], a set of channel names normalized the same way as [remembered] via
+ * [normalize]) during the settle window.
+ */
+internal fun channelsNeedingJoin(
+    remembered: List<String>,
+    replayedNormalized: Set<String>,
+    normalize: (String) -> String,
+): List<String> = remembered.filter { normalize(it) !in replayedNormalized }
+
+/**
+ * Byte budget for one batched reconnect JOIN line's channel-list param, leaving room for the
+ * `JOIN ` command word and the trailing CRLF within [IrcMessage]'s 512-byte wire limit. A fixed
+ * channel-count batch size can't guarantee this: e.g. 15 legal 50-byte channel names would already
+ * overflow 512 bytes on their own, and [IrcMessage.serialize] throws rather than truncate — so
+ * batches must be sized by actual UTF-8 byte length, not channel count.
+ */
+private const val JOIN_LINE_BUDGET_BYTES = 500
+
+/**
+ * Greedily groups [channels] into comma-joined batches (IRC allows a channel list in one JOIN
+ * command) that each fit [JOIN_LINE_BUDGET_BYTES], accounting for the comma separators added by
+ * `joinToString(",")`. A single channel name that alone exceeds the budget still gets its own
+ * batch — [IrcMessage.serialize] is the final arbiter and will reject it if truly unsendable.
+ */
+internal fun chunkChannelsForJoin(channels: List<String>): List<List<String>> {
+    val batches = mutableListOf<List<String>>()
+    var current = mutableListOf<String>()
+    var currentBytes = 0
+    for (channel in channels) {
+        val channelBytes = channel.toByteArray(Charsets.UTF_8).size
+        val separatorBytesIfAppended = if (current.isEmpty()) 0 else 1
+        if (current.isNotEmpty() && currentBytes + separatorBytesIfAppended + channelBytes > JOIN_LINE_BUDGET_BYTES) {
+            batches += current
+            current = mutableListOf()
+            currentBytes = 0
+        }
+        val separatorBytes = if (current.isEmpty()) 0 else 1
+        current += channel
+        currentBytes += separatorBytes + channelBytes
+    }
+    if (current.isNotEmpty()) batches += current
+    return batches
+}
 
 /**
  * One Ready session's entry-gate release: the gate opens only when BOTH hold — the caller decided

@@ -12,7 +12,7 @@ import org.junit.Test
 
 class MessageVisibilityPolicyTest {
     @Test
-    fun `join part quit follow timeline setting but never preview or activity`() {
+    fun `presence events follow timeline setting but never preview or activity`() {
         for (kind in PRESENCE_KINDS) {
             val message = message(kind = kind)
             val shown = MessageVisibilityPolicy(MessageVisibilitySpec(presenceMode = PresenceMode.ALL))

@@ -75,6 +75,17 @@ class SystemEventChunkTest {
         assertTrue(systemRunExpanded(listOf(48L, 50L, 49L, 51L), expandedIds))
     }
 
+    @Test fun `away and back events have clear grouped summaries`() {
+        val run =
+            listOf(
+                systemMessage(1, MessageKind.AWAY),
+                systemMessage(2, MessageKind.AWAY),
+                systemMessage(3, MessageKind.BACK),
+            )
+
+        assertEquals("2 away · 1 back", summarizeSystemRun(run))
+    }
+
     @Test fun `command responses group only within their own session`() {
         val join = systemMessage(1, MessageKind.JOIN)
         val first = systemMessage(2, MessageKind.SERVER_INFO, "${COMMAND_RESPONSE_PAYLOAD_PREFIX}first")

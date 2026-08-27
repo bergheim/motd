@@ -1,5 +1,10 @@
 package io.github.trevarj.motd.bouncer
 
+import io.github.trevarj.motd.data.db.BufferEntity
+import io.github.trevarj.motd.data.db.BufferType
+import io.github.trevarj.motd.data.db.NetworkDao
+import io.github.trevarj.motd.data.db.NetworkRole
+import io.github.trevarj.motd.data.db.ircTarget
 import io.github.trevarj.motd.irc.event.IrcEvent
 import io.github.trevarj.motd.service.ImmediateWireAcceptance
 import io.github.trevarj.motd.service.SendAcceptance
@@ -16,7 +21,30 @@ import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 import javax.inject.Singleton
 
-private const val SERVICE_NICK = "BouncerServ"
+/** soju's service user, on a bouncer root only: see [isBouncerConsole]. */
+const val BOUNCER_SERV_NICK = "BouncerServ"
+
+/**
+ * Bare nick test. Safe only where the network is already known to be a bouncer root; anywhere else a
+ * real user can hold this nick, so use [isBouncerConsole].
+ */
+fun isBouncerServ(name: String): Boolean = name.equals(BOUNCER_SERV_NICK, ignoreCase = true)
+
+/**
+ * The console test for a name whose room does not exist yet. The network row is read only when the
+ * nick matches.
+ */
+suspend fun NetworkDao.isBouncerConsole(
+    networkId: Long,
+    name: String,
+): Boolean = isBouncerServ(name) && byId(networkId)?.role == NetworkRole.BOUNCER_ROOT
+
+/**
+ * The console test for a stored room. No role read: only a bouncer root ever types this nick SERVER
+ * (BufferStore.getOrCreate and MIGRATION_35_36 are both role-scoped).
+ */
+val BufferEntity.isBouncerConsole: Boolean
+    get() = type == BufferType.SERVER && isBouncerServ(ircTarget)
 
 data class BouncerServCapabilities(
     val commandPaths: Set<String> = emptySet(),
@@ -82,7 +110,7 @@ class ConnectionBouncerServSessionProvider
                 token = client,
                 events = client.broadcastEvents,
                 send = { wire ->
-                    val bufferId = connections.ensureQueryBuffer(rootNetworkId, SERVICE_NICK)
+                    val bufferId = connections.ensureQueryBuffer(rootNetworkId, BOUNCER_SERV_NICK)
                     connections.sendMessage(bufferId, wire)
                 },
                 isCurrent = { connections.clientFor(rootNetworkId) === client },
@@ -115,7 +143,7 @@ class BouncerServClientImpl
                                     if (!session.isCurrent()) return@collect
                                     val chat = event as? IrcEvent.ChatMessage ?: return@collect
                                     if (chat.kind != IrcEvent.ChatKind.PRIVMSG ||
-                                        !chat.source.nick.equals(SERVICE_NICK, ignoreCase = true)
+                                        !isBouncerServ(chat.source.nick)
                                     ) {
                                         return@collect
                                     }

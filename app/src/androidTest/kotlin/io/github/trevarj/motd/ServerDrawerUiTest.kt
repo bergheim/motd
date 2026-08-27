@@ -46,6 +46,7 @@ class ServerDrawerUiTest {
                     onAddNetwork = {},
                     onToggleOffline = {},
                     onOpenSettings = {},
+                    globalFeedEnabled = true,
                     onMarkAllRead = {},
                     onScanInvite = { scanned = true },
                 )
@@ -68,6 +69,35 @@ class ServerDrawerUiTest {
                 .assertIsDisplayed()
                 .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, state))
         }
+        compose.onNodeWithTag("drawer_open_feed").assertIsDisplayed()
+    }
+
+    /** The feed lives behind the Global Feed lab, so its row is absent until the lab is on. */
+    @Test
+    fun feedRow_isAbsentWhileTheGlobalFeedLabIsOff() {
+        compose.setContent {
+            MotdTheme(dynamicColor = false) {
+                ServerDrawerContent(
+                    drawerRows = listOf(drawerRow(1, IrcClientState.Ready("alice", emptySet(), emptyMap()))),
+                    selectedNetworkId = null,
+                    allUnread = 0,
+                    allMentions = 0,
+                    scopedUnreadCount = 0,
+                    allOffline = false,
+                    onSelectNetwork = {},
+                    onConnect = {},
+                    onDisconnect = {},
+                    onServerMessages = {},
+                    onOpenNetworkSettings = {},
+                    onAddNetwork = {},
+                    onToggleOffline = {},
+                    onOpenSettings = {},
+                    onMarkAllRead = {},
+                )
+            }
+        }
+
+        compose.onNodeWithTag("drawer_open_feed").assertDoesNotExist()
     }
 
     private fun drawerRow(

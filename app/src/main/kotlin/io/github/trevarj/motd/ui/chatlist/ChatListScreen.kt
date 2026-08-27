@@ -53,6 +53,7 @@ import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DoneAll
+import androidx.compose.material.icons.outlined.DynamicFeed
 import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.Mail
 import androidx.compose.material.icons.outlined.Notifications
@@ -175,6 +176,7 @@ fun ChatListScreen(
     onOpenAudioOrigin: (AudioPlaybackOrigin) -> Unit = {},
     onOpenSettings: () -> Unit = {},
     onOpenSearch: () -> Unit = {},
+    onOpenFeed: () -> Unit = {},
     onOpenOnboarding: () -> Unit = {},
     // Round 5: drawer/network-management pass-throughs.
     onOpenNetworkSettings: (Long) -> Unit = {},
@@ -229,6 +231,7 @@ fun ChatListScreen(
         onOpenBuffer = onOpenBuffer,
         onOpenSettings = onOpenSettings,
         onOpenSearch = onOpenSearch,
+        onOpenFeed = onOpenFeed,
         onSetPinned = viewModel::setPinned,
         onSetMuted = viewModel::setMuted,
         onSetArchived = viewModel::setArchived,
@@ -302,6 +305,7 @@ fun ChatListContent(
     onOpenBuffer: (Long) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenSearch: () -> Unit,
+    onOpenFeed: () -> Unit = {},
     onSetPinned: (Collection<Long>, Boolean) -> Unit,
     onSetMuted: (Collection<Long>, Boolean) -> Unit,
     onSetArchived: (Collection<Long>, Boolean) -> Unit = { _, _ -> },
@@ -419,6 +423,11 @@ fun ChatListContent(
                     onOpenSettings()
                     scope.launch { drawerState.close() }
                 },
+                onOpenFeed = {
+                    scope.launch { drawerState.close() }
+                    onOpenFeed()
+                },
+                globalFeedEnabled = state.globalFeedEnabled,
                 onMarkAllRead = {
                     scope.launch { drawerState.close() }
                     showMarkAllReadDialog = true
@@ -607,6 +616,17 @@ fun ChatListContent(
                                                 Icons.Outlined.Search,
                                                 contentDescription = stringResource(R.string.chatlist_search),
                                             )
+                                        }
+                                        if (state.globalFeedEnabled) {
+                                            IconButton(
+                                                onClick = onOpenFeed,
+                                                modifier = Modifier.testTag("chatlist_open_feed"),
+                                            ) {
+                                                Icon(
+                                                    Icons.Outlined.DynamicFeed,
+                                                    contentDescription = stringResource(R.string.chatlist_feed),
+                                                )
+                                            }
                                         }
                                         IconButton(onClick = onOpenSettings, modifier = Modifier.testTag("chatlist_open_settings")) {
                                             Icon(

@@ -18,6 +18,7 @@ import io.github.trevarj.motd.audio.DirectMediaPolicy
 import io.github.trevarj.motd.avatar.AvatarController
 import io.github.trevarj.motd.avatar.ConversationAvatarOutcome
 import io.github.trevarj.motd.avatar.NoopAvatarController
+import io.github.trevarj.motd.bouncer.isBouncerConsole
 import io.github.trevarj.motd.data.db.BufferEntity
 import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.db.ComposerDraftEntity
@@ -836,7 +837,10 @@ class ChatViewModel
         val historyAvailability: StateFlow<HistoryAvailability> =
             combine(buffer, connState) { current, connection ->
                 when {
-                    current == null || current.type == BufferType.SERVER -> HistoryAvailability.Unsupported
+                    current == null -> HistoryAvailability.Unsupported
+
+                    // The bouncer console is a real CHATHISTORY target; every other SERVER room is not.
+                    current.type == BufferType.SERVER && !current.isBouncerConsole -> HistoryAvailability.Unsupported
 
                     connection !is IrcClientState.Ready -> HistoryAvailability.NegotiatingOrOffline
 
@@ -1434,8 +1438,11 @@ class ChatViewModel
             onOpenBuffer: (Long) -> Unit,
             onOpenChannelList: (Long) -> Unit = {},
         ) = viewModelScope.launch {
-            val networkId = state.value.buffer?.networkId
-            if (state.value.buffer?.type == BufferType.SERVER) {
+            val current = state.value.buffer
+            val networkId = current?.networkId
+            // The bouncer console is a PRIVMSG surface, not a raw-line one: search can open it, and a
+            // raw send would put `sasl set-password <secret>` on the wire and store it unredacted.
+            if (current?.type == BufferType.SERVER && !current.isBouncerConsole) {
                 submitRawLine(networkId, raw)
                 return@launch
             }

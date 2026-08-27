@@ -51,7 +51,7 @@ import io.github.trevarj.motd.ui.chat.presenceModeLabel
 import io.github.trevarj.motd.ui.theme.MotdTheme
 import io.github.trevarj.motd.ui.theme.SheetSystemBars
 
-/** Chat category: join/part/quit visibility, friends/fools management, and fools' message handling. */
+/** Chat category: presence-event visibility, friends/fools management, and fools' message handling. */
 @Composable
 fun ChatSettingsScreen(
     onBack: () -> Unit = {},
