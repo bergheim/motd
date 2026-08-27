@@ -195,6 +195,7 @@ private fun GlobalFeedLineRow(
             // The contentType pool already splits SELF_FAILED out; the row must render it too.
             failed = message.failed,
             pending = message.pendingLabel != null,
+            networkId = row.networkId,
             identityRules = identityRules,
             formattedTime = remember(message.serverTime, formatTime) { formatTime(message.serverTime) },
             onClick = { onOpenMessage(message.bufferId, message.id, message.serverTime) },
