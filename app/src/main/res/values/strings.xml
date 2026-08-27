@@ -1092,8 +1092,6 @@
     <string name="channelinfo_topic_edit_hint">Channel topic</string>
     <string name="channelinfo_topic_edit_save">Save</string>
     <string name="channelinfo_topic_edit_failed">Couldn\'t send topic. Try again.</string>
-    <string name="channelinfo_invite_nick">Nick to invite</string>
-    <string name="channelinfo_invite">Invite</string>
     <string name="irc_invite_user_title">Invite user</string>
     <string name="irc_invite_nick_title">Invite %1$s</string>
     <string name="irc_invite_nick_subtitle">Choose one of your channels on this network</string>

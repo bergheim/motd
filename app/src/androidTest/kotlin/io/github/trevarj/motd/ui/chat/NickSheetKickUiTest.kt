@@ -41,7 +41,10 @@ class NickSheetKickUiTest {
 
         compose.onNodeWithTag("nick_sheet_invite_to_channel").performClick()
         compose.runOnIdle { assertEquals(1, invites) }
+    }
 
+    @Test
+    fun inviteToChannelAction_isHiddenForSelf() {
         compose.setContent {
             MotdTheme {
                 NickActionSheet(
@@ -56,7 +59,7 @@ class NickSheetKickUiTest {
                     onMention = {},
                     onToggleFriend = {},
                     onToggleFool = {},
-                    onInviteToChannel = { invites++ },
+                    onInviteToChannel = {},
                     onOp = {},
                     onVoice = {},
                     onKick = {},
@@ -64,6 +67,7 @@ class NickSheetKickUiTest {
                 )
             }
         }
+
         compose.onNodeWithTag("nick_sheet_invite_to_channel").assertDoesNotExist()
     }
 

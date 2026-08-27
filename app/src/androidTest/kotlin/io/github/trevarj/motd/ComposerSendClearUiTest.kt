@@ -107,28 +107,40 @@ class ComposerSendClearUiTest {
         compose.onNodeWithTag("chat_overflow").performClick()
         compose.onNodeWithTag("chat_invite_user").performClick()
         compose.runOnIdle { assertEquals(1, invites) }
+    }
 
+    @Test
+    fun overflowOmitsInviteForQueries() {
         setContent(
             draft = { ComposerDraftState(hydrated = true) },
             chatBuffer = buffer.copy(name = "alice", displayName = "alice", type = BufferType.QUERY),
             onSubmit = {},
         )
+
         compose.onNodeWithTag("chat_overflow").performClick()
         compose.onNodeWithTag("chat_invite_user").assertDoesNotExist()
+    }
 
+    @Test
+    fun overflowDisablesInviteWhileDisconnected() {
         setContent(
             draft = { ComposerDraftState(hydrated = true) },
             connectionState = IrcClientState.Disconnected,
             onSubmit = {},
         )
+
         compose.onNodeWithTag("chat_overflow").performClick()
         compose.onNodeWithTag("chat_invite_user").assertIsNotEnabled()
+    }
 
+    @Test
+    fun overflowOmitsInviteForPartedChannels() {
         setContent(
             draft = { ComposerDraftState(hydrated = true) },
             chatBuffer = buffer.copy(joined = false),
             onSubmit = {},
         )
+
         compose.onNodeWithTag("chat_overflow").performClick()
         compose.onNodeWithTag("chat_invite_user").assertDoesNotExist()
     }

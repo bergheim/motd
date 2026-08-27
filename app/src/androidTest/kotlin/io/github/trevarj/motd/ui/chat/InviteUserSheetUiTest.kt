@@ -135,7 +135,10 @@ class InviteUserSheetUiTest {
 
         compose.onNodeWithTag("invite_disconnected").assertExists()
         compose.onNodeWithTag("invite_no_channels").assertExists()
+    }
 
+    @Test
+    fun disconnectedChannelRowsAreDisabled() {
         compose.setContent {
             MotdTheme {
                 InviteUserSheet(
@@ -152,6 +155,7 @@ class InviteUserSheetUiTest {
                 )
             }
         }
+
         compose.onNodeWithTag("invite_channel_2").assertIsNotEnabled()
     }
 }
