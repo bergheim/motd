@@ -97,4 +97,3 @@ release **v2.304**. Copyright 2020 The JetBrains Mono Project Authors
   [`JetBrainsMono-2.304.zip`](https://github.com/JetBrains/JetBrainsMono/releases/download/v2.304/JetBrainsMono-2.304.zip)
 - Source archive SHA-256:
   `6f6376c6ed2960ea8a963cd7387ec9d76e3f629125bc33d1fdcd7eb7012f7bbf`
-
