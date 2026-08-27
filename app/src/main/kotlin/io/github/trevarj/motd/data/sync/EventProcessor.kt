@@ -2,6 +2,7 @@ package io.github.trevarj.motd.data.sync
 
 import androidx.room.withTransaction
 import io.github.trevarj.motd.avatar.validateAvatarUrl
+import io.github.trevarj.motd.bouncer.isBouncerConsole
 import io.github.trevarj.motd.bouncer.redactBouncerServCommand
 import io.github.trevarj.motd.bouncer.redactBouncerServReply
 import io.github.trevarj.motd.data.db.BufferEntity
@@ -196,6 +197,8 @@ class EventProcessor
             val serverNotice: Boolean,
             val sourceIsSelf: Boolean,
             val selfAttributionAuthoritative: Boolean,
+            /** soju's console, already role-scoped by the route that resolved it. */
+            val bouncerConsole: Boolean = false,
         )
 
         private data class ActiveHistoryTarget(
@@ -667,6 +670,9 @@ class EventProcessor
             val routedText = route.storedText
             val sourceIsSelf = route.sourceIsSelf
             val isDm = type == BufferType.QUERY
+            // soju warns through console NOTICEs ("network X disconnected"). The console is not in the
+            // chat list, so a swallowed notice leaves the user no signal at all.
+            val consoleNotice = route.bouncerConsole && e.kind == IrcEvent.ChatKind.NOTICE
             // CHATHISTORY and reconnect playback must both honor a forgotten query's discard boundary.
             val usesDiscardBoundary = origin.isHistorical
             if (isDm && usesDiscardBoundary && shouldDiscardHistoricalEvent(bufferId, e)) {
@@ -675,12 +681,8 @@ class EventProcessor
             if (isDm && !usesDiscardBoundary && isExactDiscardedEvent(bufferId, e.ctx)) {
                 return
             }
-            val isBouncerServQuery = isDm && bufferName.equals("BouncerServ", ignoreCase = true)
-            val isRootServiceReply =
-                isBouncerServQuery && !sourceIsSelf &&
-                    e.kind == IrcEvent.ChatKind.PRIVMSG && networkDao.byId(networkId)?.role == NetworkRole.BOUNCER_ROOT
             val formatted =
-                if (isBouncerServQuery || !containsIrcFormatting(routedText)) {
+                if (type == BufferType.SERVER || !containsIrcFormatting(routedText)) {
                     null
                 } else {
                     parseIrcFormatting(routedText)
@@ -698,7 +700,7 @@ class EventProcessor
                     false
                 }
             val hasMention =
-                !sourceIsSelf && !isRootServiceReply &&
+                !sourceIsSelf && type != BufferType.SERVER &&
                     (replyMentionsSelf || st.containsSelfMention(storedText))
             val identitySender = st.normalize(e.source.nick)
 
@@ -706,7 +708,6 @@ class EventProcessor
                 mapOf(
                     "buffer_type" to type.name,
                     "mention" to hasMention,
-                    "root_service" to isRootServiceReply,
                 )
             }
 
@@ -789,11 +790,11 @@ class EventProcessor
                     canonical,
                     origin != EventOrigin.LIVE,
                 )
-                if (isRootServiceReply && origin == EventOrigin.LIVE) {
-                    bufferDao.advanceLocalReadAnchor(canonical.bufferId, canonical.serverTime, canonical.id)
-                    return
-                }
-                if (origin == EventOrigin.LIVE && !sourceIsSelf && canonicalTimeline.claimSound(canonical.id)) {
+                if (origin == EventOrigin.LIVE &&
+                    !sourceIsSelf &&
+                    type != BufferType.SERVER &&
+                    canonicalTimeline.claimSound(canonical.id)
+                ) {
                     try {
                         chatSoundPlayer.onCanonicalIncoming(
                             canonical.bufferId,
@@ -816,8 +817,7 @@ class EventProcessor
                 }
                 if (origin.notifies &&
                     !sourceIsSelf &&
-                    type != BufferType.SERVER &&
-                    (type == BufferType.QUERY || hasMention)
+                    (consoleNotice || (type != BufferType.SERVER && (type == BufferType.QUERY || hasMention)))
                 ) {
                     presentNotification(canonical.id) {
                         maybeNotify(
@@ -837,6 +837,7 @@ class EventProcessor
                                 isSelf = sourceIsSelf,
                                 replyToMsgid = canonical.replyToMsgid,
                             ),
+                            consoleNotice = consoleNotice,
                         )
                     }
                 }
@@ -4109,6 +4110,28 @@ class EventProcessor
                 } else {
                     event.target
                 }
+            // Only a replayed query carries a peer strong enough to overrule the wire's own self flag.
+            val selfAttributionAuthoritative =
+                (origin == EventOrigin.HISTORY || origin == EventOrigin.REPLAY) && historyPeer != null
+            // Every route, not just a DM: targeted replay resolves the console as SERVER-typed, and
+            // that path used to store `sasl set-password <secret>` echoes verbatim.
+            if (networkDao.isBouncerConsole(networkId, bufferName)) {
+                return ChatRoute(
+                    bufferId = ensureBuffer(networkId, bufferName, BufferType.SERVER, st),
+                    bufferName = bufferName,
+                    type = BufferType.SERVER,
+                    storedText =
+                        if (sourceIsSelf) {
+                            redactBouncerServCommand(event.text)
+                        } else {
+                            redactBouncerServReply(event.text)
+                        },
+                    serverNotice = false,
+                    sourceIsSelf = sourceIsSelf,
+                    selfAttributionAuthoritative = selfAttributionAuthoritative,
+                    bouncerConsole = true,
+                )
+            }
             val normalizedName = active?.normalizedName ?: st.normalize(bufferName)
             var bufferId =
                 active?.roomId ?: if (type == BufferType.QUERY) {
@@ -4135,22 +4158,14 @@ class EventProcessor
                             account = event.ctx.account.takeUnless { sourceIsSelf },
                         ).id
             }
-            val storedText =
-                if (isDm && bufferName.equals("BouncerServ", ignoreCase = true)) {
-                    if (sourceIsSelf) redactBouncerServCommand(event.text) else redactBouncerServReply(event.text)
-                } else {
-                    event.text
-                }
             return ChatRoute(
                 bufferId,
                 bufferName,
                 type,
-                storedText,
+                event.text,
                 serverNotice = false,
                 sourceIsSelf = sourceIsSelf,
-                selfAttributionAuthoritative =
-                    (origin == EventOrigin.HISTORY || origin == EventOrigin.REPLAY) &&
-                        historyPeer != null,
+                selfAttributionAuthoritative = selfAttributionAuthoritative,
             )
         }
 
@@ -4205,7 +4220,12 @@ class EventProcessor
                 ?.takeIf {
                     it.target == target || st.normalize(it.target) == st.normalize(target)
                 }?.let { return bufferDao.canonicalId(it.roomId) ?: it.roomId }
-            val type = if (isChannel(networkId, target, st)) BufferType.CHANNEL else BufferType.QUERY
+            val type =
+                when {
+                    isChannel(networkId, target, st) -> BufferType.CHANNEL
+                    networkDao.isBouncerConsole(networkId, target) -> BufferType.SERVER
+                    else -> BufferType.QUERY
+                }
             return ensureBuffer(networkId, target, type, st)
         }
 
@@ -4356,12 +4376,13 @@ class EventProcessor
             hasMention: Boolean,
             eventId: TimelineEventId,
             e: IrcEvent.ChatMessage,
+            consoleNotice: Boolean = false,
         ) {
             if (e.isSelf) return
             // Never raise a notification for a SERVER buffer: a motd line containing the user's nick
-            // must not fire a mention.
-            if (type == BufferType.SERVER) return
-            if (type != BufferType.QUERY && !hasMention) return
+            // must not fire a mention. The bouncer console's own NOTICEs are the one exemption.
+            if (type == BufferType.SERVER && !consoleNotice) return
+            if (type != BufferType.QUERY && !hasMention && !consoleNotice) return
             notifier.onCanonicalIncoming(networkId, bufferId, type, hasMention, eventId, e)
         }
 

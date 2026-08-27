@@ -212,7 +212,8 @@ interface BufferDao {
                        AS localReadAnchorOrder
             FROM buffers base
             LEFT JOIN messages anchor ON anchor.id = base.localReadAnchorEventId
-            WHERE base.type != 'SERVER' AND base.dismissed = 0
+            WHERE base.type != 'SERVER' AND lower(base.name) != 'bouncerserv'
+              AND base.dismissed = 0
               AND base.pendingCloseAt IS NULL AND base.redirectToRoomId IS NULL
         )
         SELECT

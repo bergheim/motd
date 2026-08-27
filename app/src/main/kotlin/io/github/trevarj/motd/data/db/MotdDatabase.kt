@@ -936,9 +936,8 @@ val MIGRATION_34_35 =
     }
 
 /**
- * v35 -> v36 indexes the cross-buffer reverse-chronological scan the firehose reads. Purely
- * additive: every existing index stays, and the new one only gives the global ORDER BY an ordered
- * path instead of sorting the whole table.
+ * v35 -> v36 indexes the cross-buffer scan the firehose reads and repairs soju console rows older
+ * builds stored as queries. "bouncerserv" has no RFC1459-foldable character, so `lower()` suffices.
  */
 val MIGRATION_35_36 =
     object : Migration(35, 36) {
@@ -946,6 +945,10 @@ val MIGRATION_35_36 =
             db.execSQL(
                 "CREATE INDEX IF NOT EXISTS `index_messages_serverTime_timelineOrder_id` " +
                     "ON `messages` (`serverTime`, `timelineOrder`, `id`)",
+            )
+            db.execSQL(
+                "UPDATE buffers SET type = 'SERVER' " +
+                    "WHERE lower(name) = 'bouncerserv' AND type = 'QUERY'",
             )
         }
     }

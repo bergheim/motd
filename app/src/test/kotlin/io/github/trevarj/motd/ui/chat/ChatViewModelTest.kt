@@ -1026,6 +1026,59 @@ class ChatViewModelTest {
             assertTrue(manager.sentLines.isEmpty())
         }
 
+    /**
+     * Search can open the console, and the SERVER raw-send branch put its text on the wire as an IRC
+     * command — `sasl set-plain ... <secret>` unredacted. It is a PRIVMSG surface like any chat.
+     */
+    @Test
+    fun `bouncer console composer sends a message instead of a raw wire line`() =
+        runTest {
+            db.networkDao().update(network.copy(role = NetworkRole.BOUNCER_ROOT))
+            val console =
+                BufferEntity(
+                    networkId = network.id,
+                    name = "bouncerserv",
+                    displayName = "BouncerServ",
+                    type = BufferType.SERVER,
+                ).let { it.copy(id = db.bufferDao().insert(it)) }
+            val manager = FakeConnectionManager(network.id)
+            val vm = viewModel(console, manager)
+            vm.state.first { it.buffer != null }
+            val command = "sasl set-plain -network libera alice hunter2"
+            vm.saveDraft(command)
+
+            vm.submit(command, {}, {}).join()
+
+            assertTrue(manager.sentLines.isEmpty())
+            assertEquals(listOf(SentMessage(console.id, command, null)), manager.messages)
+        }
+
+    /** soju answers CHATHISTORY for the console, so its transcript is fetchable after a reinstall. */
+    @Test
+    fun `bouncer console reports history as available`() =
+        runTest {
+            val console =
+                BufferEntity(
+                    networkId = network.id,
+                    name = "bouncerserv",
+                    displayName = "BouncerServ",
+                    type = BufferType.SERVER,
+                ).let { it.copy(id = db.bufferDao().insert(it)) }
+            val ready =
+                HistoryAvailability.Ready(
+                    setOf(HistoryReferenceType.TIMESTAMP),
+                    50,
+                )
+            val vm =
+                viewModel(
+                    console,
+                    FakeConnectionManager(network.id, client = testClient(), historyAvailability = ready),
+                )
+            vm.state.first { it.buffer != null }
+
+            assertEquals(ready, vm.historyAvailability.first { it != HistoryAvailability.NegotiatingOrOffline })
+        }
+
     @Test
     fun `visible ready chat does not launch redundant history reconciliation`() =
         runTest {

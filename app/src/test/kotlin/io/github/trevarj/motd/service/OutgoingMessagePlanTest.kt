@@ -1,5 +1,6 @@
 package io.github.trevarj.motd.service
 
+import io.github.trevarj.motd.bouncer.isBouncerConsole
 import io.github.trevarj.motd.data.db.BufferEntity
 import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.db.MessageEntity
@@ -283,7 +284,7 @@ class OutgoingMessagePlanTest {
         }
 
     @Test
-    fun `generic retry rejects bouncer service and redacted durable rows`() {
+    fun `generic retry rejects the bouncer console and redacted durable rows`() {
         val room =
             BufferEntity(
                 networkId = 1,
@@ -291,13 +292,15 @@ class OutgoingMessagePlanTest {
                 displayName = "#room",
                 type = BufferType.CHANNEL,
             )
-        val bouncer =
+        val console =
             BufferEntity(
                 networkId = 1,
                 name = "bouncerserv",
                 displayName = "BouncerServ",
-                type = BufferType.QUERY,
+                type = BufferType.SERVER,
             )
+        // Off a bouncer root that nick is an ordinary user, whose failed DM retries like any other.
+        val user = console.copy(type = BufferType.QUERY)
         val failed =
             MessageEntity(
                 bufferId = 1,
@@ -311,8 +314,38 @@ class OutgoingMessagePlanTest {
             )
 
         assertTrue(isGenericRetryEligible(room, failed))
-        assertFalse(isGenericRetryEligible(bouncer, failed))
+        assertFalse(isGenericRetryEligible(console, failed))
+        assertTrue(isGenericRetryEligible(user, failed))
         assertFalse(isGenericRetryEligible(room, failed.copy(text = "password <redacted>")))
+    }
+
+    /** The console flag the send path derives is what selects redacted planning. */
+    @Test
+    fun `only the console row plans as a bouncer command`() {
+        val console =
+            BufferEntity(
+                networkId = 1,
+                name = "bouncerserv",
+                displayName = "BouncerServ",
+                type = BufferType.SERVER,
+            )
+        val user = console.copy(type = BufferType.QUERY)
+
+        assertTrue(console.isBouncerConsole)
+        assertFalse(user.isBouncerConsole)
+        val planned =
+            prepareOutgoingMessageChunks(
+                "sasl set-plain -network libera alice hunter2",
+                isBouncerServ = console.isBouncerConsole,
+            ).single()
+        assertEquals("sasl set-plain -network libera alice hunter2", planned.wireText)
+        assertTrue(planned.displayText.contains("<redacted>"))
+        assertFalse(
+            prepareOutgoingMessageChunks("my password is hunter2", isBouncerServ = user.isBouncerConsole)
+                .single()
+                .displayText
+                .contains("<redacted>"),
+        )
     }
 
     private fun hasUnpairedSurrogate(text: String): Boolean {

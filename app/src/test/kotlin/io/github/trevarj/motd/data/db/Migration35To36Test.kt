@@ -5,10 +5,6 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteOpenHelper
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.core.app.ApplicationProvider
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -17,9 +13,8 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
 /**
- * v35 -> v36 indexes the cross-buffer reverse-chronological scan. Purely additive: no column, row,
- * or existing index changes, and the new index must match the ordering contract exactly or the
- * firehose still sorts the whole table.
+ * v35 -> v36: purely additive index plus a console-row repair. The index must match the firehose
+ * ordering exactly.
  */
 @RunWith(RobolectricTestRunner::class)
 class Migration35To36Test {
@@ -32,7 +27,7 @@ class Migration35To36Test {
     }
 
     @Test
-    fun migrationAddsTheCrossBufferOrderingIndexWithoutTouchingExistingState() {
+    fun migrationAddsTheCrossBufferOrderingIndexAndRepairsBouncerRootConsoleRowsOnly() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         context.deleteDatabase(DB_NAME)
         helper =
@@ -42,7 +37,7 @@ class Migration35To36Test {
                     .name(DB_NAME)
                     .callback(
                         object : SupportSQLiteOpenHelper.Callback(35) {
-                            override fun onCreate(db: SupportSQLiteDatabase) = createExportedVersion35(db)
+                            override fun onCreate(db: SupportSQLiteDatabase) = createExportedVersion(db, 35)
 
                             override fun onUpgrade(
                                 db: SupportSQLiteDatabase,
@@ -56,12 +51,32 @@ class Migration35To36Test {
         db.execSQL(
             """INSERT INTO networks(id, name, role, host, port, tls, nick, username, realname,
                 saslMechanism, autoConnect, ordering, restoreAutoConnect)
-               VALUES (1, 'net', 'DIRECT', 'irc.example', 6697, 1, 'me', 'me', 'Me', 'NONE', 1, 0, 1)""",
+               VALUES (1, 'soju', 'BOUNCER_ROOT', 'irc.example', 6697, 1, 'me', 'me', 'Me', 'NONE', 1, 0, 1)""",
+        )
+        db.execSQL(
+            """INSERT INTO networks(id, name, role, host, port, tls, nick, username, realname,
+                saslMechanism, autoConnect, ordering, restoreAutoConnect)
+               VALUES (2, 'plain', 'DIRECT', 'irc.other', 6697, 1, 'me', 'me', 'Me', 'NONE', 1, 1, 1)""",
         )
         db.execSQL(
             """INSERT INTO buffers(id, networkId, name, displayName, type, joined, membershipCycle,
                 pinned, muted, archived, ordering, historyComplete, dismissed)
                VALUES (1, 1, '#motd', '#motd', 'CHANNEL', 1, 0, 0, 0, 0, 0, 0, 0)""",
+        )
+        db.execSQL(
+            """INSERT INTO buffers(id, networkId, name, displayName, type, joined, membershipCycle,
+                pinned, muted, archived, ordering, historyComplete, dismissed)
+               VALUES (2, 1, 'bouncerserv', 'BouncerServ', 'QUERY', 0, 0, 0, 0, 0, 0, 0, 0)""",
+        )
+        db.execSQL(
+            """INSERT INTO buffers(id, networkId, name, displayName, type, joined, membershipCycle,
+                pinned, muted, archived, ordering, historyComplete, dismissed)
+               VALUES (3, 1, 'alice', 'alice', 'QUERY', 0, 0, 0, 0, 0, 0, 0, 0)""",
+        )
+        db.execSQL(
+            """INSERT INTO buffers(id, networkId, name, displayName, type, joined, membershipCycle,
+                pinned, muted, archived, ordering, historyComplete, dismissed)
+               VALUES (4, 2, 'bouncerserv', 'BouncerServ', 'QUERY', 0, 0, 0, 0, 0, 0, 0, 0)""",
         )
         db.execSQL(
             """INSERT INTO messages(id, bufferId, serverTime, sender, normalizedActor, kind, text,
@@ -86,40 +101,27 @@ class Migration35To36Test {
             assertTrue(cursor.moveToFirst())
             assertEquals("kept", cursor.getString(0))
         }
+        // One-time repair: soju's console becomes SERVER; no other query is touched.
+        assertEquals("SERVER", bufferType(db, id = 2))
+        assertEquals("QUERY", bufferType(db, id = 3))
+        // Off a bouncer root that nick is a real user, and retyping their DM would hide it.
+        assertEquals("QUERY", bufferType(db, id = 4))
     }
+
+    private fun bufferType(
+        db: SupportSQLiteDatabase,
+        id: Long,
+    ): String =
+        db.query("SELECT type FROM buffers WHERE id = $id").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            cursor.getString(0)
+        }
 
     private fun indexNames(db: SupportSQLiteDatabase): Set<String> =
         db.query("PRAGMA index_list(`messages`)").use { cursor ->
             val name = cursor.getColumnIndexOrThrow("name")
             buildSet { while (cursor.moveToNext()) add(cursor.getString(name)) }
         }
-
-    private fun createExportedVersion35(db: SupportSQLiteDatabase) {
-        val resource = "${MotdDatabase::class.java.canonicalName}/35.json"
-        val schema =
-            checkNotNull(javaClass.classLoader?.getResourceAsStream(resource))
-                .bufferedReader()
-                .use { Json.parseToJsonElement(it.readText()).jsonObject }
-        val database = schema.getValue("database").jsonObject
-        database.getValue("entities").jsonArray.forEach { element ->
-            val entity = element.jsonObject
-            val tableName = entity.getValue("tableName").jsonPrimitive.content
-
-            fun executeTemplate(sql: String) = db.execSQL(sql.replace("\${TABLE_NAME}", tableName))
-            executeTemplate(entity.getValue("createSql").jsonPrimitive.content)
-            entity["indices"]?.jsonArray.orEmpty().forEach { index ->
-                executeTemplate(
-                    index.jsonObject
-                        .getValue("createSql")
-                        .jsonPrimitive.content,
-                )
-            }
-            entity["contentSyncTriggers"]?.jsonArray.orEmpty().forEach { trigger ->
-                db.execSQL(trigger.jsonPrimitive.content)
-            }
-        }
-        database.getValue("setupQueries").jsonArray.forEach { db.execSQL(it.jsonPrimitive.content) }
-    }
 
     private companion object {
         const val DB_NAME = "migration-35-36-test.db"

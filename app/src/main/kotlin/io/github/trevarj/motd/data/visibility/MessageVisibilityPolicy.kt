@@ -412,7 +412,8 @@ internal fun firehosePagingQuery(
             "JOIN buffers b ON b.id = m.bufferId " +
             "JOIN networks n ON n.id = b.networkId " +
             "LEFT JOIN event_redirects redirect ON redirect.losingEventId = m.id " +
-            "WHERE b.type IN ('CHANNEL','QUERY') AND b.dismissed = 0 AND b.archived = 0 " +
+            "WHERE b.type IN ('CHANNEL','QUERY') AND lower(b.name) != 'bouncerserv' " +
+            "AND b.dismissed = 0 AND b.archived = 0 " +
             "AND b.pendingCloseAt IS NULL AND b.redirectToRoomId IS NULL " +
             "AND redirect.losingEventId IS NULL " +
             "AND m.kind IN ($CONVERSATION_KIND_SQL) AND $foolClause " +
