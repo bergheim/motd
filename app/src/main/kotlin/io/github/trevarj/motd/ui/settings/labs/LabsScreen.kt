@@ -42,6 +42,7 @@ fun LabsScreen(
         onBack = onBack,
         onGesturesChanged = viewModel::setGesturesEnabled,
         onAgentwireChanged = viewModel::setAgentwireEnabled,
+        onGlobalFeedChanged = viewModel::setGlobalFeedEnabled,
         onOpenGestureMenu = onOpenGestureMenu,
     )
 }
@@ -52,6 +53,7 @@ fun LabsContent(
     onBack: () -> Unit,
     onGesturesChanged: (Boolean) -> Unit,
     onAgentwireChanged: (Boolean) -> Unit,
+    onGlobalFeedChanged: (Boolean) -> Unit = {},
     onOpenGestureMenu: () -> Unit = {},
 ) {
     val context = LocalContext.current
@@ -108,6 +110,15 @@ fun LabsContent(
                         }.testTag("labs_agentwire_repo"),
             )
         }
+        SettingsGroup(title = stringResource(R.string.labs_feed_section)) {
+            SwitchRow(
+                title = stringResource(R.string.labs_global_feed),
+                subtitle = stringResource(R.string.labs_global_feed_desc),
+                checked = state.globalFeedEnabled,
+                onCheckedChange = onGlobalFeedChanged,
+                switchTag = "labs_global_feed_switch",
+            )
+        }
     }
 }
 
@@ -120,6 +131,7 @@ private fun LabsScreenPreview() {
             onBack = {},
             onGesturesChanged = {},
             onAgentwireChanged = {},
+            onGlobalFeedChanged = {},
         )
     }
 }

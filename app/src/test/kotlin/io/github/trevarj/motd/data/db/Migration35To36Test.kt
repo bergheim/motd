@@ -13,7 +13,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
 /**
- * v35 -> v36: purely additive index plus a console-row repair. The index must match the firehose
+ * v35 -> v36: purely additive index plus a console-row repair. The index must match the global feed
  * ordering exactly.
  */
 @RunWith(RobolectricTestRunner::class)

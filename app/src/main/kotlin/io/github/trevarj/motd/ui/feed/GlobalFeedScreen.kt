@@ -1,4 +1,4 @@
-package io.github.trevarj.motd.ui.firehose
+package io.github.trevarj.motd.ui.feed
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -44,10 +44,10 @@ import io.github.trevarj.motd.ui.components.rememberMessageTimeFormatter
 /** Read-only merged stream of conversation lines from every channel and DM, newest first. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FirehoseScreen(
+fun GlobalFeedScreen(
     onBack: () -> Unit = {},
     onOpenMessage: (bufferId: Long, eventId: Long, serverTime: Long) -> Unit = { _, _, _ -> },
-    viewModel: FirehoseViewModel = hiltViewModel(),
+    viewModel: GlobalFeedViewModel = hiltViewModel(),
 ) {
     val rows = viewModel.items.collectAsLazyPagingItems()
     val showNetwork by viewModel.showNetwork.collectAsStateWithLifecycle()
@@ -62,11 +62,11 @@ fun FirehoseScreen(
                         )
                     }
                 },
-                title = { Text(stringResource(R.string.firehose_title)) },
+                title = { Text(stringResource(R.string.feed_title)) },
             )
         },
     ) { padding ->
-        FirehoseContent(
+        GlobalFeedContent(
             rows = rows,
             showNetwork = showNetwork,
             onOpenMessage = onOpenMessage,
@@ -76,7 +76,7 @@ fun FirehoseScreen(
 }
 
 @Composable
-internal fun FirehoseContent(
+internal fun GlobalFeedContent(
     rows: LazyPagingItems<SearchHit>,
     showNetwork: Boolean,
     onOpenMessage: (bufferId: Long, eventId: Long, serverTime: Long) -> Unit,
@@ -88,10 +88,10 @@ internal fun FirehoseContent(
         refresh is LoadState.Error && rows.itemCount == 0 -> {
             EmptyState(
                 icon = Icons.Outlined.CloudOff,
-                title = stringResource(R.string.firehose_error_title),
-                message = stringResource(R.string.firehose_error_message),
+                title = stringResource(R.string.feed_error_title),
+                message = stringResource(R.string.feed_error_message),
                 modifier = modifier,
-                actionLabel = stringResource(R.string.firehose_retry),
+                actionLabel = stringResource(R.string.feed_retry),
                 onAction = rows::retry,
             )
         }
@@ -100,15 +100,15 @@ internal fun FirehoseContent(
         rows.itemCount == 0 && refresh is LoadState.NotLoading -> {
             EmptyState(
                 icon = Icons.Outlined.DynamicFeed,
-                title = stringResource(R.string.firehose_empty_title),
-                message = stringResource(R.string.firehose_empty_message),
+                title = stringResource(R.string.feed_empty_title),
+                message = stringResource(R.string.feed_empty_message),
                 modifier = modifier,
                 ghostRows = true,
             )
         }
 
         else -> {
-            FirehoseList(
+            GlobalFeedList(
                 rows = rows,
                 showNetwork = showNetwork,
                 onOpenMessage = onOpenMessage,
@@ -119,7 +119,7 @@ internal fun FirehoseContent(
 }
 
 @Composable
-private fun FirehoseList(
+private fun GlobalFeedList(
     rows: LazyPagingItems<SearchHit>,
     showNetwork: Boolean,
     onOpenMessage: (bufferId: Long, eventId: Long, serverTime: Long) -> Unit,
@@ -128,7 +128,7 @@ private fun FirehoseList(
     // One list-scoped formatter: MessageBubble's per-row fallback ignores the app's timestamp
     // preference.
     val formatTime = rememberMessageTimeFormatter()
-    LazyColumn(modifier = modifier.fillMaxSize().testTag("firehose_list")) {
+    LazyColumn(modifier = modifier.fillMaxSize().testTag("feed_list")) {
         items(
             count = rows.itemCount,
             // The canonical row id: stable across invalidation, unlike a merged-stream position.
@@ -136,7 +136,7 @@ private fun FirehoseList(
             contentType = rows.itemContentType { messageContentType(it.message, collapseSystemEvents = false) },
         ) { index ->
             rows[index]?.let { row ->
-                FirehoseLineRow(
+                GlobalFeedLineRow(
                     row = row,
                     // Newest first, so the row above is newer. peek, not get: get would report a
                     // second viewport hint.
@@ -151,7 +151,7 @@ private fun FirehoseList(
 }
 
 @Composable
-private fun FirehoseLineRow(
+private fun GlobalFeedLineRow(
     row: SearchHit,
     newer: SearchHit?,
     showNetwork: Boolean,
@@ -170,7 +170,7 @@ private fun FirehoseLineRow(
     // Headers are drawn above the bubble, so both are decided against the newer row above.
     // showsSender takes the older of the pair — true means this row opens the group.
     val showSender = newerMessage == null || !sameBuffer || showsSender(newerMessage, message)
-    Column(modifier = Modifier.fillMaxWidth().testTag("firehose_row_${message.id}")) {
+    Column(modifier = Modifier.fillMaxWidth().testTag("feed_row_${message.id}")) {
         if (!sameBuffer) {
             Text(
                 text = conversationTag(row.bufferDisplayName, row.networkName, showNetwork),
@@ -198,7 +198,7 @@ private fun FirehoseLineRow(
             identityRules = identityRules,
             formattedTime = remember(message.serverTime, formatTime) { formatTime(message.serverTime) },
             onClick = { onOpenMessage(message.bufferId, message.id, message.serverTime) },
-            onClickLabel = stringResource(R.string.firehose_open_message),
+            onClickLabel = stringResource(R.string.feed_open_message),
         )
     }
 }

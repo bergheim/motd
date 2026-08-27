@@ -309,8 +309,8 @@ interface SearchRepository {
 }
 
 /** Read-only cross-buffer conversation stream over the shared messages table, newest first. */
-interface FirehoseRepository {
-    fun firehose(spec: MessageVisibilitySpec): Flow<PagingData<SearchHit>>
+interface GlobalFeedRepository {
+    fun globalFeed(spec: MessageVisibilitySpec): Flow<PagingData<SearchHit>>
 }
 
 /**

@@ -398,13 +398,13 @@ internal fun nearestUnreadMentionInPrefixQuery(
  * WITHIN one buffer. Cross-buffer it would sink settled history below live rows on every
  * same-second tie and flip a buffer's position whenever its history replays.
  */
-data class FirehoseKey(
+data class GlobalFeedKey(
     val serverTime: Long,
     val id: Long,
 )
 
-/** Which side of a [FirehoseKey] a page reads, and whether the key row itself is included. */
-internal enum class FirehoseSeek { OLDER, OLDER_OR_AT, NEWER }
+/** Which side of a [GlobalFeedKey] a page reads, and whether the key row itself is included. */
+internal enum class GlobalFeedSeek { OLDER, OLDER_OR_AT, NEWER }
 
 /**
  * Cross-buffer reverse-chronological conversation stream, newest first.
@@ -416,16 +416,16 @@ internal enum class FirehoseSeek { OLDER, OLDER_OR_AT, NEWER }
  * Fools are excluded in both modes (preview semantics: a collapsed placeholder means nothing here),
  * keyed on each row's own network casemap so the SQL never depends on which networks exist.
  *
- * [key] seeks one page without OFFSET; a null key reads the newest page. [FirehoseSeek.NEWER] is the
+ * [key] seeks one page without OFFSET; a null key reads the newest page. [GlobalFeedSeek.NEWER] is the
  * prepend direction and returns rows oldest-first, so the caller reverses them.
  */
-internal fun firehosePagingQuery(
+internal fun globalFeedPagingQuery(
     spec: MessageVisibilitySpec,
-    key: FirehoseKey? = null,
-    seek: FirehoseSeek = FirehoseSeek.OLDER,
+    key: GlobalFeedKey? = null,
+    seek: GlobalFeedSeek = GlobalFeedSeek.OLDER,
     limit: Int? = null,
 ): SimpleSQLiteQuery {
-    val direction = if (key != null && seek == FirehoseSeek.NEWER) "ASC" else "DESC"
+    val direction = if (key != null && seek == GlobalFeedSeek.NEWER) "ASC" else "DESC"
     val keyset = if (key == null) "" else "${keysetPredicate(seek)} "
     val limitClause = if (limit == null) "" else " LIMIT ?"
     return SimpleSQLiteQuery(
@@ -460,11 +460,11 @@ internal fun firehosePagingQuery(
  * `(serverTime, id) < (?, ?)`: SQLite gives no index guarantee for row values, while
  * `serverTime <= ?` is a plain range constraint the `(serverTime, id)` index can seek on.
  */
-private fun keysetPredicate(seek: FirehoseSeek): String =
+private fun keysetPredicate(seek: GlobalFeedSeek): String =
     when (seek) {
-        FirehoseSeek.OLDER -> "AND m.serverTime <= ? AND (m.serverTime < ? OR m.id < ?)"
-        FirehoseSeek.OLDER_OR_AT -> "AND m.serverTime <= ? AND (m.serverTime < ? OR m.id <= ?)"
-        FirehoseSeek.NEWER -> "AND m.serverTime >= ? AND (m.serverTime > ? OR m.id > ?)"
+        GlobalFeedSeek.OLDER -> "AND m.serverTime <= ? AND (m.serverTime < ? OR m.id < ?)"
+        GlobalFeedSeek.OLDER_OR_AT -> "AND m.serverTime <= ? AND (m.serverTime < ? OR m.id <= ?)"
+        GlobalFeedSeek.NEWER -> "AND m.serverTime >= ? AND (m.serverTime > ? OR m.id > ?)"
     }
 
 private fun allOf(vararg clauses: String): String =

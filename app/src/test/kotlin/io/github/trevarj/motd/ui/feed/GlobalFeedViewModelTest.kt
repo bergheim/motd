@@ -1,4 +1,4 @@
-package io.github.trevarj.motd.ui.firehose
+package io.github.trevarj.motd.ui.feed
 
 import androidx.paging.PagingData
 import io.github.trevarj.motd.data.db.SearchHit
@@ -19,14 +19,14 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
-class FirehoseViewModelTest {
+class GlobalFeedViewModelTest {
     @Test
     fun changingTheSpec_rebuildsThePager_whileAnEqualSpecKeepsIt() =
         runTest {
             val specs = MutableStateFlow(MessageVisibilitySpec())
             var generations = 0
             val pages =
-                firehosePages(
+                globalFeedPages(
                     source = {
                         generations++
                         flowOf(PagingData.empty<SearchHit>())
@@ -53,7 +53,7 @@ class FirehoseViewModelTest {
         }
 
     /**
-     * The firehose query reads `fools` and nothing else, so toggling the presence or fools-mode
+     * The global feed query reads `fools` and nothing else, so toggling the presence or fools-mode
      * prefs must not tear the Pager down and drop the reader's scroll position.
      */
     @Test
@@ -62,7 +62,7 @@ class FirehoseViewModelTest {
             val specs = MutableStateFlow(MessageVisibilitySpec(fools = setOf("motdadb2")))
             var generations = 0
             val pages =
-                firehosePages(
+                globalFeedPages(
                     source = {
                         generations++
                         flowOf(PagingData.empty<SearchHit>())

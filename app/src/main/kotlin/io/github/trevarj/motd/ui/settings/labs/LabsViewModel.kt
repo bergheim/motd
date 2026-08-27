@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.github.trevarj.motd.agentwire.AgentwirePrefs
+import io.github.trevarj.motd.data.prefs.GlobalFeedPrefs
 import io.github.trevarj.motd.gesture.GesturePrefs
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -16,6 +17,7 @@ import javax.inject.Inject
 data class LabsUiState(
     val gesturesEnabled: Boolean = false,
     val agentwireEnabled: Boolean = false,
+    val globalFeedEnabled: Boolean = false,
 )
 
 @HiltViewModel
@@ -24,15 +26,18 @@ class LabsViewModel
     constructor(
         private val gesturePrefs: GesturePrefs,
         private val agentwirePrefs: AgentwirePrefs,
+        private val globalFeedPrefs: GlobalFeedPrefs,
     ) : ViewModel() {
         val state: StateFlow<LabsUiState> =
             combine(
                 gesturePrefs.enabled,
                 agentwirePrefs.enabled,
-            ) { gestures, agentwire ->
+                globalFeedPrefs.enabled,
+            ) { gestures, agentwire, globalFeed ->
                 LabsUiState(
                     gesturesEnabled = gestures,
                     agentwireEnabled = agentwire,
+                    globalFeedEnabled = globalFeed,
                 )
             }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LabsUiState())
 
@@ -42,5 +47,9 @@ class LabsViewModel
 
         fun setAgentwireEnabled(enabled: Boolean) {
             viewModelScope.launch { agentwirePrefs.setEnabled(enabled) }
+        }
+
+        fun setGlobalFeedEnabled(enabled: Boolean) {
+            viewModelScope.launch { globalFeedPrefs.setEnabled(enabled) }
         }
     }

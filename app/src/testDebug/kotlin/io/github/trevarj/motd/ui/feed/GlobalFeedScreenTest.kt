@@ -1,4 +1,4 @@
-package io.github.trevarj.motd.ui.firehose
+package io.github.trevarj.motd.ui.feed
 
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
@@ -44,7 +44,7 @@ import java.util.concurrent.atomic.AtomicInteger
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
-class FirehoseScreenTest {
+class GlobalFeedScreenTest {
     @get:Rule
     val compose = createComposeRule()
 
@@ -99,7 +99,7 @@ class FirehoseScreenTest {
             // Motion off: the caption waits on a Lottie clock a stub composition never advances.
             CompositionLocalProvider(LocalLottieMotionEnabled provides false) {
                 MotdTheme(dynamicColor = false) {
-                    FirehoseContent(
+                    GlobalFeedContent(
                         rows = stream.collectAsLazyPagingItems(),
                         showNetwork = showNetwork(),
                         onOpenMessage = { bufferId, eventId, serverTime ->
@@ -130,8 +130,8 @@ class FirehoseScreenTest {
             ),
         )
 
-        awaitTag("firehose_row_11")
-        compose.onNodeWithTag("firehose_list").assertIsDisplayed()
+        awaitTag("feed_row_11")
+        compose.onNodeWithTag("feed_list").assertIsDisplayed()
         compose.onNodeWithText("#kotlin").assertIsDisplayed()
         compose.onNodeWithText("hello there").assertIsDisplayed()
         compose.onNodeWithText("nick").assertIsDisplayed()
@@ -159,9 +159,9 @@ class FirehoseScreenTest {
             ),
         )
 
-        awaitTag("firehose_row_60")
+        awaitTag("feed_row_60")
         // One group: the nick heads the opening line only; the tag marks the buffer change.
-        listOf(62L, 61L, 60L).forEach { compose.onNodeWithTag("firehose_row_$it").assertIsDisplayed() }
+        listOf(62L, 61L, 60L).forEach { compose.onNodeWithTag("feed_row_$it").assertIsDisplayed() }
         compose.onNodeWithText("nick").assertIsDisplayed()
         assertEquals(1, compose.onAllNodesWithText("nick").fetchSemanticsNodes().size)
         assertEquals(1, compose.onAllNodesWithText("#kotlin").fetchSemanticsNodes().size)
@@ -173,7 +173,7 @@ class FirehoseScreenTest {
         var showNetwork by mutableStateOf(false)
         setContent(flowOf(PagingData.from(listOf(row(id = 21L)))), showNetwork = { showNetwork })
 
-        awaitTag("firehose_row_21")
+        awaitTag("feed_row_21")
         compose.onNodeWithText("#kotlin · Libera").assertDoesNotExist()
 
         showNetwork = true
@@ -188,7 +188,7 @@ class FirehoseScreenTest {
         setContent(flowOf(PagingData.from(emptyList(), settled(LoadState.NotLoading(endOfPaginationReached = true)))))
 
         awaitTag("empty_state_ghost_rows")
-        compose.onNodeWithTag("firehose_list").assertDoesNotExist()
+        compose.onNodeWithTag("feed_list").assertDoesNotExist()
         compose.onNodeWithText("Nothing here yet").assertIsDisplayed()
     }
 
@@ -202,13 +202,13 @@ class FirehoseScreenTest {
         setContent(pager.flow)
 
         awaitText("Retry")
-        compose.onNodeWithTag("firehose_list").assertDoesNotExist()
-        compose.onNodeWithText("Couldn't load the firehose").assertIsDisplayed()
+        compose.onNodeWithTag("feed_list").assertDoesNotExist()
+        compose.onNodeWithText("Couldn't load the global feed").assertIsDisplayed()
         compose.onNodeWithText("Retry").assertIsEnabled().performClick()
 
         // Proves the tap reached the pager: the second load is what clears the error state.
-        awaitTag("firehose_row_31")
-        compose.onNodeWithText("Couldn't load the firehose").assertDoesNotExist()
+        awaitTag("feed_row_31")
+        compose.onNodeWithText("Couldn't load the global feed").assertDoesNotExist()
         assertEquals(2, loads.get())
     }
 
@@ -224,7 +224,7 @@ class FirehoseScreenTest {
             ),
         )
 
-        awaitTag("firehose_row_51")
+        awaitTag("feed_row_51")
         compose.onNodeWithContentDescription("Failed").assertIsDisplayed()
     }
 
@@ -239,7 +239,7 @@ class FirehoseScreenTest {
             ),
         )
 
-        awaitTag("firehose_row_52")
+        awaitTag("feed_row_52")
         compose.onNodeWithText("bold line").assertIsDisplayed()
     }
 
@@ -254,8 +254,8 @@ class FirehoseScreenTest {
             ),
         )
 
-        awaitTag("firehose_row_41")
-        compose.onNodeWithText("Couldn't load the firehose").assertDoesNotExist()
+        awaitTag("feed_row_41")
+        compose.onNodeWithText("Couldn't load the global feed").assertDoesNotExist()
         compose.onNodeWithText("Retry").assertDoesNotExist()
     }
 }

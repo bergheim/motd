@@ -15,10 +15,10 @@ import io.github.trevarj.motd.data.db.inMemoryDb
 import io.github.trevarj.motd.data.db.message
 import io.github.trevarj.motd.data.db.network
 import io.github.trevarj.motd.data.prefs.FoolsMode
-import io.github.trevarj.motd.data.visibility.FirehoseKey
-import io.github.trevarj.motd.data.visibility.FirehoseSeek
+import io.github.trevarj.motd.data.visibility.GlobalFeedKey
+import io.github.trevarj.motd.data.visibility.GlobalFeedSeek
 import io.github.trevarj.motd.data.visibility.MessageVisibilitySpec
-import io.github.trevarj.motd.data.visibility.firehosePagingQuery
+import io.github.trevarj.motd.data.visibility.globalFeedPagingQuery
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -31,9 +31,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
-/** The firehose against a real database: ordering, fool scoping, keyset paging, and the plan. */
+/** The global feed against a real database: ordering, fool scoping, keyset paging, and the plan. */
 @RunWith(RobolectricTestRunner::class)
-class FirehosePagingDbTest {
+class GlobalFeedPagingDbTest {
     private lateinit var db: MotdDatabase
     private var networkA = 0L
     private var networkB = 0L
@@ -78,10 +78,10 @@ class FirehosePagingDbTest {
                     message(bufferB, "b-newest", sender = "bob", serverTime = 400, dedupKey = "b2"),
                 ),
             )
-            // COLLAPSE, not HIDE: the firehose mutes fools in either mode.
+            // COLLAPSE, not HIDE: the global feed mutes fools in either mode.
             val spec = MessageVisibilitySpec(fools = setOf("Ann[ie]"), foolsMode = FoolsMode.COLLAPSE)
 
-            val rows = db.messageDao().firehoseRows(firehosePagingQuery(spec))
+            val rows = db.messageDao().globalFeedRows(globalFeedPagingQuery(spec))
 
             assertEquals(
                 listOf("b-newest", "troll-B", "b-mid", "a-oldest"),
@@ -114,7 +114,7 @@ class FirehosePagingDbTest {
             // What CanonicalTimelineStore's playback settle writes: a dense per-buffer index.
             db.canonicalTimelineDao().updateTimelineOrder(ids[0], timelineOrder = 0, confirmed = true)
 
-            val rows = db.messageDao().firehoseRows(firehosePagingQuery(MessageVisibilitySpec()))
+            val rows = db.messageDao().globalFeedRows(globalFeedPagingQuery(MessageVisibilitySpec()))
 
             assertEquals(listOf("live", "settled-history"), rows.map { it.message.text })
         }
@@ -148,7 +148,7 @@ class FirehosePagingDbTest {
             }
             val spec = MessageVisibilitySpec(fools = setOf("Ann[ie]", "Bo~b"))
 
-            val rows = db.messageDao().firehoseRows(firehosePagingQuery(spec))
+            val rows = db.messageDao().globalFeedRows(globalFeedPagingQuery(spec))
 
             assertEquals(
                 setOf(
@@ -170,7 +170,7 @@ class FirehosePagingDbTest {
             db.messageDao().insertAll(
                 (1..5).map { message(bufferA, "line-$it", serverTime = it * 100L, dedupKey = "p$it") },
             )
-            val source = FirehosePagingSource(db, MessageVisibilitySpec())
+            val source = GlobalFeedPagingSource(db, MessageVisibilitySpec())
 
             val first = source.refresh(key = null, loadSize = 2)
             assertEquals(listOf("line-5", "line-4"), first.data.map { it.message.text })
@@ -191,13 +191,13 @@ class FirehosePagingDbTest {
             db.messageDao().insertAll(
                 (1..4).map { message(bufferA, "line-$it", serverTime = it * 100L, dedupKey = "q$it") },
             )
-            val source = FirehosePagingSource(db, MessageVisibilitySpec())
+            val source = GlobalFeedPagingSource(db, MessageVisibilitySpec())
             val bottom = source.refresh(key = null, loadSize = 10).data.last()
 
             val newer =
                 source.load(
                     PagingSource.LoadParams.Prepend(
-                        key = FirehoseKey(bottom.message.serverTime, bottom.message.id),
+                        key = GlobalFeedKey(bottom.message.serverTime, bottom.message.id),
                         loadSize = 10,
                         placeholdersEnabled = false,
                     ),
@@ -213,7 +213,7 @@ class FirehosePagingDbTest {
             db.messageDao().insertAll(
                 listOf(message(bufferA, "hello", serverTime = 100, dedupKey = "i1")),
             )
-            val source = FirehosePagingSource(db, MessageVisibilitySpec())
+            val source = GlobalFeedPagingSource(db, MessageVisibilitySpec())
             assertEquals(listOf("hello"), source.refresh(key = null, loadSize = 10).data.map { it.message.text })
             assertFalse(source.invalid)
 
@@ -235,7 +235,7 @@ class FirehosePagingDbTest {
                     message(bufferA, "troll", sender = "ann{ie}", serverTime = 200, dedupKey = "n2"),
                 ),
             )
-            val live = FirehosePagingSource(db, spec)
+            val live = GlobalFeedPagingSource(db, spec)
 
             // No identity row yet: CASEMAPPING was never advertised, so RFC1459 applies and the
             // configured fool folds onto the stored actor.
@@ -245,7 +245,7 @@ class FirehosePagingDbTest {
             db.networkIdentityDao().upsert(NetworkIdentityEntity(networkA, caseMapping = "ascii"))
 
             assertTrue(live.invalid)
-            val reloaded = FirehosePagingSource(db, spec)
+            val reloaded = GlobalFeedPagingSource(db, spec)
             assertEquals(
                 listOf("troll", "hello"),
                 reloaded.refresh(key = null, loadSize = 10).data.map { it.message.text },
@@ -259,7 +259,7 @@ class FirehosePagingDbTest {
             db.messageDao().insertAll(
                 (1..6).map { message(bufferA, "line-$it", serverTime = it * 100L, dedupKey = "r$it") },
             )
-            val source = FirehosePagingSource(db, MessageVisibilitySpec())
+            val source = GlobalFeedPagingSource(db, MessageVisibilitySpec())
             val loaded = source.refresh(key = null, loadSize = 6)
             // Anchored three rows down: "line-3".
             val anchorKey =
@@ -267,18 +267,18 @@ class FirehosePagingDbTest {
                     PagingState(
                         pages = listOf(loaded),
                         anchorPosition = 3,
-                        config = FIREHOSE_PAGING_CONFIG,
+                        config = GLOBAL_FEED_PAGING_CONFIG,
                         leadingPlaceholderCount = 0,
                     ),
                 )
             assertNotNull(anchorKey)
 
-            val refreshed = FirehosePagingSource(db, MessageVisibilitySpec()).refresh(anchorKey, loadSize = 2)
+            val refreshed = GlobalFeedPagingSource(db, MessageVisibilitySpec()).refresh(anchorKey, loadSize = 2)
 
             // The anchor row itself heads the page, so the viewport survives.
             assertEquals(listOf("line-3", "line-2"), refreshed.data.map { it.message.text })
             // And the rows above it stay reachable through prepend.
-            assertEquals(FirehoseKey(300, loaded.data[3].message.id), refreshed.prevKey)
+            assertEquals(GlobalFeedKey(300, loaded.data[3].message.id), refreshed.prevKey)
         }
 
     /** The plan must stay an ordered index walk with a real seek, not a per-page sort. */
@@ -286,10 +286,10 @@ class FirehosePagingDbTest {
     fun theKeysetSeekWalksTheTimelineIndexInsteadOfSortingEveryPage() =
         runTest {
             val query =
-                firehosePagingQuery(
+                globalFeedPagingQuery(
                     MessageVisibilitySpec(),
-                    key = FirehoseKey(serverTime = 400, id = 9),
-                    seek = FirehoseSeek.OLDER,
+                    key = GlobalFeedKey(serverTime = 400, id = 9),
+                    seek = GlobalFeedSeek.OLDER,
                     limit = 50,
                 )
 
@@ -302,7 +302,7 @@ class FirehosePagingDbTest {
     @Test
     fun theUnkeyedFirstPageWalksTheSameIndex() =
         runTest {
-            val plan = db.explainQueryPlan(firehosePagingQuery(MessageVisibilitySpec()).sql)
+            val plan = db.explainQueryPlan(globalFeedPagingQuery(MessageVisibilitySpec()).sql)
 
             assertFalse(plan.toString(), plan.any { "USE TEMP B-TREE FOR ORDER BY" in it })
             assertTrue(plan.toString(), plan.any { "index_messages_serverTime_id" in it })
@@ -337,13 +337,13 @@ class FirehosePagingDbTest {
                 EventRedirectEntity(losingEventId = ids[1], canonicalEventId = ids[0]),
             )
 
-            val rows = db.messageDao().firehoseRows(firehosePagingQuery(MessageVisibilitySpec()))
+            val rows = db.messageDao().globalFeedRows(globalFeedPagingQuery(MessageVisibilitySpec()))
 
             assertEquals(listOf("canonical"), rows.map { it.message.text })
         }
 
     @Test
-    fun firehoseRowKeepsIsSelfAndReportsAnUnadvertisedIdentityAsNull() =
+    fun globalFeedRowKeepsIsSelfAndReportsAnUnadvertisedIdentityAsNull() =
         runTest {
             db.messageDao().insertAll(
                 listOf(
@@ -352,7 +352,7 @@ class FirehosePagingDbTest {
                 ),
             )
 
-            val rows = db.messageDao().firehoseRows(firehosePagingQuery(MessageVisibilitySpec()))
+            val rows = db.messageDao().globalFeedRows(globalFeedPagingQuery(MessageVisibilitySpec()))
 
             assertEquals(listOf("theirs" to false, "mine" to true), rows.map { it.message.text to it.message.isSelf })
             assertNull(rows.first().caseMapping)
@@ -369,20 +369,20 @@ private fun MotdDatabase.explainQueryPlan(sql: String): List<String> =
     }
 
 // Whole-stream read for the query-shape tests: no paging machinery, one page big enough for all.
-private suspend fun MessageDao.firehoseRows(query: SupportSQLiteQuery): List<SearchHit> = firehosePage(query)
+private suspend fun MessageDao.globalFeedRows(query: SupportSQLiteQuery): List<SearchHit> = globalFeedPage(query)
 
-private suspend fun FirehosePagingSource.refresh(
-    key: FirehoseKey?,
+private suspend fun GlobalFeedPagingSource.refresh(
+    key: GlobalFeedKey?,
     loadSize: Int,
-): PagingSource.LoadResult.Page<FirehoseKey, SearchHit> =
+): PagingSource.LoadResult.Page<GlobalFeedKey, SearchHit> =
     load(
         PagingSource.LoadParams.Refresh(key = key, loadSize = loadSize, placeholdersEnabled = false),
     ) as PagingSource.LoadResult.Page
 
-private suspend fun FirehosePagingSource.append(
-    key: FirehoseKey,
+private suspend fun GlobalFeedPagingSource.append(
+    key: GlobalFeedKey,
     loadSize: Int,
-): PagingSource.LoadResult.Page<FirehoseKey, SearchHit> =
+): PagingSource.LoadResult.Page<GlobalFeedKey, SearchHit> =
     load(
         PagingSource.LoadParams.Append(key = key, loadSize = loadSize, placeholdersEnabled = false),
     ) as PagingSource.LoadResult.Page

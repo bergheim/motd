@@ -3,6 +3,7 @@ package io.github.trevarj.motd.ui.settings.labs
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import io.github.trevarj.motd.agentwire.AgentwirePrefs
+import io.github.trevarj.motd.data.prefs.GlobalFeedPrefs
 import io.github.trevarj.motd.gesture.GestureMenuConfig
 import io.github.trevarj.motd.gesture.GesturePrefs
 import io.github.trevarj.motd.gesture.radial.OrbPlacement
@@ -28,6 +29,7 @@ class LabsViewModelTest {
     private val dispatcher = StandardTestDispatcher()
     private val gestures = FakeGesturePrefs()
     private val agentwire = FakeAgentwirePrefs()
+    private val globalFeed = FakeGlobalFeedPrefs()
 
     @Before fun setUp() {
         Dispatchers.setMain(dispatcher)
@@ -37,11 +39,29 @@ class LabsViewModelTest {
         Dispatchers.resetMain()
     }
 
-    private fun vm() = LabsViewModel(gestures, agentwire)
+    private fun vm() = LabsViewModel(gestures, agentwire, globalFeed)
 
-    @Test fun bothLabsStartOff() =
+    @Test fun everyLabStartsOff() =
         runTest {
-            assertEquals(LabsUiState(gesturesEnabled = false, agentwireEnabled = false), vm().state.first())
+            assertEquals(
+                LabsUiState(gesturesEnabled = false, agentwireEnabled = false, globalFeedEnabled = false),
+                vm().state.first(),
+            )
+        }
+
+    /** The feed's entry points read this flag, so its default decides whether they render at all. */
+    @Test fun globalFeedToggle_writesOnlyTheFeedStore() =
+        runTest {
+            val model = vm()
+            assertEquals(false, globalFeed.enabled.first())
+
+            model.setGlobalFeedEnabled(true)
+            assertEquals(
+                LabsUiState(gesturesEnabled = false, agentwireEnabled = false, globalFeedEnabled = true),
+                model.state.first { it.globalFeedEnabled },
+            )
+            assertEquals(false, gestures.enabled.first())
+            assertEquals(false, agentwire.enabled.first())
         }
 
     @Test fun gestureToggle_writesOnlyTheGestureStore() =
@@ -72,6 +92,15 @@ class LabsViewModelTest {
             )
             assertEquals(false, gestures.enabled.first())
         }
+
+    private class FakeGlobalFeedPrefs : GlobalFeedPrefs {
+        val flag = MutableStateFlow(false)
+        override val enabled: Flow<Boolean> = flag
+
+        override suspend fun setEnabled(enabled: Boolean) {
+            flag.value = enabled
+        }
+    }
 
     private class FakeGesturePrefs : GesturePrefs {
         val flag = MutableStateFlow(false)

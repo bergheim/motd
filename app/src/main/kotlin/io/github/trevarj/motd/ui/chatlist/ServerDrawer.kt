@@ -108,7 +108,9 @@ fun ServerDrawerContent(
     onAddNetwork: () -> Unit,
     onToggleOffline: () -> Unit,
     onOpenSettings: () -> Unit,
-    onOpenFirehose: () -> Unit = {},
+    onOpenFeed: () -> Unit = {},
+    /** Global Feed lab flag; the feed row exists only while the lab is on. */
+    globalFeedEnabled: Boolean = false,
     onMarkAllRead: () -> Unit,
     onScanInvite: () -> Unit = {},
     // Manual ordering. onMoveNetwork is one finished intent (persisted immediately);
@@ -174,17 +176,20 @@ fun ServerDrawerContent(
                 )
             }
 
-            // 1. The one cross-buffer destination, above the per-network rows it merges.
-            NavigationDrawerItem(
-                icon = { Icon(Icons.Outlined.DynamicFeed, contentDescription = null) },
-                label = { Text(stringResource(R.string.drawer_firehose)) },
-                selected = false,
-                onClick = onOpenFirehose,
-                modifier =
-                    Modifier
-                        .padding(horizontal = 12.dp)
-                        .testTag("drawer_open_firehose"),
-            )
+            // 1. The one cross-buffer destination, above the per-network rows it merges. Lab-gated:
+            // hiding the row is what keeps the feed unreachable while the lab is off.
+            if (globalFeedEnabled) {
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.Outlined.DynamicFeed, contentDescription = null) },
+                    label = { Text(stringResource(R.string.drawer_feed)) },
+                    selected = false,
+                    onClick = onOpenFeed,
+                    modifier =
+                        Modifier
+                            .padding(horizontal = 12.dp)
+                            .testTag("drawer_open_feed"),
+                )
+            }
 
             // 2. Networks section header. The unscoped ("all chats") state is simply "no network
             // selected" — reflected by the title-bar wordmark — so there is no standalone row for

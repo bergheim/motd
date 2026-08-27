@@ -6,11 +6,11 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Pure string assertions on the generated firehose SQL; no database involved. */
-class FirehosePagingQueryTest {
+/** Pure string assertions on the generated global feed SQL; no database involved. */
+class GlobalFeedPagingQueryTest {
     @Test
     fun keepsConversationKindsAndProjectsTheSearchHitColumns() {
-        val sql = firehosePagingQuery(MessageVisibilitySpec()).sql
+        val sql = globalFeedPagingQuery(MessageVisibilitySpec()).sql
 
         assertTrue(sql.contains("'PRIVMSG'"))
         assertTrue(sql.contains("'NOTICE'"))
@@ -34,7 +34,7 @@ class FirehosePagingQueryTest {
     /** A null key reads the newest page: no keyset predicate and no LIMIT clause or arguments. */
     @Test
     fun anUnkeyedQueryCarriesNoSeekAndNoArguments() {
-        val query = firehosePagingQuery(MessageVisibilitySpec())
+        val query = globalFeedPagingQuery(MessageVisibilitySpec())
 
         assertFalse(query.sql.contains("LIMIT"))
         assertEquals(0, query.argCount)
@@ -47,10 +47,10 @@ class FirehosePagingQueryTest {
     @Test
     fun seekingOlderRowsBoundsServerTimeAndBreaksTiesOnId() {
         val query =
-            firehosePagingQuery(
+            globalFeedPagingQuery(
                 MessageVisibilitySpec(),
-                key = FirehoseKey(serverTime = 400, id = 9),
-                seek = FirehoseSeek.OLDER,
+                key = GlobalFeedKey(serverTime = 400, id = 9),
+                seek = GlobalFeedSeek.OLDER,
                 limit = 50,
             )
 
@@ -65,10 +65,10 @@ class FirehosePagingQueryTest {
     @Test
     fun anchoredRefreshIncludesTheAnchorRow() {
         val sql =
-            firehosePagingQuery(
+            globalFeedPagingQuery(
                 MessageVisibilitySpec(),
-                key = FirehoseKey(serverTime = 400, id = 9),
-                seek = FirehoseSeek.OLDER_OR_AT,
+                key = GlobalFeedKey(serverTime = 400, id = 9),
+                seek = GlobalFeedSeek.OLDER_OR_AT,
                 limit = 50,
             ).sql
 
@@ -79,10 +79,10 @@ class FirehosePagingQueryTest {
     @Test
     fun seekingNewerRowsReadsAscendingFromTheKey() {
         val sql =
-            firehosePagingQuery(
+            globalFeedPagingQuery(
                 MessageVisibilitySpec(),
-                key = FirehoseKey(serverTime = 400, id = 9),
-                seek = FirehoseSeek.NEWER,
+                key = GlobalFeedKey(serverTime = 400, id = 9),
+                seek = GlobalFeedSeek.NEWER,
                 limit = 50,
             ).sql
 
@@ -90,17 +90,17 @@ class FirehosePagingQueryTest {
         assertTrue(sql.contains("ORDER BY m.serverTime ASC, m.id ASC LIMIT ?"))
     }
 
-    /** Join order is load-bearing: see the CROSS JOIN note in firehosePagingQuery. */
+    /** Join order is load-bearing: see the CROSS JOIN note in globalFeedPagingQuery. */
     @Test
     fun pinsMessagesAsTheOuterLoopSoTheOrderingStaysAnIndexWalk() {
-        val sql = firehosePagingQuery(MessageVisibilitySpec()).sql
+        val sql = globalFeedPagingQuery(MessageVisibilitySpec()).sql
 
         assertTrue(sql.contains("FROM messages m CROSS JOIN buffers b ON b.id = m.bufferId"))
     }
 
     @Test
     fun excludesRoomsThatAreNotPartOfTheStream() {
-        val sql = firehosePagingQuery(MessageVisibilitySpec()).sql
+        val sql = globalFeedPagingQuery(MessageVisibilitySpec()).sql
 
         assertTrue(sql.contains("b.type IN ('CHANNEL','QUERY')"))
         // The soju console is excluded by its type alone; no name guard belongs in this query.
@@ -113,7 +113,7 @@ class FirehosePagingQueryTest {
 
     @Test
     fun antiJoinsRowsThatLostCanonicalEventMerging() {
-        val sql = firehosePagingQuery(MessageVisibilitySpec()).sql
+        val sql = globalFeedPagingQuery(MessageVisibilitySpec()).sql
 
         assertTrue(sql.contains("LEFT JOIN event_redirects redirect ON redirect.losingEventId = m.id"))
         assertTrue(sql.contains("redirect.losingEventId IS NULL"))
@@ -121,16 +121,16 @@ class FirehosePagingQueryTest {
 
     @Test
     fun foolClauseIsTrivialWithoutFools() {
-        val sql = firehosePagingQuery(MessageVisibilitySpec(fools = emptySet())).sql
+        val sql = globalFeedPagingQuery(MessageVisibilitySpec(fools = emptySet())).sql
 
         assertTrue(sql.contains("AND 1 ORDER BY"))
     }
 
-    /** Collapse has no compact rendering here, so the firehose mutes fools in either mode. */
+    /** Collapse has no compact rendering here, so the global feed mutes fools in either mode. */
     @Test
     fun foolsAreExcludedInCollapseModeToo() {
         val sql =
-            firehosePagingQuery(
+            globalFeedPagingQuery(
                 MessageVisibilitySpec(fools = setOf("troll"), foolsMode = FoolsMode.COLLAPSE),
             ).sql
 
@@ -142,7 +142,7 @@ class FirehosePagingQueryTest {
     @Test
     fun foolTermsAreKeyedOnCasemapRatherThanOnNetworkIdentity() {
         val sql =
-            firehosePagingQuery(
+            globalFeedPagingQuery(
                 MessageVisibilitySpec(fools = setOf("Ann[ie]"), foolsMode = FoolsMode.HIDE),
             ).sql
 

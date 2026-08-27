@@ -936,7 +936,7 @@ val MIGRATION_34_35 =
     }
 
 /**
- * v35 -> v36 indexes the cross-buffer scan the firehose reads and repairs soju console rows older
+ * v35 -> v36 indexes the cross-buffer scan the global feed reads and repairs soju console rows older
  * builds stored as queries. "bouncerserv" has no RFC1459-foldable character, so `lower()` suffices.
  * Bouncer roots only: on any other network that nick is an ordinary user whose DM must stay a query.
  */
@@ -961,7 +961,7 @@ val MIGRATION_35_36 =
  * `timelineOrder` is only meaningful within one buffer: playback settle rewrites dense 0,1,2…
  * indexes per (bufferId, serverTime) while every other writer stores the rowid, so across buffers
  * the two scales are incomparable and same-second ties sorted settled history below live rows.
- * The firehose now orders by `(serverTime, id)` and this is the index that walk needs.
+ * The global feed now orders by `(serverTime, id)` and this is the index that walk needs.
  */
 val MIGRATION_36_37 =
     object : Migration(36, 37) {

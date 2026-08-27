@@ -26,7 +26,7 @@ import io.github.trevarj.motd.ui.channelinfo.ChannelInfoScreen
 import io.github.trevarj.motd.ui.channellist.ChannelListScreen
 import io.github.trevarj.motd.ui.chat.ChatScreen
 import io.github.trevarj.motd.ui.chatlist.ChatListScreen
-import io.github.trevarj.motd.ui.firehose.FirehoseScreen
+import io.github.trevarj.motd.ui.feed.GlobalFeedScreen
 import io.github.trevarj.motd.ui.imageviewer.ImageViewerScreen
 import io.github.trevarj.motd.ui.invite.AccountSetupScreen
 import io.github.trevarj.motd.ui.invite.CreateInviteScreen
@@ -353,8 +353,8 @@ fun MotdNavGraph(
                 },
             )
         }
-        composable<FirehoseRoute> {
-            FirehoseScreen(
+        composable<GlobalFeedRoute> {
+            GlobalFeedScreen(
                 onBack = { navController.popBackStack() },
                 // The search-hit deep-jump path: the canonical row id is identity, the time anchors.
                 onOpenMessage = { bufferId, eventId, time ->
@@ -461,7 +461,7 @@ private fun ChatListPane(
         },
         onOpenSettings = { navController.navigate(SettingsRoute) },
         onOpenSearch = { navController.navigate(SearchRoute()) },
-        onOpenFirehose = { navController.navigate(FirehoseRoute) },
+        onOpenFeed = { navController.navigate(GlobalFeedRoute) },
         onOpenOnboarding = { navController.navigate(OnboardingRoute) },
         onOpenNetworkSettings = { navController.navigate(NetworkSettingsRoute(it)) },
         onOpenAddNetwork = { navController.navigate(AddNetworkRoute) },
