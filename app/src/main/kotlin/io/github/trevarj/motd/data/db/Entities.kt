@@ -57,6 +57,8 @@ enum class MessageKind {
     QUIT,
     KICK,
     NICK,
+    AWAY,
+    BACK,
     MODE,
     TOPIC,
     ERROR,

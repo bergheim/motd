@@ -187,7 +187,7 @@ interface NetworkIgnoreDao {
 @Dao
 interface BufferDao {
     // Chat-list projection: each non-SERVER buffer joins one newest preview-eligible message by
-    // identity. JOIN/PART/QUIT are timeline-only events and never become previews or activity.
+    // identity. Presence events are timeline-only and never become previews or activity.
     // Unread/mention counts remain chat kinds only; self messages never count as unread.
     // Counts are capped at 1000 (the badge renders 999+) so a buffer holding a huge unread
     // backlog cannot turn every invalidation into a full-buffer scan.
@@ -304,7 +304,8 @@ interface BufferDao {
         LEFT JOIN network_identity ni ON ni.networkId = b.networkId
         LEFT JOIN messages lm ON lm.id = (
             SELECT m.id FROM messages m
-            WHERE m.bufferId = b.id AND m.kind NOT IN ('JOIN', 'PART', 'QUIT', 'NETSPLIT', 'NETJOIN')
+            WHERE m.bufferId = b.id
+              AND m.kind NOT IN ('JOIN', 'PART', 'QUIT', 'AWAY', 'BACK', 'NETSPLIT', 'NETJOIN')
             ORDER BY m.serverTime DESC, m.timelineOrder DESC, m.id DESC
             LIMIT 1
         )
@@ -333,7 +334,7 @@ interface BufferDao {
         """UPDATE buffers SET monitorActivityTime = (
                SELECT m.serverTime FROM messages m
                WHERE m.bufferId = buffers.id
-                 AND m.kind NOT IN ('JOIN', 'PART', 'QUIT', 'NETSPLIT', 'NETJOIN')
+                 AND m.kind NOT IN ('JOIN', 'PART', 'QUIT', 'AWAY', 'BACK', 'NETSPLIT', 'NETJOIN')
                ORDER BY m.serverTime DESC, m.timelineOrder DESC, m.id DESC LIMIT 1
            ) WHERE id = :bufferId AND type = 'QUERY'""",
     )
@@ -752,7 +753,7 @@ interface BufferDao {
         """UPDATE buffers SET advertisedLatestTime = (
                SELECT m.serverTime FROM messages m
                WHERE m.bufferId = :id
-                 AND m.kind NOT IN ('JOIN', 'PART', 'QUIT', 'NETSPLIT', 'NETJOIN')
+                 AND m.kind NOT IN ('JOIN', 'PART', 'QUIT', 'AWAY', 'BACK', 'NETSPLIT', 'NETJOIN')
                ORDER BY m.serverTime DESC, m.timelineOrder DESC, m.id DESC
                LIMIT 1)
            WHERE id = :id AND advertisedLatestTime IS NOT NULL
@@ -760,7 +761,7 @@ interface BufferDao {
              AND advertisedLatestTime / 1000 > COALESCE((
                SELECT m.serverTime FROM messages m
                WHERE m.bufferId = :id
-                 AND m.kind NOT IN ('JOIN', 'PART', 'QUIT', 'NETSPLIT', 'NETJOIN')
+                 AND m.kind NOT IN ('JOIN', 'PART', 'QUIT', 'AWAY', 'BACK', 'NETSPLIT', 'NETJOIN')
                ORDER BY m.serverTime DESC, m.timelineOrder DESC, m.id DESC
                LIMIT 1), 0) / 1000""",
     )

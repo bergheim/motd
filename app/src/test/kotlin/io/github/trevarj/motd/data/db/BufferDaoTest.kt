@@ -104,6 +104,7 @@ class BufferDaoTest {
                 listOf(
                     message(query, "chat", serverTime = 100, dedupKey = "query-chat"),
                     message(query, "join", serverTime = 200, dedupKey = "query-join", kind = MessageKind.JOIN),
+                    message(query, "away", serverTime = 250, dedupKey = "query-away", kind = MessageKind.AWAY),
                     message(channel, "channel", serverTime = 300, dedupKey = "channel-chat"),
                 ),
             )
@@ -492,7 +493,7 @@ class BufferDaoTest {
         }
 
     @Test
-    fun chatList_joinPartQuitNeverReplacePreviewOrActivity() =
+    fun chatList_presenceEventsNeverReplacePreviewOrActivity() =
         runTest {
             val bufDao = db.bufferDao()
             val msgDao = db.messageDao()
@@ -501,6 +502,8 @@ class BufferDaoTest {
                     MessageKind.JOIN,
                     MessageKind.PART,
                     MessageKind.QUIT,
+                    MessageKind.AWAY,
+                    MessageKind.BACK,
                     MessageKind.NETSPLIT,
                     MessageKind.NETJOIN,
                 )
@@ -538,7 +541,7 @@ class BufferDaoTest {
         }
 
     @Test
-    fun chatList_joinPartQuitOnlyBufferHasBlankPreviewAndNoActivity() =
+    fun chatList_presenceOnlyBufferHasBlankPreviewAndNoActivity() =
         runTest {
             val bufDao = db.bufferDao()
             val msgDao = db.messageDao()
@@ -548,6 +551,8 @@ class BufferDaoTest {
                     message(bufferId, "join", serverTime = 100, dedupKey = "join", kind = MessageKind.JOIN),
                     message(bufferId, "part", serverTime = 200, dedupKey = "part", kind = MessageKind.PART),
                     message(bufferId, "quit", serverTime = 300, dedupKey = "quit", kind = MessageKind.QUIT),
+                    message(bufferId, "away", serverTime = 350, dedupKey = "away", kind = MessageKind.AWAY),
+                    message(bufferId, "back", serverTime = 375, dedupKey = "back", kind = MessageKind.BACK),
                     message(bufferId, "split", serverTime = 400, dedupKey = "split", kind = MessageKind.NETSPLIT),
                     message(bufferId, "join", serverTime = 500, dedupKey = "netjoin", kind = MessageKind.NETJOIN),
                 ),

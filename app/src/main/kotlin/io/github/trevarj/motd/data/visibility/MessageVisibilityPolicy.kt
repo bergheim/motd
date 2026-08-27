@@ -20,6 +20,8 @@ val ACTOR_PRESENCE_KINDS: Set<MessageKind> =
         MessageKind.PART,
         MessageKind.QUIT,
         MessageKind.NICK,
+        MessageKind.AWAY,
+        MessageKind.BACK,
     )
 
 /**

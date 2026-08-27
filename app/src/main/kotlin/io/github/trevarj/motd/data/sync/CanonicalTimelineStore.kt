@@ -950,7 +950,15 @@ class CanonicalTimelineStore
 
         private companion object {
             val MONITOR_EXCLUDED_KINDS =
-                setOf(MessageKind.JOIN, MessageKind.PART, MessageKind.QUIT, MessageKind.NETSPLIT, MessageKind.NETJOIN)
+                setOf(
+                    MessageKind.JOIN,
+                    MessageKind.PART,
+                    MessageKind.QUIT,
+                    MessageKind.AWAY,
+                    MessageKind.BACK,
+                    MessageKind.NETSPLIT,
+                    MessageKind.NETJOIN,
+                )
             const val DELIVERY_RECONCILIATION_WINDOW_MS = 2_000L
             const val PROVISIONAL_RECONCILIATION_WINDOW_MS = 30_000L
         }

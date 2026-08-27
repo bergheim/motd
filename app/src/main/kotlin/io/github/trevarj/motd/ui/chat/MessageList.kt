@@ -172,6 +172,8 @@ fun isSystemKind(kind: MessageKind): Boolean =
         MessageKind.QUIT,
         MessageKind.KICK,
         MessageKind.NICK,
+        MessageKind.AWAY,
+        MessageKind.BACK,
         MessageKind.MODE,
         MessageKind.TOPIC,
         MessageKind.SERVER_INFO,
@@ -1298,7 +1300,7 @@ private fun summarizeCommandResponse(run: List<MessageEntity>): String {
  * Summarize a run of system events by kind: JOIN → "joined", PART/QUIT → "left", others by kind
  * name. Produces "3 joined · 1 left" style text. Counts are grouped preserving first appearance.
  */
-private fun summarizeSystemRun(run: List<MessageEntity>): String {
+internal fun summarizeSystemRun(run: List<MessageEntity>): String {
     val counts = LinkedHashMap<String, Int>()
     for (m in run) {
         val label =
@@ -1307,6 +1309,8 @@ private fun summarizeSystemRun(run: List<MessageEntity>): String {
                 MessageKind.PART, MessageKind.QUIT -> "left"
                 MessageKind.KICK -> "kicked"
                 MessageKind.NICK -> "renamed"
+                MessageKind.AWAY -> "away"
+                MessageKind.BACK -> "back"
                 MessageKind.MODE -> "mode"
                 MessageKind.TOPIC -> "topic"
                 else -> "events"

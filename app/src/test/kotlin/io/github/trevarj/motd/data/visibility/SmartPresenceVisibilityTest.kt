@@ -135,6 +135,25 @@ class SmartPresenceVisibilityTest {
         }
 
     @Test
+    fun `smart keeps away and back for a recent speaker`() =
+        runTest {
+            insert(MessageKind.PRIVMSG, "alice", 0)
+            insert(MessageKind.AWAY, "alice", 1_000)
+            insert(MessageKind.BACK, "alice", 2_000)
+            insert(MessageKind.AWAY, "lurker", 3_000)
+            insert(MessageKind.BACK, "lurker", 4_000)
+
+            assertEquals(
+                listOf(
+                    MessageKind.BACK to "alice",
+                    MessageKind.AWAY to "alice",
+                    MessageKind.PRIVMSG to "alice",
+                ),
+                visibleKinds(PresenceMode.SMART),
+            )
+        }
+
+    @Test
     fun `smart always keeps our own presence rows`() =
         runTest {
             insert(MessageKind.JOIN, "me", 0, isSelf = true)

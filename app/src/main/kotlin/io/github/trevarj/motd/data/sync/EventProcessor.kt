@@ -520,7 +520,10 @@ class EventProcessor
                 }
 
                 is IrcEvent.AwayChanged -> {
-                    if (origin.mutatesSessionState) upsertUser(networkId, event.nick) { it.copy(away = event.awayMessage != null) }
+                    if (origin.mutatesSessionState) {
+                        upsertUser(networkId, event.nick) { it.copy(away = event.awayMessage != null) }
+                        if (!stateFor(networkId).isSelfNick(event.nick)) onAwayChanged(networkId, event)
+                    }
                 }
 
                 is IrcEvent.SelfAwayChanged -> {
@@ -2798,6 +2801,25 @@ class EventProcessor
             insertSystem(bufferId, e.ctx, MessageKind.QUIT, e.nick, "${e.nick} quit" + (e.reason?.let { " ($it)" } ?: ""))
         }
 
+        /** AWAY has no channel target, so fan it out to channels where the nick is present. */
+        private suspend fun onAwayChanged(
+            networkId: Long,
+            e: IrcEvent.AwayChanged,
+        ) {
+            val buffers = buffersOfNick(networkId, e.nick)
+            if (buffers.isEmpty()) return
+            val away = e.awayMessage != null
+            val kind = if (away) MessageKind.AWAY else MessageKind.BACK
+            val reason = e.awayMessage?.takeIf { it.isNotBlank() }
+            val text = if (away) "${e.nick} is away" + (reason?.let { " ($it)" } ?: "") else "${e.nick} is back"
+            val ctx = serverCtx()
+            db.withTransaction {
+                for (bufferId in buffers) {
+                    insertSystem(bufferId, ctx, kind, e.nick, text)
+                }
+            }
+        }
+
         private suspend fun onKicked(
             networkId: Long,
             e: IrcEvent.Kicked,
@@ -3375,6 +3397,7 @@ class EventProcessor
             ctx: MessageContext,
             kind: MessageKind,
             text: String,
+            isSelf: Boolean = false,
         ) {
             val ordinal = session.nextOrdinal++
             insertSystem(
@@ -3385,6 +3408,7 @@ class EventProcessor
                 text = text,
                 dedupKey = "command:${session.id}:$ordinal",
                 eventPayload = "$COMMAND_RESPONSE_PAYLOAD_PREFIX${session.id}",
+                isSelf = isSelf,
                 origin = EventOrigin.LIVE,
             )
         }
@@ -3614,22 +3638,21 @@ class EventProcessor
             return true
         }
 
-        /**
-         * Own away confirmation (305/306) → SERVER buffer, exactly as the Raw whitelist used to render
-         * it before these numerics became a typed event. Live-only, like every other SERVER_INFO line.
-         */
+        /** Own away confirmation (305/306) → presence event in the SERVER buffer. */
         private suspend fun onSelfAwayChanged(
             networkId: Long,
             e: IrcEvent.SelfAwayChanged,
         ) {
+            val text = if (e.isAway) "You are away" else "You are back"
+            val kind = if (e.isAway) MessageKind.AWAY else MessageKind.BACK
             val response = commandResponse(networkId, e.ctx?.label)
             if (response != null) {
-                insertCommandResponse(response, e.ctx ?: serverCtx(), MessageKind.SERVER_INFO, e.text)
+                insertCommandResponse(response, e.ctx ?: serverCtx(), kind, text, isSelf = true)
                 finishCommandResponse(response)
             } else {
                 val st = stateFor(networkId)
                 val bufferId = ensureServerBuffer(networkId, st)
-                insertSystem(bufferId, e.ctx ?: serverCtx(), MessageKind.SERVER_INFO, "", e.text)
+                insertSystem(bufferId, e.ctx ?: serverCtx(), kind, st.selfNick, text, isSelf = true)
             }
         }
 
@@ -3646,7 +3669,7 @@ class EventProcessor
             insertSystem(bufferId, serverCtx(), MessageKind.SERVER_INFO, "", text)
         }
 
-        /** A ctx for server-buffer rows: no msgid/label, server time = now (the events carry none). */
+        /** Context for live events carrying no protocol timestamp or identity tags. */
         private fun serverCtx(): MessageContext =
             MessageContext(
                 msgid = null,

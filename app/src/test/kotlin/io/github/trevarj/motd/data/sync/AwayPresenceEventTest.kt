@@ -8,6 +8,7 @@ import io.github.trevarj.motd.data.db.MotdDatabase
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
 import io.github.trevarj.motd.irc.event.IrcEvent
+import io.github.trevarj.motd.irc.event.MessageContext
 import io.github.trevarj.motd.irc.proto.IrcMessage
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -18,12 +19,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
-/**
- * 305/306 stopped being Raw whitelist numerics, so the server-buffer line they used to produce has
- * to keep coming from the typed [IrcEvent.SelfAwayChanged] branch — live only, exactly as before.
- */
+/** Away state becomes low-noise presence rows only for live events. */
 @RunWith(RobolectricTestRunner::class)
-class SelfAwayServerInfoTest {
+class AwayPresenceEventTest {
     private lateinit var db: MotdDatabase
     private lateinit var processor: EventProcessor
     private var networkId: Long = 0
@@ -59,17 +57,21 @@ class SelfAwayServerInfoTest {
 
     private suspend fun serverBuffer() = db.bufferDao().byName(networkId, "*")
 
-    private suspend fun serverRows() =
+    private suspend fun rows(bufferName: String) =
         db
             .messageDao()
-            .pagingSource(serverBuffer()!!.id)
+            .pagingSource(db.bufferDao().byName(networkId, bufferName)!!.id)
             .load(
                 androidx.paging.PagingSource.LoadParams
                     .Refresh(null, 100, false),
             ).let { (it as androidx.paging.PagingSource.LoadResult.Page).data }
 
+    private suspend fun serverRows() = rows("*")
+
+    private fun ctx(time: Long) = MessageContext(null, time, null, null, null)
+
     @Test
-    fun liveSelfAway_insertsSameServerInfoLineAsBefore() =
+    fun liveSelfAway_insertsPresenceLines() =
         runTest {
             processor.process(
                 networkId,
@@ -80,15 +82,28 @@ class SelfAwayServerInfoTest {
                 IrcEvent.SelfAwayChanged(isAway = false, text = "You are no longer marked as being away"),
             )
             val rows = serverRows()
-            assertEquals(2, rows.size)
-            rows.forEach { assertEquals(MessageKind.SERVER_INFO, it.kind) }
-            assertEquals(
-                setOf(
-                    "You have been marked as being away",
-                    "You are no longer marked as being away",
-                ),
-                rows.map { it.text }.toSet(),
-            )
+            assertEquals(listOf(MessageKind.BACK, MessageKind.AWAY), rows.map { it.kind })
+            assertEquals(listOf("You are back", "You are away"), rows.map { it.text })
+            rows.forEach { assertEquals(true, it.isSelf) }
+        }
+
+    @Test
+    fun otherUserAway_fansOutToSharedChannels_withoutDuplicatingSelf() =
+        runTest {
+            for (channel in listOf("#one", "#two")) {
+                processor.process(networkId, IrcEvent.Joined(ctx(1), "me", channel, null, null, true))
+                processor.process(networkId, IrcEvent.Joined(ctx(2), "alice", channel, null, null, false))
+            }
+
+            processor.process(networkId, IrcEvent.AwayChanged("alice", "lunch"))
+            processor.process(networkId, IrcEvent.AwayChanged("alice", null))
+            processor.process(networkId, IrcEvent.AwayChanged("me", "brb"))
+
+            for (channel in listOf("#one", "#two")) {
+                val presence = rows(channel).filter { it.kind == MessageKind.AWAY || it.kind == MessageKind.BACK }
+                assertEquals(listOf(MessageKind.BACK, MessageKind.AWAY), presence.map { it.kind })
+                assertEquals(listOf("alice is back", "alice is away (lunch)"), presence.map { it.text })
+            }
         }
 
     @Test
