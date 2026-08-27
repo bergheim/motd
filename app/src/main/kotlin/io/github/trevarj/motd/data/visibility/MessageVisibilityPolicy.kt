@@ -190,7 +190,7 @@ internal class MessageVisibilitySql(
             "AND spoke.serverTime >= $serverTime - $SMART_PRESENCE_WINDOW_MS))"
     }
 
-    private fun notFool(alias: String): String = if (alias == "m") defaultNotFoolPredicate else buildNotFoolPredicate(alias)
+    internal fun notFool(alias: String): String = if (alias == "m") defaultNotFoolPredicate else buildNotFoolPredicate(alias)
 
     private fun buildNotFoolPredicate(alias: String = "m"): String {
         if (foolIdentities.isEmpty()) return TRUE
@@ -358,6 +358,65 @@ internal fun nearestUnreadMentionInPrefixQuery(
             after.timelineOrder,
             after.eventId,
         ),
+    )
+}
+
+/** One network's id paired with the identity rules that normalize nicks on it. */
+data class FirehoseNetwork(
+    val networkId: Long,
+    val identityRules: IrcIdentityRules = IrcIdentityRules(),
+)
+
+/**
+ * Cross-buffer reverse-chronological conversation stream (the "firehose"), derived entirely from
+ * the shared messages table.
+ *
+ * Room lifecycle exclusions match [io.github.trevarj.motd.data.db.MessageDao.observeInvitations]:
+ * no SERVER console, no dismissed query, no archived room, and nothing mid-close or redirected
+ * away. The `event_redirects` anti-join keeps only canonical rows, so a message that lost
+ * coalescence cannot appear a second time.
+ *
+ * That anti-join is deliberate defensive parity with `observeInvitations` rather than a live
+ * filter: `CanonicalTimelineStore.coalesce` deletes the losing `messages` row in the same
+ * transaction that writes the redirect, so a committed database never holds a losing row for it
+ * to match. It stays because this is a merged, user-facing stream — should any future writer
+ * break that invariant, the firehose still cannot show the same line twice.
+ *
+ * Fools are excluded in both fools modes, unlike the per-buffer timeline: this view follows
+ * `preview` semantics, where a collapsed placeholder would carry no meaning. The predicate is
+ * composed per network so a nick muted on one network stays visible on another — each term
+ * normalizes the configured fools with that network's own casemap. Any network absent from
+ * [networks] is left unfiltered by the trailing `n.id NOT IN (...)` term, and with no fools
+ * configured the whole clause collapses to `1`.
+ */
+internal fun firehosePagingQuery(
+    spec: MessageVisibilitySpec,
+    networks: List<FirehoseNetwork>,
+): SimpleSQLiteQuery {
+    val foolClause =
+        if (spec.fools.isEmpty() || networks.isEmpty()) {
+            TRUE
+        } else {
+            val ids = networks.joinToString(",") { it.networkId.toString() }
+            networks.joinToString(
+                separator = " OR ",
+                prefix = "(",
+                postfix = " OR n.id NOT IN ($ids))",
+            ) { network ->
+                "(n.id = ${network.networkId} AND ${MessageVisibilitySql(spec, network.identityRules).notFool("m")})"
+            }
+        }
+    return SimpleSQLiteQuery(
+        "SELECT m.*, b.displayName AS bufferDisplayName, n.name AS networkName " +
+            "FROM messages m " +
+            "JOIN buffers b ON b.id = m.bufferId " +
+            "JOIN networks n ON n.id = b.networkId " +
+            "LEFT JOIN event_redirects redirect ON redirect.losingEventId = m.id " +
+            "WHERE b.type IN ('CHANNEL','QUERY') AND b.dismissed = 0 AND b.archived = 0 " +
+            "AND b.pendingCloseAt IS NULL AND b.redirectToRoomId IS NULL " +
+            "AND redirect.losingEventId IS NULL " +
+            "AND m.kind IN ($CONVERSATION_KIND_SQL) AND $foolClause " +
+            "ORDER BY m.serverTime DESC, m.timelineOrder DESC, m.id DESC",
     )
 }
 

@@ -34,7 +34,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         MemberEntity::class,
         DccTransferEntity::class,
     ],
-    version = 35,
+    version = 36,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -936,6 +936,21 @@ val MIGRATION_34_35 =
     }
 
 /**
+ * v35 -> v36 indexes the cross-buffer reverse-chronological scan the firehose reads. Purely
+ * additive: every existing index stays, and the new one only gives the global ORDER BY an ordered
+ * path instead of sorting the whole table.
+ */
+val MIGRATION_35_36 =
+    object : Migration(35, 36) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_messages_serverTime_timelineOrder_id` " +
+                    "ON `messages` (`serverTime`, `timelineOrder`, `id`)",
+            )
+        }
+    }
+
+/**
  * The complete registered upgrade path, single-sourced so the runtime builder (DbModule) and the
  * migration tests cannot drift apart.
  *
@@ -982,6 +997,7 @@ val ALL_MIGRATIONS: Array<Migration> =
         MIGRATION_32_33,
         MIGRATION_33_34,
         MIGRATION_34_35,
+        MIGRATION_35_36,
     )
 
 private fun legacyReactionNormalizedSender(column: String): String = "replace(replace(replace(replace(lower($column), '[', '{'), ']', '}'), '\\', '|'), '~', '^')"

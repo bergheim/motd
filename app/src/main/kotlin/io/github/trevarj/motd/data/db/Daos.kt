@@ -1029,6 +1029,21 @@ interface MessageDao {
     @RawQuery(observedEntities = [MessageEntity::class])
     fun pagingSource(query: SupportSQLiteQuery): PagingSource<Int, MessageEntity>
 
+    /**
+     * Cross-buffer firehose stream. Every table the query joins is observed, not just messages: a
+     * rename, a room leaving the stream, or a redirect landing must invalidate immediately, so the
+     * stream can never go on serving a stale row set until the next message happens to arrive.
+     */
+    @RawQuery(
+        observedEntities = [
+            MessageEntity::class,
+            BufferEntity::class,
+            NetworkEntity::class,
+            EventRedirectEntity::class,
+        ],
+    )
+    fun firehosePagingSource(query: SupportSQLiteQuery): PagingSource<Int, FirehoseRow>
+
     @RawQuery
     suspend fun rawMessage(query: SupportSQLiteQuery): MessageEntity?
 
@@ -1565,6 +1580,13 @@ data class SearchHit(
     val avatarOverrideModel: String? = null,
     val caseMapping: String? = null,
     val chanTypes: String? = null,
+)
+
+/** One firehose line: the canonical message plus the conversation tag rendered beside it. */
+data class FirehoseRow(
+    @Embedded val message: MessageEntity,
+    val bufferDisplayName: String,
+    val networkName: String,
 )
 
 data class MessageBoundaryRow(

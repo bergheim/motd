@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.DoneAll
+import androidx.compose.material.icons.outlined.DynamicFeed
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -107,6 +108,7 @@ fun ServerDrawerContent(
     onAddNetwork: () -> Unit,
     onToggleOffline: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenFirehose: () -> Unit = {},
     onMarkAllRead: () -> Unit,
     onScanInvite: () -> Unit = {},
     // Manual ordering. onMoveNetwork is one finished intent (persisted immediately);
@@ -172,7 +174,19 @@ fun ServerDrawerContent(
                 )
             }
 
-            // 1. Networks section header. The unscoped ("all chats") state is simply "no network
+            // 1. The one cross-buffer destination, above the per-network rows it merges.
+            NavigationDrawerItem(
+                icon = { Icon(Icons.Outlined.DynamicFeed, contentDescription = null) },
+                label = { Text(stringResource(R.string.drawer_firehose)) },
+                selected = false,
+                onClick = onOpenFirehose,
+                modifier =
+                    Modifier
+                        .padding(horizontal = 12.dp)
+                        .testTag("drawer_open_firehose"),
+            )
+
+            // 2. Networks section header. The unscoped ("all chats") state is simply "no network
             // selected" — reflected by the title-bar wordmark — so there is no standalone row for
             // it. A subtle clear-filter action appears only while scoped.
             NetworksHeader(
@@ -184,7 +198,7 @@ fun ServerDrawerContent(
                 onClearFilter = { onSelectNetwork(null) },
             )
 
-            // 2. One entry per network (children indented under their soju root). While a drag is
+            // 3. One entry per network (children indented under their soju root). While a drag is
             // live its local order overlays the published rows, so fresh unread/connection state
             // keeps flowing into rows the drag has already moved.
             val displayRows = dragOrderIds?.let { applyDrawerOrder(drawerRows, it) } ?: drawerRows
@@ -267,7 +281,7 @@ fun ServerDrawerContent(
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
-            // 3. App-level footer actions.
+            // 4. App-level footer actions.
             NavigationDrawerItem(
                 icon = { Icon(Icons.Filled.Add, contentDescription = null) },
                 label = { Text(stringResource(R.string.drawer_add_network)) },

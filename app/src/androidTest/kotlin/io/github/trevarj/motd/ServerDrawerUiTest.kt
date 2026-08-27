@@ -68,6 +68,7 @@ class ServerDrawerUiTest {
                 .assertIsDisplayed()
                 .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, state))
         }
+        compose.onNodeWithTag("drawer_open_firehose").assertIsDisplayed()
     }
 
     private fun drawerRow(
