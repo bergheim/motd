@@ -1410,6 +1410,13 @@ sealed interface ChatUiEvent {
 
     data object NotInChannel : ChatUiEvent
 
+    data class InviteRequestSent(
+        val nick: String,
+        val channel: String,
+    ) : ChatUiEvent
+
+    data object InviteSendFailed : ChatUiEvent
+
     data class ReplyJumpUnavailable(
         val request: ReplyJumpRequest,
     ) : ChatUiEvent

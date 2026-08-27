@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.AlternateEmail
 import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.GroupAdd
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
@@ -72,6 +73,7 @@ fun NickActionSheet(
     onToggleFriend: () -> Unit,
     onToggleFool: () -> Unit,
     onIgnoreNetwork: () -> Unit = {},
+    onInviteToChannel: (() -> Unit)? = null,
     onOp: (grant: Boolean) -> Unit,
     onVoice: (grant: Boolean) -> Unit,
     onKick: (reason: String?) -> Unit,
@@ -134,6 +136,14 @@ fun NickActionSheet(
                 NickAction(Icons.Outlined.AlternateEmail, stringResource(R.string.nick_sheet_mention), onMention)
             }
             if (!isSelf) {
+                onInviteToChannel?.let { invite ->
+                    NickAction(
+                        Icons.Outlined.GroupAdd,
+                        stringResource(R.string.nick_sheet_invite_to_channel),
+                        invite,
+                        tag = "nick_sheet_invite_to_channel",
+                    )
+                }
                 NickAction(
                     if (isFriend) Icons.Filled.Star else Icons.Outlined.StarBorder,
                     stringResource(if (isFriend) R.string.nick_sheet_remove_friend else R.string.nick_sheet_add_friend),

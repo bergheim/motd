@@ -35,12 +35,17 @@ class BufferDaoTest {
         runTest {
             val joined =
                 db.bufferDao().insert(
-                    buffer(networkId, "#{joined}").copy(displayName = "#[JOINED]", joined = true),
+                    buffer(networkId, "#{joined}").copy(
+                        displayName = "#[JOINED]",
+                        joined = true,
+                        avatarOverrideModel = "https://example.test/channel.png",
+                    ),
                 )
             db.bufferDao().insert(buffer(networkId, "#leaving").copy(joined = true, pendingCloseAt = 1L))
             val redirect = db.bufferDao().insert(buffer(networkId, "#redirect").copy(joined = true))
             db.bufferDao().update(db.bufferDao().rawById(redirect)!!.copy(redirectToRoomId = joined))
             db.bufferDao().insert(buffer(networkId, "#not-joined"))
+            db.bufferDao().insert(buffer(networkId, "someone", type = BufferType.QUERY).copy(joined = true))
 
             assertEquals(
                 setOf("#[JOINED]"),
@@ -49,6 +54,17 @@ class BufferDaoTest {
                     .observeJoinedChannelNames(networkId)
                     .first()
                     .toSet(),
+            )
+            assertEquals(
+                listOf(
+                    JoinedChannelRow(
+                        joined,
+                        networkId,
+                        "#[JOINED]",
+                        "https://example.test/channel.png",
+                    ),
+                ),
+                db.bufferDao().observeJoinedChannels(networkId).first(),
             )
         }
 

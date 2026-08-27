@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import io.github.trevarj.motd.data.db.BufferEntity
 import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.db.ChatListRow
+import io.github.trevarj.motd.data.db.JoinedChannelRow
 import io.github.trevarj.motd.data.db.MemberEntity
 import io.github.trevarj.motd.data.db.MotdDatabase
 import io.github.trevarj.motd.data.db.MuteBacklogSuppression
@@ -135,6 +136,38 @@ class ChannelInfoTopicMutationTest {
         }
 
     @Test
+    fun `accepted invite publishes replay-safe feedback until acknowledged`() =
+        runTest {
+            val manager = FakeConnectionManager(inviteAccepted = true)
+            val viewModel = viewModel(manager)
+            var result: Boolean? = null
+
+            viewModel.invite(JoinedChannelRow(BUFFER_ID, 1, "#room"), "alice") { result = it }
+            advanceUntilIdle()
+
+            assertEquals(listOf(BUFFER_ID to "alice"), manager.inviteAttempts)
+            assertEquals(true, result)
+            val pending = viewModel.inviteFeedback.value!!
+            assertEquals(ChannelToolEvent.InviteRequestSent("alice", "#room"), pending.event)
+            viewModel.acknowledgeInviteFeedback(pending.id)
+            assertEquals(null, viewModel.inviteFeedback.value)
+        }
+
+    @Test
+    fun `rejected invite publishes failure and keeps picker open`() =
+        runTest {
+            val manager = FakeConnectionManager(inviteAccepted = false)
+            val viewModel = viewModel(manager)
+            var result: Boolean? = null
+
+            viewModel.invite(JoinedChannelRow(BUFFER_ID, 1, "#room"), "alice") { result = it }
+            advanceUntilIdle()
+
+            assertEquals(false, result)
+            assertEquals(ChannelToolEvent.InviteSendFailed, viewModel.inviteFeedback.value?.event)
+        }
+
+    @Test
     fun `missing buffer does not emit leave navigation`() =
         runTest {
             val viewModel = viewModel(FakeConnectionManager(partAccepted = true))
@@ -259,10 +292,20 @@ class ChannelInfoTopicMutationTest {
         private val gate: CompletableDeferred<Boolean>? = null,
         private val partAccepted: Boolean = false,
         private val partFailure: Throwable? = null,
+        private val inviteAccepted: Boolean = false,
     ) : NoopConnectionManager() {
         val attempts = mutableListOf<Pair<Long, String>>()
 
         val partAttempts = mutableListOf<Long>()
+        val inviteAttempts = mutableListOf<Pair<Long, String>>()
+
+        override suspend fun inviteToChannel(
+            bufferId: Long,
+            nick: String,
+        ): Boolean {
+            inviteAttempts += bufferId to nick
+            return inviteAccepted
+        }
 
         override suspend fun partChannelForClose(
             bufferId: Long,

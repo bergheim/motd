@@ -444,6 +444,46 @@ internal suspend fun attemptChannelPartWrite(
     )
 }
 
+/** True when [raw] is one safe IRC middle parameter suitable for an INVITE target nick. */
+internal fun normalizedInviteNick(raw: String): String? =
+    raw.trim().takeIf { nick ->
+        nick.isNotEmpty() &&
+            nick.none { it.isWhitespace() || it.isISOControl() || it == ':' || it == ',' }
+    }
+
+/** Narrow transport boundary for an outgoing IRC INVITE. */
+internal suspend fun writeChannelInviteIfReady(
+    buffer: BufferEntity?,
+    nick: String,
+    client: IrcClient?,
+): Boolean {
+    val ready = client?.state?.value as? IrcClientState.Ready ?: return false
+    val targetNick = normalizedInviteNick(nick) ?: return false
+    if (client.isupport.normalize(targetNick) == client.isupport.normalize(ready.nick)) return false
+    return attemptChannelInviteWrite(buffer, targetNick) { message -> client.sendIfConnected(message) }
+}
+
+internal suspend fun attemptChannelInviteWrite(
+    buffer: BufferEntity?,
+    nick: String,
+    send: suspend (io.github.trevarj.motd.irc.proto.IrcMessage) -> Boolean,
+): Boolean {
+    if (buffer?.type != BufferType.CHANNEL || !buffer.joined || buffer.pendingCloseAt != null) return false
+    val targetNick = normalizedInviteNick(nick) ?: return false
+    return try {
+        send(
+            io.github.trevarj.motd.irc.proto.IrcMessage(
+                command = "INVITE",
+                params = listOf(targetNick, buffer.ircTarget),
+            ),
+        )
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        false
+    }
+}
+
 /**
  * Hilt @Singleton connection subsystem. Outlives the foreground service — the service
  * is merely its keeper. Spawns one [ConnectionActor] per connectable network row (BOUNCER_ROOT
@@ -2557,6 +2597,19 @@ class ConnectionManagerImpl
             }
             return accepted
         }
+
+        override suspend fun inviteToChannel(
+            bufferId: Long,
+            nick: String,
+        ): Boolean =
+            try {
+                val buffer = bufferDao.observeById(bufferId)
+                writeChannelInviteIfReady(buffer, nick, buffer?.let { clientFor(it.networkId) })
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                false
+            }
 
         override suspend fun acceptInvite(messageId: Long) {
             val initial = messageDao.byCanonicalId(messageId) ?: return

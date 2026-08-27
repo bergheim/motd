@@ -31,6 +31,20 @@ class ChannelControlsUiTest {
     private val members = listOf(MemberEntity(1, "me", "@"), MemberEntity(1, "bob", ""))
 
     @Test
+    fun inviteRowOpensSharedPickerRoute() {
+        var opened = 0
+        compose.setContent {
+            Controls(
+                catalog = ModeCatalog.DEFAULT,
+                onInvite = { opened++ },
+            )
+        }
+
+        compose.onNodeWithTag("channelinfo_invite_row").performScrollTo().performClick()
+        compose.runOnIdle { assertEquals(1, opened) }
+    }
+
+    @Test
     fun curatedRowsRender_andExceptionRowsAreAbsentWhenNotAdvertised() {
         compose.setContent { Controls(catalog = ModeCatalog.from(mapOf("CHANMODES" to "b,k,l,imnst"))) }
 
@@ -103,6 +117,7 @@ class ChannelControlsUiTest {
     private fun Controls(
         catalog: ModeCatalog?,
         onSetLimit: (Int?) -> Unit = {},
+        onInvite: () -> Unit = {},
     ) {
         MotdTheme {
             ChannelInfoContent(
@@ -119,6 +134,7 @@ class ChannelControlsUiTest {
                 onSetMuted = {},
                 onLeave = {},
                 onSetLimit = onSetLimit,
+                onInvite = onInvite,
             )
         }
     }

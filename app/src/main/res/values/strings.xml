@@ -1055,6 +1055,7 @@
     <!-- Nick action sheet + whois (WP-V3, §5.8) -->
     <string name="nick_sheet_message">Message</string>
     <string name="nick_sheet_mention">Mention</string>
+    <string name="nick_sheet_invite_to_channel">Invite to channel</string>
     <string name="nick_sheet_add_friend">Add to friends</string>
     <string name="nick_sheet_remove_friend">Remove from friends</string>
     <string name="nick_sheet_add_fool">Add to fools</string>
@@ -1093,6 +1094,23 @@
     <string name="channelinfo_topic_edit_failed">Couldn\'t send topic. Try again.</string>
     <string name="channelinfo_invite_nick">Nick to invite</string>
     <string name="channelinfo_invite">Invite</string>
+    <string name="irc_invite_user_title">Invite user</string>
+    <string name="irc_invite_nick_title">Invite %1$s</string>
+    <string name="irc_invite_nick_subtitle">Choose one of your channels on this network</string>
+    <string name="irc_invite_nick_label">Nickname</string>
+    <string name="irc_invite_nick_help">Enter a nickname or choose a friend</string>
+    <string name="irc_invite_invalid_nick">Enter one valid nickname</string>
+    <string name="irc_invite_action">Send invite</string>
+    <string name="irc_invite_friends">Friends</string>
+    <string name="irc_invite_no_friends">No friends yet. Enter a nickname above.</string>
+    <string name="irc_invite_no_other_channels">No other joined channels on this network.</string>
+    <string name="irc_invite_disconnected">Reconnect to send an invite.</string>
+    <string name="irc_invite_already_here">Already in this channel</string>
+    <string name="irc_invite_tap_channel">Tap to send invite</string>
+    <string name="irc_invite_channel_action">Invite %1$s to %2$s</string>
+    <string name="irc_invite_friend_action">Invite %1$s</string>
+    <string name="irc_invite_request_sent">Invite request sent to %1$s for %2$s</string>
+    <string name="irc_invite_send_failed">Couldn’t send invite. Reconnect and try again.</string>
     <string name="channelinfo_remove_ban">Remove ban</string>
 
     <!-- Channel operator controls. Flag modes are actions, not switches: nothing parses 324, so
@@ -1155,7 +1173,6 @@
     <string name="channelinfo_custom_mode_needs_value">+%1$s needs a value</string>
     <string name="channelinfo_custom_mode_unknown">%1$s isn\'t advertised by this network</string>
     <string name="channelinfo_tool_sent_mode">Change sent</string>
-    <string name="channelinfo_tool_sent_invite">Invite sent to %1$s</string>
     <string name="channelinfo_tool_sent_ban">Ban set on %1$s</string>
     <string name="channelinfo_tool_sent_unban">Ban removed</string>
     <string name="channelinfo_tool_sent_exception">Exception added</string>

@@ -62,6 +62,7 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.Forum
+import androidx.compose.material.icons.outlined.GroupAdd
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Search
@@ -173,6 +174,7 @@ import io.github.trevarj.motd.audio.formatAudioDuration
 import io.github.trevarj.motd.avatar.ConversationAvatarOutcome
 import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.db.DccTransferEntity
+import io.github.trevarj.motd.data.db.JoinedChannelRow
 import io.github.trevarj.motd.data.db.MessageEntity
 import io.github.trevarj.motd.data.prefs.AppearanceConfig
 import io.github.trevarj.motd.data.prefs.FoolsMode
@@ -323,6 +325,8 @@ fun ChatScreen(
     var mentionRequest by remember { mutableStateOf<Pair<Long, String>?>(null) }
     var avatarEditorOpen by rememberSaveable { mutableStateOf(false) }
     var avatarUploadOpen by rememberSaveable { mutableStateOf(false) }
+    var inviteNick by rememberSaveable { mutableStateOf<String?>(null) }
+    var inviteChannelOpen by rememberSaveable { mutableStateOf(false) }
     // A prefill aimed at this conversation while it is already open (gesture orb). It arrives as
     // text rather than as an entry to drain, and rides the same append path as a nick-sheet mention.
     LaunchedEffect(viewModel) {
@@ -340,6 +344,7 @@ fun ChatScreen(
     val items = viewModel.messages.collectAsLazyPagingItems(Dispatchers.Main.immediate)
     val memberNicks by viewModel.memberNicks.collectAsStateWithLifecycle()
     val knownNicks by viewModel.knownNicks.collectAsStateWithLifecycle()
+    val joinedChannels by viewModel.joinedChannels.collectAsStateWithLifecycle()
     val voiceState by voiceViewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val voicePermissionGate =
@@ -487,6 +492,10 @@ fun ChatScreen(
         },
         onOpenSearch = onOpenSearch,
         onOpenImage = onOpenImage,
+        onInviteUser = {
+            viewModel.ensureMembersObserved()
+            inviteChannelOpen = true
+        },
         nickNormalizer = nickNormalizer,
         onSubmit = { raw -> viewModel.submit(raw, onOpenBuffer = onOpenBuffer, onOpenChannelList = onOpenChannelList) },
         onTyping = viewModel::sendTyping,
@@ -610,6 +619,10 @@ fun ChatScreen(
             onToggleFriend = { viewModel.toggleFriend(sheet.nick) },
             onToggleFool = { viewModel.toggleFool(sheet.nick) },
             onIgnoreNetwork = { viewModel.ignoreNickOnNetwork(sheet.nick) },
+            onInviteToChannel = {
+                viewModel.dismissNickSheet()
+                inviteNick = sheet.nick
+            },
             onOp = { grant -> viewModel.setMemberMode(sheet.nick, 'o', grant) },
             onVoice = { grant -> viewModel.setMemberMode(sheet.nick, 'v', grant) },
             onKick = { reason ->
@@ -630,6 +643,45 @@ fun ChatScreen(
             onEditConversationAvatar = {
                 viewModel.dismissNickSheet()
                 avatarEditorOpen = true
+            },
+        )
+    }
+
+    val currentInviteChannel =
+        state.buffer
+            ?.takeIf { it.type == BufferType.CHANNEL && it.joined && it.pendingCloseAt == null }
+            ?.let { room ->
+                joinedChannels.firstOrNull { it.bufferId == room.id }
+                    ?: JoinedChannelRow(room.id, room.networkId, room.displayName, room.avatarOverrideModel)
+            }
+    val inviteTarget =
+        inviteNick?.let { nick ->
+            InviteSheetTarget.Nick(
+                nick = nick,
+                excludedBufferId = state.buffer?.id?.takeIf { state.buffer?.type == BufferType.CHANNEL },
+            )
+        } ?: currentInviteChannel?.takeIf { inviteChannelOpen }?.let(InviteSheetTarget::Channel)
+    inviteTarget?.let { target ->
+        InviteUserSheet(
+            target = target,
+            joinedChannels = joinedChannels,
+            friends = settings.friends,
+            presence = state.presence,
+            memberNicks = memberNicks,
+            selfNick = (state.connState as? IrcClientState.Ready)?.nick,
+            identityRules = identityRules,
+            connected = state.connState is IrcClientState.Ready,
+            onDismiss = {
+                inviteNick = null
+                inviteChannelOpen = false
+            },
+            onInvite = { channel, nick ->
+                viewModel.inviteToChannel(channel, nick) { accepted ->
+                    if (accepted) {
+                        inviteNick = null
+                        inviteChannelOpen = false
+                    }
+                }
             },
         )
     }
@@ -818,6 +870,7 @@ fun ChatContent(
     // Round 5: SERVER-buffer raw-send + nick sheet plumbing.
     isServerBuffer: Boolean = false,
     onSenderClick: (String) -> Unit = {},
+    onInviteUser: () -> Unit = {},
     uiEvent: QueuedChatUiEvent? = null,
     onUiEventAcknowledged: (Long) -> Unit = {},
     onRetryReplyJump: (ReplyJumpRequest) -> Unit = {},
@@ -1169,16 +1222,53 @@ fun ChatContent(
     val eventText =
         uiEvent?.value?.let { event ->
             when (event) {
-                ChatUiEvent.InvalidCommand -> stringResource(R.string.chat_server_invalid_command)
-                ChatUiEvent.ReactionBlocked -> stringResource(R.string.chat_reaction_blocked)
-                ChatUiEvent.ReactionTargetUnavailable -> stringResource(R.string.chat_react_failed)
-                ChatUiEvent.ReactionSendFailed -> stringResource(R.string.chat_reaction_send_failed)
-                ChatUiEvent.SendRejected -> stringResource(R.string.chat_send_rejected)
-                ChatUiEvent.SendDropped -> stringResource(R.string.chat_send_dropped)
-                ChatUiEvent.NotInChannel -> stringResource(R.string.chat_not_in_channel)
-                ChatUiEvent.ConversationLayoutWriteFailed -> stringResource(R.string.chat_layout_write_failed)
-                ChatUiEvent.PresenceModeWriteFailed -> stringResource(R.string.chat_presence_write_failed)
-                is ChatUiEvent.ReplyJumpUnavailable -> jumpNotLoaded
+                ChatUiEvent.InvalidCommand -> {
+                    stringResource(R.string.chat_server_invalid_command)
+                }
+
+                ChatUiEvent.ReactionBlocked -> {
+                    stringResource(R.string.chat_reaction_blocked)
+                }
+
+                ChatUiEvent.ReactionTargetUnavailable -> {
+                    stringResource(R.string.chat_react_failed)
+                }
+
+                ChatUiEvent.ReactionSendFailed -> {
+                    stringResource(R.string.chat_reaction_send_failed)
+                }
+
+                ChatUiEvent.SendRejected -> {
+                    stringResource(R.string.chat_send_rejected)
+                }
+
+                ChatUiEvent.SendDropped -> {
+                    stringResource(R.string.chat_send_dropped)
+                }
+
+                ChatUiEvent.NotInChannel -> {
+                    stringResource(R.string.chat_not_in_channel)
+                }
+
+                is ChatUiEvent.InviteRequestSent -> {
+                    stringResource(R.string.irc_invite_request_sent, event.nick, event.channel)
+                }
+
+                ChatUiEvent.InviteSendFailed -> {
+                    stringResource(R.string.irc_invite_send_failed)
+                }
+
+                ChatUiEvent.ConversationLayoutWriteFailed -> {
+                    stringResource(R.string.chat_layout_write_failed)
+                }
+
+                ChatUiEvent.PresenceModeWriteFailed -> {
+                    stringResource(R.string.chat_presence_write_failed)
+                }
+
+                is ChatUiEvent.ReplyJumpUnavailable -> {
+                    jumpNotLoaded
+                }
             }
         }
     val retryLabel = stringResource(R.string.chat_retry)
@@ -2146,6 +2236,29 @@ fun ChatContent(
                             Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.action_more))
                         }
                         DropdownMenu(expanded = overflowOpen, onDismissRequest = { overflowOpen = false }) {
+                            if (buffer?.type == BufferType.CHANNEL && buffer.joined) {
+                                val inviteEnabled = state.connState is IrcClientState.Ready
+                                DropdownMenuItem(
+                                    modifier = Modifier.testTag("chat_invite_user"),
+                                    text = {
+                                        Column {
+                                            Text(stringResource(R.string.irc_invite_user_title))
+                                            if (!inviteEnabled) {
+                                                Text(
+                                                    stringResource(R.string.irc_invite_disconnected),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                )
+                                            }
+                                        }
+                                    },
+                                    leadingIcon = { Icon(Icons.Outlined.GroupAdd, contentDescription = null) },
+                                    enabled = inviteEnabled,
+                                    onClick = {
+                                        overflowOpen = false
+                                        onInviteUser()
+                                    },
+                                )
+                            }
                             DropdownMenuItem(
                                 modifier = Modifier.testTag("chat_layout_menu"),
                                 text = {

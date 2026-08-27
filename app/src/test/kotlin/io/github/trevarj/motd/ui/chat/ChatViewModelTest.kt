@@ -20,6 +20,7 @@ import io.github.trevarj.motd.data.db.ChatListRow
 import io.github.trevarj.motd.data.db.DccTransferEntity
 import io.github.trevarj.motd.data.db.EventRedirectEntity
 import io.github.trevarj.motd.data.db.HistoryGapEntity
+import io.github.trevarj.motd.data.db.JoinedChannelRow
 import io.github.trevarj.motd.data.db.MemberEntity
 import io.github.trevarj.motd.data.db.MessageEntity
 import io.github.trevarj.motd.data.db.MessageKind
@@ -911,6 +912,27 @@ class ChatViewModelTest {
 
             client.stop()
             runCurrent()
+        }
+
+    @Test
+    fun `outgoing invite reports replay-safe chat feedback`() =
+        runTest {
+            val manager = FakeConnectionManager(network.id, inviteAccepted = true)
+            val vm = viewModel(channel, manager)
+            vm.state.first { it.buffer != null }
+            var accepted: Boolean? = null
+            val destination = JoinedChannelRow(channel.id, network.id, channel.displayName)
+
+            vm.inviteToChannel(destination, "alice") { accepted = it }.join()
+
+            assertEquals(listOf(channel.id to "alice"), manager.invites)
+            assertEquals(true, accepted)
+            assertEquals(
+                ChatUiEvent.InviteRequestSent("alice", channel.displayName),
+                vm.uiEvents.value
+                    .single()
+                    .value,
+            )
         }
 
     @Test
@@ -3478,6 +3500,7 @@ class ChatViewModelTest {
         private val storedTexts: ((String) -> List<String>)? = null,
         private val sendRejection: io.github.trevarj.motd.service.SendRejectionReason? = null,
         private val retryRejection: io.github.trevarj.motd.service.SendRejectionReason? = null,
+        private val inviteAccepted: Boolean = false,
         historyPending: Set<Long> = emptySet(),
         /**
          * What a negotiated CHATHISTORY wire would report. Defaults to the pre-registration answer
@@ -3503,6 +3526,7 @@ class ChatViewModelTest {
         val commandOrigins = mutableListOf<Pair<Long, IrcMessage>>()
         val joins = mutableListOf<Triple<Long, String, String?>>()
         val parts = mutableListOf<Pair<Long, String?>>()
+        val invites = mutableListOf<Pair<Long, String>>()
         val readMarkers = mutableListOf<Pair<Long, TimelineAnchor>>()
         val messageStarted = CompletableDeferred<Unit>()
         val typingSent = CompletableDeferred<Unit>()
@@ -3622,6 +3646,14 @@ class ChatViewModelTest {
             reason: String?,
         ) {
             parts += bufferId to reason
+        }
+
+        override suspend fun inviteToChannel(
+            bufferId: Long,
+            nick: String,
+        ): Boolean {
+            invites += bufferId to nick
+            return inviteAccepted
         }
 
         override suspend fun ensureQueryBuffer(

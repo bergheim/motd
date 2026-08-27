@@ -49,6 +49,8 @@ class BufferRepositoryImpl
 
         override fun observeJoinedChannelNames(networkId: Long): Flow<Set<String>> = bufferDao.observeJoinedChannelNames(networkId).map { it.toSet() }.distinctUntilChanged()
 
+        override fun observeJoinedChannels(networkId: Long) = bufferDao.observeJoinedChannels(networkId).distinctUntilChanged()
+
         override suspend fun joinedBufferId(
             networkId: Long,
             normalizedChannel: String,

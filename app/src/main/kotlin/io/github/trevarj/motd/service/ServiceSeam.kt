@@ -262,6 +262,12 @@ interface ConnectionManager {
         key: String? = null,
     ): Boolean
 
+    /** Write one IRC INVITE for a canonical joined channel. True means the live transport accepted it. */
+    suspend fun inviteToChannel(
+        bufferId: Long,
+        nick: String,
+    ): Boolean = false
+
     /** Atomically claim a persisted invitation, connect if needed, then send exactly one JOIN. */
     suspend fun acceptInvite(messageId: Long)
 

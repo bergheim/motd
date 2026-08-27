@@ -384,6 +384,15 @@ interface BufferDao {
     )
     fun observeJoinedChannelNames(networkId: Long): Flow<List<String>>
 
+    /** Lightweight picker rows for outgoing IRC INVITE actions. */
+    @Query(
+        """SELECT id AS bufferId, networkId, displayName, avatarOverrideModel
+           FROM buffers WHERE networkId = :networkId AND type = 'CHANNEL' AND joined = 1
+             AND pendingCloseAt IS NULL AND redirectToRoomId IS NULL
+           ORDER BY pinned DESC, displayName COLLATE NOCASE, id""",
+    )
+    fun observeJoinedChannels(networkId: Long): Flow<List<JoinedChannelRow>>
+
     /**
      * History-resync targets. The soju console is the one SERVER row soju answers CHATHISTORY for, so
      * it is admitted here — role-scoped, since elsewhere that nick is an ordinary user's query — and
@@ -927,6 +936,14 @@ interface BufferDao {
     @Query("DELETE FROM history_gaps WHERE roomId = :bufferId")
     suspend fun deleteHistoryGapsForBuffer(bufferId: RoomId)
 }
+
+/** Minimal joined-channel projection for outgoing IRC invitations. */
+data class JoinedChannelRow(
+    val bufferId: Long,
+    val networkId: Long,
+    val displayName: String,
+    val avatarOverrideModel: String? = null,
+)
 
 /** Projection for the chat list screen. */
 data class ChatListRow(

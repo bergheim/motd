@@ -4,6 +4,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -48,6 +49,7 @@ class ComposerSendClearUiTest {
             name = "#kotlin",
             displayName = "#kotlin",
             type = BufferType.CHANNEL,
+            joined = true,
         )
 
     /** Renders the real chat surface over an empty timeline, with the draft under test control. */
@@ -56,6 +58,9 @@ class ComposerSendClearUiTest {
         pages: Flow<PagingData<MessageEntity>> = flowOf(PagingData.from(emptyList())),
         outgoingFlight: () -> OutgoingFlight? = { null },
         onFlightSettled: (Long) -> Unit = {},
+        chatBuffer: BufferEntity = buffer,
+        connectionState: IrcClientState? = IrcClientState.Ready("me", emptySet(), emptyMap()),
+        onInviteUser: () -> Unit = {},
         onSubmit: (String) -> Unit,
     ) {
         compose.setContent {
@@ -64,8 +69,8 @@ class ComposerSendClearUiTest {
                 ChatContent(
                     state =
                         ChatState(
-                            buffer = buffer,
-                            connState = IrcClientState.Ready("me", emptySet(), emptyMap()),
+                            buffer = chatBuffer,
+                            connState = connectionState,
                         ),
                     items = items,
                     composerEnabled = true,
@@ -73,6 +78,7 @@ class ComposerSendClearUiTest {
                     onOpenChannelInfo = {},
                     onOpenSearch = {},
                     onOpenImage = {},
+                    onInviteUser = onInviteUser,
                     nickNormalizer = { it.lowercase() },
                     onSubmit = onSubmit,
                     onTyping = {},
@@ -87,6 +93,44 @@ class ComposerSendClearUiTest {
                 )
             }
         }
+    }
+
+    @Test
+    fun overflowExposesInviteOnlyForChannels() {
+        var invites = 0
+        setContent(
+            draft = { ComposerDraftState(hydrated = true) },
+            onInviteUser = { invites++ },
+            onSubmit = {},
+        )
+
+        compose.onNodeWithTag("chat_overflow").performClick()
+        compose.onNodeWithTag("chat_invite_user").performClick()
+        compose.runOnIdle { assertEquals(1, invites) }
+
+        setContent(
+            draft = { ComposerDraftState(hydrated = true) },
+            chatBuffer = buffer.copy(name = "alice", displayName = "alice", type = BufferType.QUERY),
+            onSubmit = {},
+        )
+        compose.onNodeWithTag("chat_overflow").performClick()
+        compose.onNodeWithTag("chat_invite_user").assertDoesNotExist()
+
+        setContent(
+            draft = { ComposerDraftState(hydrated = true) },
+            connectionState = IrcClientState.Disconnected,
+            onSubmit = {},
+        )
+        compose.onNodeWithTag("chat_overflow").performClick()
+        compose.onNodeWithTag("chat_invite_user").assertIsNotEnabled()
+
+        setContent(
+            draft = { ComposerDraftState(hydrated = true) },
+            chatBuffer = buffer.copy(joined = false),
+            onSubmit = {},
+        )
+        compose.onNodeWithTag("chat_overflow").performClick()
+        compose.onNodeWithTag("chat_invite_user").assertDoesNotExist()
     }
 
     @Test

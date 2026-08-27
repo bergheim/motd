@@ -70,10 +70,13 @@ import io.github.trevarj.motd.R
 import io.github.trevarj.motd.avatar.ConversationAvatarOutcome
 import io.github.trevarj.motd.data.db.BufferEntity
 import io.github.trevarj.motd.data.db.BufferType
+import io.github.trevarj.motd.data.db.JoinedChannelRow
 import io.github.trevarj.motd.data.db.MemberEntity
 import io.github.trevarj.motd.data.prefs.matchesConfiguredNick
 import io.github.trevarj.motd.service.RosterLoadState
 import io.github.trevarj.motd.ui.chat.AttachmentSheets
+import io.github.trevarj.motd.ui.chat.InviteSheetTarget
+import io.github.trevarj.motd.ui.chat.InviteUserSheet
 import io.github.trevarj.motd.ui.chat.LagTone
 import io.github.trevarj.motd.ui.chat.NickActionSheet
 import io.github.trevarj.motd.ui.chat.lagTone
@@ -100,6 +103,8 @@ fun ChannelInfoScreen(
     val nickSheet by viewModel.nickSheet.collectAsStateWithLifecycle()
     val topicMutation by viewModel.topicMutation.collectAsStateWithLifecycle()
     val leaveMutation by viewModel.leaveMutation.collectAsStateWithLifecycle()
+    val inviteFeedback by viewModel.inviteFeedback.collectAsStateWithLifecycle()
+    val presenceStates by viewModel.presenceStates.collectAsStateWithLifecycle()
 
     LaunchedEffect(viewModel, onBack) {
         viewModel.operationEvents.collect { event ->
@@ -117,6 +122,8 @@ fun ChannelInfoScreen(
     val resolvingHost by viewModel.resolvingHost.collectAsStateWithLifecycle()
     var avatarEditorOpen by rememberSaveable { mutableStateOf(false) }
     var avatarUploadOpen by rememberSaveable { mutableStateOf(false) }
+    var inviteNick by rememberSaveable { mutableStateOf<String?>(null) }
+    var inviteChannelOpen by rememberSaveable { mutableStateOf(false) }
 
     // Operator feedback. The ViewModel reports what happened; the wording lives here, resolved in
     // composition so it follows configuration changes. The sequence number makes two identical
@@ -136,14 +143,18 @@ fun ChannelInfoScreen(
                 stringResource(R.string.channelinfo_tool_not_connected)
             }
 
+            is ChannelToolEvent.InviteRequestSent -> {
+                stringResource(R.string.irc_invite_request_sent, event.nick, event.channel)
+            }
+
+            ChannelToolEvent.InviteSendFailed -> {
+                stringResource(R.string.irc_invite_send_failed)
+            }
+
             is ChannelToolEvent.Sent -> {
                 when (event.summary) {
                     ChannelToolSummary.MODE -> {
                         stringResource(R.string.channelinfo_tool_sent_mode)
-                    }
-
-                    ChannelToolSummary.INVITE -> {
-                        stringResource(R.string.channelinfo_tool_sent_invite, event.arg.orEmpty())
                     }
 
                     ChannelToolSummary.BAN -> {
@@ -162,6 +173,25 @@ fun ChannelInfoScreen(
         }
     LaunchedEffect(toolFeedback?.first) {
         snackbarHostState.showSnackbar(toolMessage ?: return@LaunchedEffect)
+    }
+    val inviteMessage =
+        when (val event = inviteFeedback?.event) {
+            is ChannelToolEvent.InviteRequestSent -> {
+                stringResource(R.string.irc_invite_request_sent, event.nick, event.channel)
+            }
+
+            ChannelToolEvent.InviteSendFailed -> {
+                stringResource(R.string.irc_invite_send_failed)
+            }
+
+            else -> {
+                null
+            }
+        }
+    LaunchedEffect(inviteFeedback?.id) {
+        val pending = inviteFeedback ?: return@LaunchedEffect
+        snackbarHostState.showSnackbar(inviteMessage ?: return@LaunchedEffect)
+        viewModel.acknowledgeInviteFeedback(pending.id)
     }
     LaunchedEffect(viewModel, resources) {
         viewModel.avatarEvents.collect { outcome ->
@@ -192,7 +222,7 @@ fun ChannelInfoScreen(
         onSetTopic = viewModel::setTopic,
         topicMutation = topicMutation,
         onBeginTopicEdit = viewModel::beginTopicEdit,
-        onInvite = viewModel::invite,
+        onInvite = { inviteChannelOpen = true },
         onSetChannelMode = viewModel::setChannelMode,
         onFlagMode = viewModel::setFlagMode,
         onSetKey = viewModel::setKey,
@@ -260,7 +290,7 @@ fun ChannelInfoScreen(
         NickActionSheet(
             nick = sheet.nick,
             networkId = state.buffer?.networkId,
-            isSelf = false,
+            isSelf = state.selfNick?.let { state.identityRules.normalize(it) == state.identityRules.normalize(sheet.nick) } == true,
             isFriend = state.identityRules.matchesConfiguredNick(sheet.nick, state.friends),
             isFool = state.identityRules.matchesConfiguredNick(sheet.nick, state.fools),
             canModerate = state.canModerate,
@@ -278,6 +308,10 @@ fun ChannelInfoScreen(
             onToggleFriend = { viewModel.toggleFriend(sheet.nick) },
             onToggleFool = { viewModel.toggleFool(sheet.nick) },
             onIgnoreNetwork = { viewModel.ignoreNickOnNetwork(sheet.nick) },
+            onInviteToChannel = {
+                viewModel.dismissNickSheet()
+                inviteNick = sheet.nick
+            },
             onOp = { grant -> viewModel.setMemberMode(sheet.nick, 'o', grant) },
             onVoice = { grant -> viewModel.setMemberMode(sheet.nick, 'v', grant) },
             onKick = { reason ->
@@ -292,6 +326,41 @@ fun ChannelInfoScreen(
             resolvedHost = resolvedHost,
             hostLoading = resolvingHost,
             onNickSelected = viewModel::resolveHostFor,
+        )
+    }
+
+    val currentInviteChannel =
+        state.buffer
+            ?.takeIf { it.type == BufferType.CHANNEL && it.joined && it.pendingCloseAt == null }
+            ?.let { room ->
+                state.joinedChannels.firstOrNull { it.bufferId == room.id }
+                    ?: JoinedChannelRow(room.id, room.networkId, room.displayName, room.avatarOverrideModel)
+            }
+    val inviteTarget =
+        inviteNick?.let { nick -> InviteSheetTarget.Nick(nick, state.buffer?.id) }
+            ?: currentInviteChannel?.takeIf { inviteChannelOpen }?.let(InviteSheetTarget::Channel)
+    inviteTarget?.let { target ->
+        InviteUserSheet(
+            target = target,
+            joinedChannels = state.joinedChannels,
+            friends = state.friends,
+            presence = presenceStates,
+            memberNicks = state.memberNicks,
+            selfNick = state.selfNick,
+            identityRules = state.identityRules,
+            connected = state.connected,
+            onDismiss = {
+                inviteNick = null
+                inviteChannelOpen = false
+            },
+            onInvite = { channel, nick ->
+                viewModel.invite(channel, nick) { accepted ->
+                    if (accepted) {
+                        inviteNick = null
+                        inviteChannelOpen = false
+                    }
+                }
+            },
         )
     }
 }
@@ -311,7 +380,7 @@ fun ChannelInfoContent(
     onSetTopic: (String) -> Unit = {},
     topicMutation: TopicMutationState = TopicMutationState.Idle,
     onBeginTopicEdit: () -> Unit = {},
-    onInvite: (String) -> Unit = {},
+    onInvite: () -> Unit = {},
     onSetChannelMode: (String, String) -> Unit = { _, _ -> },
     onFlagMode: (Char, Boolean) -> Unit = { _, _ -> },
     onSetKey: (String?) -> Unit = {},

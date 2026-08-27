@@ -9,6 +9,7 @@ import io.github.trevarj.motd.avatar.ConversationAvatarOutcome
 import io.github.trevarj.motd.avatar.NoopAvatarController
 import io.github.trevarj.motd.data.db.BufferEntity
 import io.github.trevarj.motd.data.db.BufferType
+import io.github.trevarj.motd.data.db.JoinedChannelRow
 import io.github.trevarj.motd.data.db.MemberEntity
 import io.github.trevarj.motd.data.db.MuteBacklogSuppression
 import io.github.trevarj.motd.data.db.NetworkIdentityDao
@@ -48,6 +49,7 @@ import javax.inject.Inject
 data class ChannelInfoUiState(
     val buffer: BufferEntity? = null,
     val sections: List<MemberSection> = emptyList(),
+    val memberNicks: List<String> = emptyList(),
     val memberCount: Int? = null,
     val rosterState: RosterLoadState = RosterLoadState.NOT_LOADED,
     val hasStaleMembers: Boolean = false,
@@ -66,6 +68,7 @@ data class ChannelInfoUiState(
     // while disconnected. Surfaced subtly in Channel Info rather than the chat header.
     val lagMs: Long? = null,
     val connected: Boolean = false,
+    val selfNick: String? = null,
     val sojuFileHostAvailable: Boolean = false,
     /**
      * ISUPPORT-derived mode vocabulary for this network, null until the connection is Ready. It
@@ -73,17 +76,30 @@ data class ChannelInfoUiState(
      * the app parses 324/367, so no control built on this may claim current channel state.
      */
     val modeCatalog: ModeCatalog? = null,
+    val joinedChannels: List<JoinedChannelRow> = emptyList(),
 )
 
 /** What a channel tool did, for the screen to phrase. The ViewModel owns no user-facing wording. */
-enum class ChannelToolSummary { MODE, INVITE, BAN, UNBAN, EXCEPTION }
+enum class ChannelToolSummary { MODE, BAN, UNBAN, EXCEPTION }
 
 /** One-shot feedback for an operator action, collected into the Channel Info snackbar. */
+data class QueuedChannelToolEvent(
+    val id: Long,
+    val event: ChannelToolEvent,
+)
+
 sealed interface ChannelToolEvent {
     data class Sent(
         val summary: ChannelToolSummary,
         val arg: String? = null,
     ) : ChannelToolEvent
+
+    data class InviteRequestSent(
+        val nick: String,
+        val channel: String,
+    ) : ChannelToolEvent
+
+    data object InviteSendFailed : ChannelToolEvent
 
     /** The network has no live client, so nothing was written. Never fail silently. */
     data object NotConnected : ChannelToolEvent
@@ -94,6 +110,7 @@ internal data class NetworkRuntime(
     val lagMs: Long?,
     val connected: Boolean,
     val isupport: Map<String, String>?,
+    val selfNick: String?,
 )
 
 /** Local write acceptance, distinct from a later server echo or numeric rejection. */
@@ -150,6 +167,7 @@ class ChannelInfoViewModel
         private val avatarController: AvatarController = NoopAvatarController,
     ) : ViewModel() {
         private val bufferIdFlow = MutableStateFlow<Long?>(null)
+        val presenceStates = connectionManager.presenceStates
         private val _topicMutation = MutableStateFlow<TopicMutationState>(TopicMutationState.Idle)
         val topicMutation: StateFlow<TopicMutationState> = _topicMutation
         private val _leaveMutation = MutableStateFlow<LeaveMutationState>(LeaveMutationState.Idle)
@@ -203,12 +221,18 @@ class ChannelInfoViewModel
         // Gather the per-roster inputs that don't depend on [bufferFlow]'s prefix order: lastSpoke,
         // the search query, friend/fool sets, and the identity rules. Sectioning/ranking happen in the
         // outer combine where [order] (derived from buffer) is available.
+        private val joinedChannelsFlow =
+            bufferFlow.flatMapLatest { buffer ->
+                buffer?.let { bufferRepository.observeJoinedChannels(it.networkId) } ?: flowOf(emptyList())
+            }
+
         private data class DerivedRoster(
             val lastSpoke: Map<String, Long>,
             val query: String,
             val friends: Set<String>,
             val fools: Set<String>,
             val identityRules: IrcIdentityRules,
+            val joinedChannels: List<JoinedChannelRow>,
         )
 
         private val derivedRosterFlow =
@@ -217,8 +241,9 @@ class ChannelInfoViewModel
                 queryFlow,
                 settingsRepository.settings,
                 identityRulesFlow,
-            ) { lastSpoke, query, settings, identityRules ->
-                DerivedRoster(lastSpoke, query, settings.friends, settings.fools, identityRules)
+                joinedChannelsFlow,
+            ) { lastSpoke, query, settings, identityRules, joinedChannels ->
+                DerivedRoster(lastSpoke, query, settings.friends, settings.fools, identityRules, joinedChannels)
             }
 
         // Latency, Ready flag and the live ISUPPORT snapshot for this channel's network. Reading
@@ -227,12 +252,12 @@ class ChannelInfoViewModel
         private val networkRuntimeFlow =
             bufferFlow.flatMapLatest { buffer ->
                 if (buffer == null) {
-                    flowOf(NetworkRuntime(null, connected = false, isupport = null))
+                    flowOf(NetworkRuntime(null, connected = false, isupport = null, selfNick = null))
                 } else {
                     connectionManager.lagStates
                         .combine(connectionManager.connectionStates) { lags, states ->
                             val ready = states[buffer.networkId] as? IrcClientState.Ready
-                            NetworkRuntime(lags[buffer.networkId], ready != null, ready?.isupport)
+                            NetworkRuntime(lags[buffer.networkId], ready != null, ready?.isupport, ready?.nick)
                         }
                 }
             }
@@ -278,6 +303,7 @@ class ChannelInfoViewModel
                 ChannelInfoUiState(
                     buffer = buffer,
                     sections = sections,
+                    memberNicks = members.map(MemberEntity::nick),
                     memberCount = presentation.memberCount,
                     rosterState = rosterState,
                     hasStaleMembers = presentation.hasStaleMembers,
@@ -290,8 +316,10 @@ class ChannelInfoViewModel
                     searchResults = searchResults,
                     lagMs = runtime.lagMs,
                     connected = runtime.connected,
+                    selfNick = runtime.selfNick,
                     sojuFileHostAvailable = runtime.isupport?.let(::sojuFileHostAdvertised) == true,
                     modeCatalog = modeCatalog,
+                    joinedChannels = derived.joinedChannels,
                 )
             }.stateIn(
                 scope = viewModelScope,
@@ -489,6 +517,13 @@ class ChannelInfoViewModel
 
         private val _toolEvents = MutableSharedFlow<ChannelToolEvent>(extraBufferCapacity = 4)
         val toolEvents: SharedFlow<ChannelToolEvent> = _toolEvents.asSharedFlow()
+        private val _inviteFeedback = MutableStateFlow<QueuedChannelToolEvent?>(null)
+        val inviteFeedback: StateFlow<QueuedChannelToolEvent?> = _inviteFeedback
+        private var nextInviteFeedbackId = 0L
+
+        fun acknowledgeInviteFeedback(id: Long) {
+            if (_inviteFeedback.value?.id == id) _inviteFeedback.value = null
+        }
 
         /**
          * Single write path for every operator action: resolves the live client, reports
@@ -622,11 +657,27 @@ class ChannelInfoViewModel
             grant: Boolean,
         ) = setListMask('b', mask, grant)
 
-        fun invite(nick: String) {
-            val trimmed = nick.trim().takeIf(String::isNotBlank) ?: return
-            dispatch(ChannelToolSummary.INVITE, arg = trimmed) { target ->
-                listOf(IrcMessage(command = "INVITE", params = listOf(trimmed, target)))
-            }
+        fun invite(
+            channel: JoinedChannelRow,
+            nick: String,
+            onResult: (Boolean) -> Unit = {},
+        ) = viewModelScope.launch {
+            val accepted =
+                try {
+                    connectionManager.inviteToChannel(channel.bufferId, nick)
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    false
+                }
+            val event =
+                if (accepted) {
+                    ChannelToolEvent.InviteRequestSent(nick.trim(), channel.displayName)
+                } else {
+                    ChannelToolEvent.InviteSendFailed
+                }
+            _inviteFeedback.value = QueuedChannelToolEvent(++nextInviteFeedbackId, event)
+            onResult(accepted)
         }
 
         fun setChannelMode(

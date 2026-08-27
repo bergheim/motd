@@ -5,6 +5,7 @@ import androidx.paging.RemoteMediator
 import io.github.trevarj.motd.data.db.BufferEntity
 import io.github.trevarj.motd.data.db.ChatListRow
 import io.github.trevarj.motd.data.db.InvitationEventRow
+import io.github.trevarj.motd.data.db.JoinedChannelRow
 import io.github.trevarj.motd.data.db.MemberEntity
 import io.github.trevarj.motd.data.db.MessageEntity
 import io.github.trevarj.motd.data.db.MonitorQueryRow
@@ -124,6 +125,9 @@ interface BufferRepository {
 
     /** Normalized CHANNEL names confirmed by EventProcessor self-JOIN persistence. */
     fun observeJoinedChannelNames(networkId: Long): Flow<Set<String>> = flowOf(emptySet())
+
+    /** Joined channel picker rows, scoped to one IRC network. */
+    fun observeJoinedChannels(networkId: Long): Flow<List<JoinedChannelRow>> = flowOf(emptyList())
 
     /** Joined channel produced by EventProcessor after an authoritative self-JOIN. */
     suspend fun joinedBufferId(

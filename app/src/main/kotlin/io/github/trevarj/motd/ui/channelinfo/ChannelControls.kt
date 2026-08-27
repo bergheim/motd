@@ -53,7 +53,7 @@ fun ChannelControlsSection(
     hostLoading: Boolean,
     onNickSelected: (String?) -> Unit,
     onFlagMode: (Char, Boolean) -> Unit,
-    onInvite: (String) -> Unit,
+    onInvite: () -> Unit,
     onSetKey: (String?) -> Unit,
     onSetLimit: (Int?) -> Unit,
     onSetListMask: (Char, String, Boolean) -> Unit,
@@ -80,7 +80,7 @@ fun ChannelControlsSection(
             headline = stringResource(R.string.channelinfo_invite_row),
             supporting = stringResource(R.string.channelinfo_invite_row_desc),
             tag = "channelinfo_invite_row",
-            onClick = { dialog = ChannelControlDialog.Invite },
+            onClick = onInvite,
         )
         if ('i' in modes.flagModes) {
             FlagModeRow(
@@ -185,19 +185,7 @@ fun ChannelControlsSection(
     }
 
     when (val open = dialog) {
-        null -> {
-            Unit
-        }
-
-        ChannelControlDialog.Invite -> {
-            InviteDialog(
-                onDismiss = { dialog = null },
-                onInvite = {
-                    onInvite(it)
-                    dialog = null
-                },
-            )
-        }
+        null -> {}
 
         ChannelControlDialog.Key -> {
             KeyDialog(
@@ -279,8 +267,6 @@ fun ChannelControlsSection(
 
 /** Which control dialog is open. Sealed so an exception dialog can carry its advertised letter. */
 private sealed interface ChannelControlDialog {
-    data object Invite : ChannelControlDialog
-
     data object Key : ChannelControlDialog
 
     data object Limit : ChannelControlDialog
@@ -394,32 +380,6 @@ private fun SetOrRemoveRow(
         },
         modifier = Modifier.fillMaxWidth().testTag(tag),
     )
-}
-
-@OptIn(ExperimentalComposeUiApi::class)
-@Composable
-private fun InviteDialog(
-    onDismiss: () -> Unit,
-    onInvite: (String) -> Unit,
-) {
-    var nick by remember { mutableStateOf("") }
-    ControlDialog(
-        tag = "channelinfo_invite_dialog",
-        title = stringResource(R.string.channelinfo_invite_row),
-        onDismiss = onDismiss,
-        confirmLabel = stringResource(R.string.channelinfo_invite),
-        confirmTag = "channelinfo_invite_confirm",
-        confirmEnabled = nick.isNotBlank(),
-        onConfirm = { onInvite(nick) },
-    ) {
-        OutlinedTextField(
-            value = nick,
-            onValueChange = { nick = it },
-            label = { Text(stringResource(R.string.channelinfo_invite_nick)) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth().testTag("channelinfo_invite_input"),
-        )
-    }
 }
 
 @OptIn(ExperimentalComposeUiApi::class)

@@ -24,6 +24,7 @@ import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.db.ComposerDraftEntity
 import io.github.trevarj.motd.data.db.DccTransferDao
 import io.github.trevarj.motd.data.db.DccTransferEntity
+import io.github.trevarj.motd.data.db.JoinedChannelRow
 import io.github.trevarj.motd.data.db.MemberEntity
 import io.github.trevarj.motd.data.db.MessageEntity
 import io.github.trevarj.motd.data.db.NetworkIdentityDao
@@ -736,6 +737,12 @@ class ChatViewModel
                 .observeBuffer(bufferId)
                 .distinctUntilChanged()
                 .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+        val joinedChannels: StateFlow<List<JoinedChannelRow>> =
+            buffer
+                .flatMapLatest { room ->
+                    room?.let { bufferRepository.observeJoinedChannels(it.networkId) } ?: flowOf(emptyList())
+                }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
         /**
          * Whether the app-global image/video stacks (Coil, ExoPlayer) may fetch network content for
@@ -1915,6 +1922,29 @@ class ChatViewModel
                 networkIgnoreRepository.addIgnore(networkId, nick)
                 dismissNickSheet()
             }
+
+        fun inviteToChannel(
+            channel: JoinedChannelRow,
+            nick: String,
+            onResult: (Boolean) -> Unit = {},
+        ) = viewModelScope.launch {
+            val accepted =
+                try {
+                    connectionManager.inviteToChannel(channel.bufferId, nick)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    false
+                }
+            uiEventQueue.enqueue(
+                if (accepted) {
+                    ChatUiEvent.InviteRequestSent(nick.trim(), channel.displayName)
+                } else {
+                    ChatUiEvent.InviteSendFailed
+                },
+            )
+            onResult(accepted)
+        }
 
         /**
          * True when the viewer holds op in the current CHANNEL buffer (drives moderation visibility,

@@ -14,6 +14,60 @@ class NickSheetKickUiTest {
     @get:Rule val compose = createComposeRule()
 
     @Test
+    fun inviteToChannelAction_isExposedForOtherUsers() {
+        var invites = 0
+        compose.setContent {
+            MotdTheme {
+                NickActionSheet(
+                    nick = "bob",
+                    isSelf = false,
+                    isFriend = false,
+                    isFool = false,
+                    canModerate = false,
+                    whois = null,
+                    onDismiss = {},
+                    onMessage = {},
+                    onMention = {},
+                    onToggleFriend = {},
+                    onToggleFool = {},
+                    onInviteToChannel = { invites++ },
+                    onOp = {},
+                    onVoice = {},
+                    onKick = {},
+                    onBan = { _, _ -> },
+                )
+            }
+        }
+
+        compose.onNodeWithTag("nick_sheet_invite_to_channel").performClick()
+        compose.runOnIdle { assertEquals(1, invites) }
+
+        compose.setContent {
+            MotdTheme {
+                NickActionSheet(
+                    nick = "me",
+                    isSelf = true,
+                    isFriend = false,
+                    isFool = false,
+                    canModerate = false,
+                    whois = null,
+                    onDismiss = {},
+                    onMessage = {},
+                    onMention = {},
+                    onToggleFriend = {},
+                    onToggleFool = {},
+                    onInviteToChannel = { invites++ },
+                    onOp = {},
+                    onVoice = {},
+                    onKick = {},
+                    onBan = { _, _ -> },
+                )
+            }
+        }
+        compose.onNodeWithTag("nick_sheet_invite_to_channel").assertDoesNotExist()
+    }
+
+    @Test
     fun kickDialog_presetChipFillsTheReasonAndConfirmPassesIt() {
         var reason: String? = null
         var kicks = 0
