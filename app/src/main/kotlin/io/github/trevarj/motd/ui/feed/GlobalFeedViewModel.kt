@@ -1,4 +1,4 @@
-package io.github.trevarj.motd.ui.firehose
+package io.github.trevarj.motd.ui.feed
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -8,7 +8,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.SearchHit
 import io.github.trevarj.motd.data.prefs.SettingsRepository
-import io.github.trevarj.motd.data.repo.FirehoseRepository
+import io.github.trevarj.motd.data.repo.GlobalFeedRepository
 import io.github.trevarj.motd.data.repo.NetworkRepository
 import io.github.trevarj.motd.data.visibility.MessageVisibilitySpec
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -24,13 +24,13 @@ import javax.inject.Inject
 /**
  * Recreate the Paging generation only when the part of the spec the query actually reads changes.
  *
- * `firehosePagingQuery` consumes `fools` and nothing else — presence mode, fools mode, and the
+ * `globalFeedPagingQuery` consumes `fools` and nothing else — presence mode, fools mode, and the
  * chat-local reveal never reach it — so projecting first keeps toggling those prefs from tearing
  * down the Pager and resetting scroll for an identical query. An equal projection keeps the
  * generation, since transforming the same PagingData would re-emit its single-collector page flow.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
-internal fun firehosePages(
+internal fun globalFeedPages(
     source: (MessageVisibilitySpec) -> Flow<PagingData<SearchHit>>,
     specs: Flow<MessageVisibilitySpec>,
 ): Flow<PagingData<SearchHit>> =
@@ -44,17 +44,17 @@ internal fun showsNetworkName(networks: Flow<List<NetworkEntity>>): Flow<Boolean
 
 /** Exposes the cross-buffer stream as a live [PagingData]. */
 @HiltViewModel
-class FirehoseViewModel
+class GlobalFeedViewModel
     @Inject
     constructor(
         settingsRepository: SettingsRepository,
         networkRepository: NetworkRepository,
-        firehoseRepository: FirehoseRepository,
+        globalFeedRepository: GlobalFeedRepository,
     ) : ViewModel() {
         /** Only a fools change rebuilds the Pager; every other change invalidates through Room. */
         val items: Flow<PagingData<SearchHit>> =
-            firehosePages(
-                source = firehoseRepository::firehose,
+            globalFeedPages(
+                source = globalFeedRepository::globalFeed,
                 specs = settingsRepository.settings.map(MessageVisibilitySpec::from),
             ).cachedIn(viewModelScope)
 

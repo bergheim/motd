@@ -344,7 +344,7 @@ data class RoomAliasEntity(
         // Smart presence filtering asks "did this actor speak in this room just before the event";
         // without an actor-leading index that lookup degrades to a serverTime range scan per row.
         Index(value = ["bufferId", "normalizedActor", "serverTime"]),
-        // The cross-buffer firehose orders every room's rows together. Every other index here is
+        // The global feed orders every room's rows together. Every other index here is
         // bufferId-prefixed and cannot serve that scan, leaving it a full sort of the table.
         // (serverTime, id) only: timelineOrder is per-buffer and not comparable across buffers.
         Index(value = ["serverTime", "id"]),

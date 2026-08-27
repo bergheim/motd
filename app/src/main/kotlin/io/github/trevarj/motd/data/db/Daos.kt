@@ -1039,12 +1039,12 @@ interface MessageDao {
     fun pagingSource(query: SupportSQLiteQuery): PagingSource<Int, MessageEntity>
 
     /**
-     * One keyset page of the cross-buffer firehose, same projection and joins as [search].
-     * `FirehosePagingSource` owns paging and observes the joined tables itself, so this stays a
+     * One keyset page of the global feed, same projection and joins as [search].
+     * `GlobalFeedPagingSource` owns paging and observes the joined tables itself, so this stays a
      * plain read: no COUNT, no OFFSET.
      */
     @RawQuery
-    suspend fun firehosePage(query: SupportSQLiteQuery): List<SearchHit>
+    suspend fun globalFeedPage(query: SupportSQLiteQuery): List<SearchHit>
 
     @RawQuery
     suspend fun rawMessage(query: SupportSQLiteQuery): MessageEntity?

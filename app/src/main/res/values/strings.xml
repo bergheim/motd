@@ -4,7 +4,7 @@
 
     <!-- Chat list (WP6) -->
     <string name="chatlist_search">Search</string>
-    <string name="chatlist_firehose">Firehose</string>
+    <string name="chatlist_feed">Global Feed</string>
     <string name="chatlist_settings">Settings</string>
     <string name="chatlist_new_conversation">New conversation</string>
     <string name="chatlist_scroll_to_top">Scroll to top</string>
@@ -242,6 +242,9 @@
     <string name="labs_agentwire_desc">Show the experimental agent harness in channels activated by an Agentwire v1 topic. Off by default.</string>
     <string name="labs_agentwire_repo">Repo</string>
     <string name="labs_agentwire_url" translatable="false">https://github.com/trevarj/agentwire</string>
+    <string name="labs_feed_section">Feed</string>
+    <string name="labs_global_feed">Global Feed</string>
+    <string name="labs_global_feed_desc">Merge every channel and DM into one stream, opened from the drawer or the chat list. Off by default.</string>
     <string name="settings_upload_destination">Default destination</string>
     <string name="settings_upload_termbin_warning">Termbin sends text without encryption to a public service. Never upload passwords or private information.</string>
     <string name="settings_upload_endpoint">Service endpoint</string>
@@ -349,14 +352,14 @@
     <string name="search_prompt_message">Type to search. Use from:nick to filter by sender.</string>
     <string name="search_section_buffers">Channels &amp; DMs</string>
 
-    <!-- Firehose: unified cross-buffer conversation stream -->
-    <string name="firehose_title">Firehose</string>
-    <string name="firehose_empty_title">Nothing here yet</string>
-    <string name="firehose_empty_message">Conversation lines from every channel and DM appear here as they arrive.</string>
-    <string name="firehose_error_title">Couldn\'t load the firehose</string>
-    <string name="firehose_error_message">The stream could not be read. Try again.</string>
-    <string name="firehose_retry">Retry</string>
-    <string name="firehose_open_message">Open in conversation</string>
+    <!-- Global feed: unified cross-buffer conversation stream -->
+    <string name="feed_title">Global Feed</string>
+    <string name="feed_empty_title">Nothing here yet</string>
+    <string name="feed_empty_message">Conversation lines from every channel and DM appear here as they arrive.</string>
+    <string name="feed_error_title">Couldn\'t load the global feed</string>
+    <string name="feed_error_message">The stream could not be read. Try again.</string>
+    <string name="feed_retry">Retry</string>
+    <string name="feed_open_message">Open in conversation</string>
 
     <!-- Channel info (WP8) -->
     <string name="channelinfo_title">Channel info</string>
@@ -796,7 +799,7 @@
     <string name="drawer_networks">Networks</string>
     <string name="drawer_clear_filter">Show all chats</string>
     <string name="drawer_add_network">Add network</string>
-    <string name="drawer_firehose">Firehose</string>
+    <string name="drawer_feed">Global Feed</string>
     <string name="drawer_go_offline">Go offline</string>
     <string name="drawer_go_online">Go online</string>
     <string name="drawer_settings">Settings</string>
