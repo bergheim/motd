@@ -1,6 +1,7 @@
 package io.github.trevarj.motd.data.sync
 
 import androidx.room.withTransaction
+import io.github.trevarj.motd.bouncer.isBouncerConsole
 import io.github.trevarj.motd.data.db.AppStateEntity
 import io.github.trevarj.motd.data.db.BufferEntity
 import io.github.trevarj.motd.data.db.BufferType
@@ -35,26 +36,35 @@ class BufferStore
             db.withTransaction {
                 val dao = db.bufferDao()
                 val aliasDao = db.roomAliasDao()
+                // soju's console is not a conversation: a caller may ask for a QUERY and still get
+                // the console. Role-scoped, or a real user holding that nick elsewhere would lose
+                // their DM room.
+                val effectiveType =
+                    if (db.networkDao().isBouncerConsole(networkId, normalizedName)) {
+                        BufferType.SERVER
+                    } else {
+                        type
+                    }
                 val namespace =
-                    when (type) {
+                    when (effectiveType) {
                         BufferType.CHANNEL -> RoomAliasNamespace.CHANNEL
                         BufferType.QUERY -> RoomAliasNamespace.PROVISIONAL_NICK
                         BufferType.SERVER -> RoomAliasNamespace.LEGACY_NAME
                     }
-                if (type == BufferType.QUERY) {
+                if (effectiveType == BufferType.QUERY) {
                     resolveQueryRoom(networkId, normalizedName, account = null)?.let {
                         return@withTransaction it
                     }
                 } else {
                     aliasDao.byValue(networkId, namespace, normalizedName)?.let { alias ->
-                        dao.observeById(alias.roomId)?.takeIf { it.type == type }?.let {
+                        dao.observeById(alias.roomId)?.takeIf { it.type == effectiveType }?.let {
                             return@withTransaction it
                         }
                     }
                 }
                 val nameCollision = dao.byName(networkId, normalizedName)
-                if (nameCollision?.type == type) return@withTransaction nameCollision
-                if (type == BufferType.CHANNEL && nameCollision?.type == BufferType.QUERY) {
+                if (nameCollision?.type == effectiveType) return@withTransaction nameCollision
+                if (effectiveType == BufferType.CHANNEL && nameCollision?.type == BufferType.QUERY) {
                     val hasAccountIdentity =
                         aliasDao
                             .forRoom(nameCollision.id)
@@ -97,14 +107,14 @@ class BufferStore
                     if (nameCollision == null) {
                         normalizedName
                     } else {
-                        "$normalizedName\u0000${type.name.lowercase()}"
+                        "$normalizedName\u0000${effectiveType.name.lowercase()}"
                     }
                 val candidate =
                     BufferEntity(
                         networkId = networkId,
                         name = storedName,
                         displayName = displayName,
-                        type = type,
+                        type = effectiveType,
                         dismissed = initiallyDismissed,
                     )
                 val insertedId = dao.insertIgnore(candidate)
@@ -122,7 +132,7 @@ class BufferStore
                         namespace = namespace,
                         value = normalizedName,
                         roomId = room.id,
-                        verified = type == BufferType.CHANNEL,
+                        verified = effectiveType == BufferType.CHANNEL,
                     ),
                 )
                 room

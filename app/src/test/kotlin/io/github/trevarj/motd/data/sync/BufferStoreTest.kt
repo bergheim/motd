@@ -123,6 +123,47 @@ class BufferStoreTest {
         }
 
     @Test
+    fun bouncerServIsAlwaysTheConsole_whicheverTypeTheCallerAsksFor() =
+        runTest {
+            bouncerRoot()
+            val store = BufferStore(db)
+
+            val requestedAsQuery = store.getOrCreate(networkId, "bouncerserv", "BouncerServ", BufferType.QUERY)
+            val requestedAgain =
+                store.getOrCreate(
+                    networkId,
+                    "bouncerserv",
+                    "BouncerServ",
+                    BufferType.QUERY,
+                    initiallyDismissed = true,
+                )
+
+            assertEquals(BufferType.SERVER, requestedAsQuery.type)
+            assertEquals(requestedAsQuery.id, requestedAgain.id)
+            assertEquals(BufferType.SERVER, db.bufferDao().byName(networkId, "bouncerserv")?.type)
+            assertNull(store.resolveQueryRoom(networkId, "bouncerserv", account = null))
+            // No disambiguated second row: the query request resolved onto the console itself.
+            assertNull(db.bufferDao().byName(networkId, "bouncerserv\u0000query"))
+        }
+
+    /** Off a bouncer root the nick belongs to whoever grabbed it, so the DM room must stay a query. */
+    @Test
+    fun bouncerServOnAPlainNetworkIsAnOrdinaryQuery() =
+        runTest {
+            val store = BufferStore(db)
+
+            val room = store.getOrCreate(networkId, "bouncerserv", "BouncerServ", BufferType.QUERY)
+
+            assertEquals(BufferType.QUERY, room.type)
+            assertEquals(room.id, store.resolveQueryRoom(networkId, "bouncerserv", account = null)?.id)
+        }
+
+    private suspend fun bouncerRoot() {
+        val row = db.networkDao().byId(networkId)!!
+        db.networkDao().update(row.copy(role = NetworkRole.BOUNCER_ROOT))
+    }
+
+    @Test
     fun channelRenameRetiresOldAliasAndKeepsRoster() =
         runTest {
             val store = BufferStore(db)

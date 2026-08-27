@@ -6,10 +6,6 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteOpenHelper
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.core.app.ApplicationProvider
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -455,40 +451,6 @@ class AllMigrationsTest {
 
     /** Creates the real v1 tables, indices, FTS triggers, and Room identity from the tracked JSON. */
     private fun createExportedVersion1(db: SupportSQLiteDatabase) = createExportedVersion(db, 1)
-
-    private fun createExportedVersion(
-        db: SupportSQLiteDatabase,
-        version: Int,
-    ) {
-        val resource = "${MotdDatabase::class.java.canonicalName}/$version.json"
-        val schema =
-            checkNotNull(javaClass.classLoader?.getResourceAsStream(resource)) {
-                "missing checked-in Room schema resource $resource"
-            }.bufferedReader().use { Json.parseToJsonElement(it.readText()).jsonObject }
-        val database = schema.getValue("database").jsonObject
-        database.getValue("entities").jsonArray.forEach { element ->
-            val entity = element.jsonObject
-            val tableName = entity.getValue("tableName").jsonPrimitive.content
-
-            fun executeTemplate(sql: String) {
-                db.execSQL(sql.replace("\${TABLE_NAME}", tableName))
-            }
-            executeTemplate(entity.getValue("createSql").jsonPrimitive.content)
-            entity["indices"]?.jsonArray.orEmpty().forEach { index ->
-                executeTemplate(
-                    index.jsonObject
-                        .getValue("createSql")
-                        .jsonPrimitive.content,
-                )
-            }
-            entity["contentSyncTriggers"]?.jsonArray.orEmpty().forEach { trigger ->
-                db.execSQL(trigger.jsonPrimitive.content)
-            }
-        }
-        database.getValue("setupQueries").jsonArray.forEach { query ->
-            db.execSQL(query.jsonPrimitive.content)
-        }
-    }
 
     private companion object {
         const val DB_NAME = "all-migrations-test.db"

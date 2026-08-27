@@ -27,6 +27,7 @@ class FirehosePagingQueryTest {
         val sql = firehosePagingQuery(MessageVisibilitySpec(), networks = emptyList()).sql
 
         assertTrue(sql.contains("b.type IN ('CHANNEL','QUERY')"))
+        assertTrue(sql.contains("lower(b.name) != 'bouncerserv'"))
         assertTrue(sql.contains("b.dismissed = 0"))
         assertTrue(sql.contains("b.archived = 0"))
         assertTrue(sql.contains("b.pendingCloseAt IS NULL"))

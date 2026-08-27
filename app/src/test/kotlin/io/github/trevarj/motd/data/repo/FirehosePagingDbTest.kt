@@ -97,6 +97,8 @@ class FirehosePagingDbTest {
             val closing = db.bufferDao().insert(buffer(networkA, "#closing").copy(pendingCloseAt = 5_000))
             val redirected = db.bufferDao().insert(buffer(networkA, "#renamed").copy(redirectToRoomId = bufferA))
             val console = db.bufferDao().insert(buffer(networkB, "libera", type = BufferType.SERVER))
+            val bouncerServ =
+                db.bufferDao().insert(buffer(networkA, "bouncerserv", type = BufferType.QUERY))
             val ids =
                 db.messageDao().insertAll(
                     listOf(
@@ -107,6 +109,7 @@ class FirehosePagingDbTest {
                         message(closing, "closing", serverTime = 140, dedupKey = "d3"),
                         message(redirected, "redirected", serverTime = 150, dedupKey = "d4"),
                         message(console, "console", serverTime = 160, dedupKey = "d5"),
+                        message(bouncerServ, "bouncer help", serverTime = 170, dedupKey = "d6"),
                     ),
                 )
             db.canonicalTimelineDao().upsertEventRedirect(

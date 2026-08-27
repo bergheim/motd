@@ -8,6 +8,7 @@ import androidx.core.content.ContextCompat
 import androidx.room.withTransaction
 import dagger.hilt.android.qualifiers.ApplicationContext
 import io.github.trevarj.motd.avatar.AvatarCoordinator
+import io.github.trevarj.motd.bouncer.isBouncerConsole
 import io.github.trevarj.motd.bouncer.redactBouncerServCommand
 import io.github.trevarj.motd.data.db.BufferEntity
 import io.github.trevarj.motd.data.db.BufferType
@@ -301,8 +302,8 @@ internal fun isGenericRetryEligible(
     message: MessageEntity,
 ): Boolean =
     message.isSelf && message.failed && message.msgid == null &&
+        // SERVER covers the bouncer console; a user merely nicked BouncerServ elsewhere may retry.
         buffer.type != BufferType.SERVER &&
-        !buffer.ircTarget.equals("BouncerServ", ignoreCase = true) &&
         !message.text.contains("<redacted>")
 
 internal data class CurrentReadTarget(
@@ -1523,7 +1524,7 @@ class ConnectionManagerImpl
             val pending = eventProcessor.pendingOutgoingByLabel(networkId, event.label) ?: return
             if (pending.kind != MessageKind.PRIVMSG || !pending.isSelf || pending.msgid != null || pending.failed) return
             val buffer = bufferDao.observeById(pending.bufferId) ?: return
-            if (buffer.networkId != networkId || buffer.ircTarget.equals("BouncerServ", ignoreCase = true)) return
+            if (buffer.networkId != networkId || buffer.isBouncerConsole) return
             val client = clientFor(networkId)
             val ready = client?.state?.value as? IrcClientState.Ready
             val wireReply =
@@ -2197,7 +2198,8 @@ class ConnectionManagerImpl
                 val buffer =
                     bufferDao.observeById(bufferId)
                         ?: return@sending SendAcceptance.Rejected(SendRejectionReason.BUFFER_NOT_FOUND)
-                if (buffer.type == BufferType.SERVER) {
+                // The soju console is the one SERVER-typed room that accepts writes.
+                if (buffer.type == BufferType.SERVER && !buffer.isBouncerConsole) {
                     return@sending SendAcceptance.Rejected(SendRejectionReason.UNSUPPORTED_BUFFER)
                 }
                 // The composer is disabled when a channel is parted, but joined can flip during a submit
@@ -2230,11 +2232,11 @@ class ConnectionManagerImpl
                         visibleChannelPrefix = parent?.let { replyPrefs.config.first().visibleChannelPrefix } == true,
                         replyTagAllowed = replyTagAllowed,
                     )
-                val isBouncerServ = buffer.ircTarget.equals("BouncerServ", ignoreCase = true)
+                val bouncerServConsole = buffer.isBouncerConsole
                 val preferLogicalMultiline =
                     client != null &&
                         ready != null &&
-                        !isBouncerServ &&
+                        !bouncerServConsole &&
                         !delivery.text
                             .replace("\r\n", "\n")
                             .replace('\r', '\n')
@@ -2243,7 +2245,7 @@ class ConnectionManagerImpl
                 val chunks =
                     prepareOutgoingMessageChunks(
                         delivery.text,
-                        isBouncerServ,
+                        bouncerServConsole,
                         preferLogicalMultiline = preferLogicalMultiline,
                     )
                 if (chunks.isEmpty()) {

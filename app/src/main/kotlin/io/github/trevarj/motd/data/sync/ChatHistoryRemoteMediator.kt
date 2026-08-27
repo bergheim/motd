@@ -4,6 +4,7 @@ import androidx.paging.ExperimentalPagingApi
 import androidx.paging.LoadType
 import androidx.paging.PagingState
 import androidx.paging.RemoteMediator
+import io.github.trevarj.motd.bouncer.isBouncerConsole
 import io.github.trevarj.motd.data.db.BufferDao
 import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.db.HistoryCursorDao
@@ -113,10 +114,11 @@ class ChatHistoryRemoteMediator(
             val buffer =
                 bufferDao.observeById(bufferId)
                     ?: return endLoad(loadType, "missing_buffer")
-            if (buffer.type == BufferType.SERVER) {
+            if (buffer.type == BufferType.SERVER && !buffer.isBouncerConsole) {
                 // Console buffers have no CHATHISTORY target. With the mediator attached
                 // unconditionally, mirror the UI's Hidden rule here or every console open would
-                // emit junk `CHATHISTORY BEFORE <servername>` traffic.
+                // emit junk `CHATHISTORY BEFORE <servername>` traffic. soju's BouncerServ room is the
+                // exception: it is a real target the bouncer answers.
                 return endLoad(loadType, "server_buffer")
             }
             val networkId = buffer.networkId

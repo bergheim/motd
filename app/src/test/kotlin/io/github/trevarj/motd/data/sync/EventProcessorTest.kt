@@ -130,6 +130,12 @@ class EventProcessorTest {
                     .Refresh(null, 100, false),
             ).let { (it as androidx.paging.PagingSource.LoadResult.Page).data }
 
+    /** The fixture network is DIRECT; soju's console only exists on a bouncer root. */
+    private suspend fun makeBouncerRoot() {
+        val row = db.networkDao().byId(networkId)!!
+        db.networkDao().update(row.copy(role = NetworkRole.BOUNCER_ROOT))
+    }
+
     @Test
     fun chatMessage_channel_insertsRow_andAutoCreatesBuffer() =
         runTest {
@@ -3454,10 +3460,9 @@ class EventProcessorTest {
         }
 
     @Test
-    fun rootBouncerServ_privmsg_isPersistedSeenWithoutNotification_butNoticeRemainsOrdinary() =
+    fun bouncerServ_isServerConsole_notChat_butItsNoticesStillNotify() =
         runTest {
-            val direct = db.networkDao().byId(networkId)!!
-            db.networkDao().update(direct.copy(role = NetworkRole.BOUNCER_ROOT))
+            makeBouncerRoot()
             val notifiedKinds = mutableListOf<IrcEvent.ChatKind>()
             val recording =
                 EventProcessor(
@@ -3489,11 +3494,6 @@ class EventProcessorTest {
                     replyToMsgid = null,
                 ),
             )
-            val buffer = db.bufferDao().byName(networkId, "bouncerserv")!!
-            assertEquals(2_000L, db.bufferDao().observeById(buffer.id)!!.localReadAnchorTime)
-            assertEquals(null, db.bufferDao().observeById(buffer.id)!!.readMarkerTime)
-            assertTrue(notifiedKinds.isEmpty())
-
             recording.process(
                 networkId,
                 IrcEvent.ChatMessage(
@@ -3506,12 +3506,125 @@ class EventProcessorTest {
                     replyToMsgid = null,
                 ),
             )
+            val buffer = db.bufferDao().byName(networkId, "bouncerserv")!!
+            assertEquals(BufferType.SERVER, buffer.type)
+            // The console is hidden from the chat list, so a swallowed NOTICE would leave soju's
+            // "network X disconnected" warning with no signal at all. Its PRIVMSG replies stay quiet.
             assertEquals(listOf(IrcEvent.ChatKind.NOTICE), notifiedKinds)
+            assertTrue(
+                db
+                    .bufferDao()
+                    .observeChatList()
+                    .first()
+                    .isEmpty(),
+            )
+        }
+
+    /** Off a bouncer root that nick is an ordinary user: the DM must stay a query and notify. */
+    @Test
+    fun bouncerServ_onAPlainNetwork_staysAQueryAndNotifies() =
+        runTest {
+            val notifiedKinds = mutableListOf<IrcEvent.ChatKind>()
+            val recording =
+                EventProcessor(
+                    db,
+                    TypingTrackerImpl(),
+                    object : MessageNotifier {
+                        override suspend fun onIncoming(
+                            networkId: Long,
+                            bufferId: Long,
+                            type: BufferType,
+                            hasMention: Boolean,
+                            message: IrcEvent.ChatMessage,
+                        ) {
+                            notifiedKinds += message.kind
+                        }
+                    },
+                )
+            recording.onRegistered(networkId, "me", mapOf("CASEMAPPING" to "rfc1459"))
+
+            recording.process(
+                networkId,
+                IrcEvent.ChatMessage(
+                    ctx = ctx(msgid = "peer-dm", time = 2_000),
+                    kind = IrcEvent.ChatKind.PRIVMSG,
+                    source = Prefix("BouncerServ"),
+                    target = "me",
+                    text = "hey, nice nick",
+                    isSelf = false,
+                    replyToMsgid = null,
+                ),
+            )
+
+            val buffer = db.bufferDao().byName(networkId, "bouncerserv")!!
+            assertEquals(BufferType.QUERY, buffer.type)
+            assertEquals(listOf(IrcEvent.ChatKind.PRIVMSG), notifiedKinds)
+            assertEquals(
+                listOf(buffer.id),
+                db
+                    .bufferDao()
+                    .observeChatList()
+                    .first()
+                    .map { it.bufferId },
+            )
+            // A real user's words are stored as sent: redaction is console-only.
+            assertEquals("hey, nice nick", pagingList(buffer.id).single().text)
+        }
+
+    /** The history path asks for a QUERY; `BufferStore` still returns the console. */
+    @Test
+    fun bouncerServ_historyQueryPath_stillYieldsTheServerConsole() =
+        runTest {
+            makeBouncerRoot()
+            processor.onRegistered(networkId, "me", mapOf("CASEMAPPING" to "rfc1459"))
+
+            val roomId = processor.ensureHistoryQuery(networkId, "BouncerServ", "bouncerserv")
+
+            val buffer = db.bufferDao().byName(networkId, "bouncerserv")!!
+            assertEquals(roomId, buffer.id)
+            assertEquals(BufferType.SERVER, buffer.type)
+            assertTrue(
+                db
+                    .bufferDao()
+                    .observeChatList()
+                    .first()
+                    .isEmpty(),
+            )
+        }
+
+    @Test
+    fun bouncerServ_livePrivmsg_reusesTheSingleConsoleRoom() =
+        runTest {
+            makeBouncerRoot()
+            val existing = processor.ensureHistoryQuery(networkId, "BouncerServ", "bouncerserv")
+            processor.process(
+                networkId,
+                IrcEvent.ChatMessage(
+                    ctx = ctx(msgid = "promote"),
+                    kind = IrcEvent.ChatKind.PRIVMSG,
+                    source = Prefix("BouncerServ"),
+                    target = "me",
+                    text = "help",
+                    isSelf = false,
+                    replyToMsgid = null,
+                ),
+            )
+            val buffer = db.bufferDao().byName(networkId, "bouncerserv")!!
+            assertEquals(existing, buffer.id)
+            assertEquals(BufferType.SERVER, buffer.type)
+            assertTrue(
+                db
+                    .bufferDao()
+                    .observeChatList()
+                    .first()
+                    .isEmpty(),
+            )
         }
 
     @Test
     fun bouncerServ_self_echo_is_redacted_before_room_and_dedup() =
         runTest {
+            makeBouncerRoot()
             processor.process(
                 networkId,
                 IrcEvent.ChatMessage(
@@ -3525,7 +3638,46 @@ class EventProcessorTest {
                 ),
             )
             val buffer = db.bufferDao().byName(networkId, "bouncerserv")!!
+            assertEquals(BufferType.SERVER, buffer.type)
             val row = pagingList(buffer.id).single()
+            assertFalse(row.text.contains("hunter2"))
+            assertTrue(row.text.contains("<redacted>"))
+        }
+
+    /**
+     * Targeted replay resolves the console SERVER-typed, so a redaction gated on "this is a DM"
+     * never fired and stored the credential verbatim — readable from search.
+     */
+    @Test
+    fun bouncerServ_replayedEcho_isRedactedOnTheTargetedHistoryRoute() =
+        runTest {
+            makeBouncerRoot()
+            val console = processor.ensureHistoryQuery(networkId, "BouncerServ", "bouncerserv")
+            val echo =
+                IrcEvent.ChatMessage(
+                    ctx("replayed-command", 100).copy(batchId = "history"),
+                    IrcEvent.ChatKind.PRIVMSG,
+                    Prefix("me"),
+                    "BouncerServ",
+                    "sasl set-plain -network libera alice hunter2",
+                    true,
+                    null,
+                )
+
+            processor.persistHistoryPage(
+                networkId,
+                ChatHistoryRequest(ChatHistoryRequest.Subcommand.LATEST, "BouncerServ", limit = 50),
+                ChatHistoryResponse.Messages(
+                    events = listOf(echo),
+                    oldest = ChatHistoryReference("replayed-command", 100),
+                    newest = ChatHistoryReference("replayed-command", 100),
+                    endOfHistory = false,
+                    primaryMessageCount = 1,
+                ),
+                expectedRoomId = console,
+            )
+
+            val row = pagingList(console).single()
             assertFalse(row.text.contains("hunter2"))
             assertTrue(row.text.contains("<redacted>"))
         }
