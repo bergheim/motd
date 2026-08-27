@@ -53,6 +53,7 @@ import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DoneAll
+import androidx.compose.material.icons.outlined.DynamicFeed
 import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.Mail
 import androidx.compose.material.icons.outlined.Notifications
@@ -175,6 +176,7 @@ fun ChatListScreen(
     onOpenAudioOrigin: (AudioPlaybackOrigin) -> Unit = {},
     onOpenSettings: () -> Unit = {},
     onOpenSearch: () -> Unit = {},
+    onOpenFirehose: () -> Unit = {},
     onOpenOnboarding: () -> Unit = {},
     // Round 5: drawer/network-management pass-throughs.
     onOpenNetworkSettings: (Long) -> Unit = {},
@@ -229,6 +231,7 @@ fun ChatListScreen(
         onOpenBuffer = onOpenBuffer,
         onOpenSettings = onOpenSettings,
         onOpenSearch = onOpenSearch,
+        onOpenFirehose = onOpenFirehose,
         onSetPinned = viewModel::setPinned,
         onSetMuted = viewModel::setMuted,
         onSetArchived = viewModel::setArchived,
@@ -302,6 +305,7 @@ fun ChatListContent(
     onOpenBuffer: (Long) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenSearch: () -> Unit,
+    onOpenFirehose: () -> Unit = {},
     onSetPinned: (Collection<Long>, Boolean) -> Unit,
     onSetMuted: (Collection<Long>, Boolean) -> Unit,
     onSetArchived: (Collection<Long>, Boolean) -> Unit = { _, _ -> },
@@ -418,6 +422,10 @@ fun ChatListContent(
                 onOpenSettings = {
                     onOpenSettings()
                     scope.launch { drawerState.close() }
+                },
+                onOpenFirehose = {
+                    scope.launch { drawerState.close() }
+                    onOpenFirehose()
                 },
                 onMarkAllRead = {
                     scope.launch { drawerState.close() }
@@ -606,6 +614,12 @@ fun ChatListContent(
                                             Icon(
                                                 Icons.Outlined.Search,
                                                 contentDescription = stringResource(R.string.chatlist_search),
+                                            )
+                                        }
+                                        IconButton(onClick = onOpenFirehose, modifier = Modifier.testTag("chatlist_open_firehose")) {
+                                            Icon(
+                                                Icons.Outlined.DynamicFeed,
+                                                contentDescription = stringResource(R.string.chatlist_firehose),
                                             )
                                         }
                                         IconButton(onClick = onOpenSettings, modifier = Modifier.testTag("chatlist_open_settings")) {
