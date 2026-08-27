@@ -48,6 +48,31 @@ class TypedDaoProjectionTest {
             assertEquals(listOf(BufferTargetRow(channel, "#motd")), db.bufferDao().openTargets(networkId))
         }
 
+    /**
+     * soju answers CHATHISTORY for its console, so the resync pass has to see it. Every other SERVER
+     * row — and that nick off a bouncer root — stays out.
+     */
+    @Test
+    fun `open targets carry the bouncer console only on a bouncer root`() =
+        runTest {
+            val plainNetwork = db.networkDao().insert(network("plain"))
+            val root = db.networkDao().byId(networkId)!!
+            db.networkDao().update(root.copy(role = NetworkRole.BOUNCER_ROOT))
+            val console =
+                db.bufferDao().insert(
+                    buffer(networkId, "bouncerserv", BufferType.SERVER).copy(displayName = "BouncerServ"),
+                )
+            db.bufferDao().insert(buffer(networkId, "*", BufferType.SERVER))
+            val strayConsole =
+                db.bufferDao().insert(buffer(plainNetwork, "bouncerserv", BufferType.SERVER))
+
+            assertEquals(
+                listOf(BufferTargetRow(console, "BouncerServ")),
+                db.bufferDao().openTargets(networkId),
+            )
+            assertTrue(db.bufferDao().openTargets(plainNetwork).none { it.id == strayConsole })
+        }
+
     @Test
     fun `history boundaries exclude local clock values but retain exact msgids`() =
         runTest {

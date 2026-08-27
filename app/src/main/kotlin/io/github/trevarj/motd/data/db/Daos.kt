@@ -212,8 +212,7 @@ interface BufferDao {
                        AS localReadAnchorOrder
             FROM buffers base
             LEFT JOIN messages anchor ON anchor.id = base.localReadAnchorEventId
-            WHERE base.type != 'SERVER' AND lower(base.name) != 'bouncerserv'
-              AND base.dismissed = 0
+            WHERE base.type != 'SERVER' AND base.dismissed = 0
               AND base.pendingCloseAt IS NULL AND base.redirectToRoomId IS NULL
         )
         SELECT
@@ -385,9 +384,18 @@ interface BufferDao {
     )
     fun observeJoinedChannelNames(networkId: Long): Flow<List<String>>
 
+    /**
+     * History-resync targets. The soju console is the one SERVER row soju answers CHATHISTORY for, so
+     * it is admitted here — role-scoped, since elsewhere that nick is an ordinary user's query — and
+     * carries its server spelling like any other conversation.
+     */
     @Query(
-        """SELECT id, CASE WHEN type = 'SERVER' THEN name ELSE displayName END AS name, pinned
-           FROM buffers WHERE networkId = :networkId AND type != 'SERVER'
+        """SELECT id,
+                  CASE WHEN type = 'SERVER' AND lower(name) != 'bouncerserv' THEN name ELSE displayName END AS name,
+                  pinned
+           FROM buffers WHERE networkId = :networkId
+             AND (type != 'SERVER' OR (lower(name) = 'bouncerserv' AND EXISTS (
+                   SELECT 1 FROM networks n WHERE n.id = buffers.networkId AND n.role = 'BOUNCER_ROOT')))
              AND pendingCloseAt IS NULL AND redirectToRoomId IS NULL ORDER BY id""",
     )
     suspend fun openTargets(networkId: Long): List<BufferTargetRow>
@@ -1031,19 +1039,12 @@ interface MessageDao {
     fun pagingSource(query: SupportSQLiteQuery): PagingSource<Int, MessageEntity>
 
     /**
-     * Cross-buffer firehose stream. Every table the query joins is observed, not just messages: a
-     * rename, a room leaving the stream, or a redirect landing must invalidate immediately, so the
-     * stream can never go on serving a stale row set until the next message happens to arrive.
+     * One keyset page of the cross-buffer firehose, same projection and joins as [search].
+     * `FirehosePagingSource` owns paging and observes the joined tables itself, so this stays a
+     * plain read: no COUNT, no OFFSET.
      */
-    @RawQuery(
-        observedEntities = [
-            MessageEntity::class,
-            BufferEntity::class,
-            NetworkEntity::class,
-            EventRedirectEntity::class,
-        ],
-    )
-    fun firehosePagingSource(query: SupportSQLiteQuery): PagingSource<Int, FirehoseRow>
+    @RawQuery
+    suspend fun firehosePage(query: SupportSQLiteQuery): List<SearchHit>
 
     @RawQuery
     suspend fun rawMessage(query: SupportSQLiteQuery): MessageEntity?
@@ -1572,6 +1573,10 @@ interface MessageDao {
     fun observeBouncerTranscript(networkId: Long): Flow<List<BouncerTranscriptRow>>
 }
 
+/**
+ * One message plus its conversation tag and the identity columns needed to apply
+ * [io.github.trevarj.motd.data.visibility.MessageVisibilityPolicy] to a row from an unknown network.
+ */
 data class SearchHit(
     @Embedded val message: MessageEntity,
     val bufferDisplayName: String,
@@ -1581,13 +1586,6 @@ data class SearchHit(
     val avatarOverrideModel: String? = null,
     val caseMapping: String? = null,
     val chanTypes: String? = null,
-)
-
-/** One firehose line: the canonical message plus the conversation tag rendered beside it. */
-data class FirehoseRow(
-    @Embedded val message: MessageEntity,
-    val bufferDisplayName: String,
-    val networkName: String,
 )
 
 data class MessageBoundaryRow(

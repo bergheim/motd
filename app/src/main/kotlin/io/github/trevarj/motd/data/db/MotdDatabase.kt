@@ -34,7 +34,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         MemberEntity::class,
         DccTransferEntity::class,
     ],
-    version = 36,
+    version = 37,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -938,6 +938,7 @@ val MIGRATION_34_35 =
 /**
  * v35 -> v36 indexes the cross-buffer scan the firehose reads and repairs soju console rows older
  * builds stored as queries. "bouncerserv" has no RFC1459-foldable character, so `lower()` suffices.
+ * Bouncer roots only: on any other network that nick is an ordinary user whose DM must stay a query.
  */
 val MIGRATION_35_36 =
     object : Migration(35, 36) {
@@ -948,7 +949,27 @@ val MIGRATION_35_36 =
             )
             db.execSQL(
                 "UPDATE buffers SET type = 'SERVER' " +
-                    "WHERE lower(name) = 'bouncerserv' AND type = 'QUERY'",
+                    "WHERE lower(name) = 'bouncerserv' AND type = 'QUERY' " +
+                    "AND networkId IN (SELECT id FROM networks WHERE role = 'BOUNCER_ROOT')",
+            )
+        }
+    }
+
+/**
+ * v36 -> v37 re-keys the cross-buffer ordering index on `(serverTime, id)`.
+ *
+ * `timelineOrder` is only meaningful within one buffer: playback settle rewrites dense 0,1,2…
+ * indexes per (bufferId, serverTime) while every other writer stores the rowid, so across buffers
+ * the two scales are incomparable and same-second ties sorted settled history below live rows.
+ * The firehose now orders by `(serverTime, id)` and this is the index that walk needs.
+ */
+val MIGRATION_36_37 =
+    object : Migration(36, 37) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("DROP INDEX IF EXISTS `index_messages_serverTime_timelineOrder_id`")
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_messages_serverTime_id` " +
+                    "ON `messages` (`serverTime`, `id`)",
             )
         }
     }
@@ -1001,6 +1022,7 @@ val ALL_MIGRATIONS: Array<Migration> =
         MIGRATION_33_34,
         MIGRATION_34_35,
         MIGRATION_35_36,
+        MIGRATION_36_37,
     )
 
 private fun legacyReactionNormalizedSender(column: String): String = "replace(replace(replace(replace(lower($column), '[', '{'), ']', '}'), '\\', '|'), '~', '^')"

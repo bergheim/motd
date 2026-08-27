@@ -1,31 +1,37 @@
 package io.github.trevarj.motd.data.repo
 
 import androidx.paging.PagingSource
+import androidx.paging.PagingState
 import androidx.sqlite.db.SupportSQLiteQuery
 import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.db.EventRedirectEntity
-import io.github.trevarj.motd.data.db.FirehoseRow
 import io.github.trevarj.motd.data.db.MessageDao
 import io.github.trevarj.motd.data.db.MessageKind
 import io.github.trevarj.motd.data.db.MotdDatabase
+import io.github.trevarj.motd.data.db.NetworkIdentityEntity
+import io.github.trevarj.motd.data.db.SearchHit
 import io.github.trevarj.motd.data.db.buffer
 import io.github.trevarj.motd.data.db.inMemoryDb
 import io.github.trevarj.motd.data.db.message
 import io.github.trevarj.motd.data.db.network
 import io.github.trevarj.motd.data.prefs.FoolsMode
-import io.github.trevarj.motd.data.visibility.FirehoseNetwork
+import io.github.trevarj.motd.data.visibility.FirehoseKey
+import io.github.trevarj.motd.data.visibility.FirehoseSeek
 import io.github.trevarj.motd.data.visibility.MessageVisibilitySpec
 import io.github.trevarj.motd.data.visibility.firehosePagingQuery
-import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
-/** The firehose query against a real database: ordering, fool scoping, and what never appears. */
+/** The firehose against a real database: ordering, fool scoping, keyset paging, and the plan. */
 @RunWith(RobolectricTestRunner::class)
 class FirehosePagingDbTest {
     private lateinit var db: MotdDatabase
@@ -37,7 +43,8 @@ class FirehosePagingDbTest {
     @Before
     fun setUp() =
         runTest {
-            db = inMemoryDb()
+            // Direct commit: an insert's invalidation must reach a live source inside the test body.
+            db = inMemoryDb(directCommit = true)
             networkA = db.networkDao().insert(network(name = "libera"))
             networkB = db.networkDao().insert(network(name = "oftc"))
             bufferA = db.bufferDao().insert(buffer(networkA, "#a"))
@@ -48,11 +55,12 @@ class FirehosePagingDbTest {
     fun tearDown() = db.close()
 
     @Test
-    fun interleavesConversationRowsAcrossNetworksAndScopesFoolsToTheirOwnNetwork() =
+    fun interleavesConversationRowsAcrossNetworksAndScopesFoolsToTheirOwnCasemap() =
         runTest {
             // The configured fool "Ann[ie]" folds to "ann{ie}" under RFC1459 (brackets fold) and
-            // stays "ann[ie]" under ASCII. Both troll rows carry the stored actor "ann{ie}", so the
-            // mute applies on network A and not on network B.
+            // stays "ann[ie]" under ASCII. Both troll rows carry the stored actor "ann{ie}".
+            db.networkIdentityDao().upsert(NetworkIdentityEntity(networkA, caseMapping = "rfc1459"))
+            db.networkIdentityDao().upsert(NetworkIdentityEntity(networkB, caseMapping = "ascii"))
             db.messageDao().insertAll(
                 listOf(
                     message(bufferA, "a-oldest", sender = "alice", serverTime = 100, dedupKey = "a1"),
@@ -72,13 +80,8 @@ class FirehosePagingDbTest {
             )
             // COLLAPSE, not HIDE: the firehose mutes fools in either mode.
             val spec = MessageVisibilitySpec(fools = setOf("Ann[ie]"), foolsMode = FoolsMode.COLLAPSE)
-            val networks =
-                listOf(
-                    FirehoseNetwork(networkA, IrcIdentityRules.from("rfc1459", null)),
-                    FirehoseNetwork(networkB, IrcIdentityRules.from("ascii", null)),
-                )
 
-            val rows = db.messageDao().firehoseRows(firehosePagingQuery(spec, networks))
+            val rows = db.messageDao().firehoseRows(firehosePagingQuery(spec))
 
             assertEquals(
                 listOf("b-newest", "troll-B", "b-mid", "a-oldest"),
@@ -87,6 +90,222 @@ class FirehosePagingDbTest {
             val newest = rows.first()
             assertEquals("#b", newest.bufferDisplayName)
             assertEquals("oftc", newest.networkName)
+            assertEquals("ascii", newest.caseMapping)
+            // Non-null on SearchHit: a raw query missing these columns would map them to null.
+            assertEquals(BufferType.CHANNEL, newest.bufferType)
+            assertEquals(networkB, newest.networkId)
+        }
+
+    /**
+     * Same-second ties are routine across buffers. `timelineOrder` cannot break them: the settled
+     * playback row carries a dense index (0) while the live row carries its rowid, so ordering on
+     * it would sink every settled history row below every live one. The id does break them.
+     */
+    @Test
+    fun sameSecondTiesAcrossBuffersOrderOnIdRatherThanOnPerBufferTimelineOrder() =
+        runTest {
+            val ids =
+                db.messageDao().insertAll(
+                    listOf(
+                        message(bufferA, "settled-history", serverTime = 500, dedupKey = "t1"),
+                        message(bufferB, "live", serverTime = 500, dedupKey = "t2"),
+                    ),
+                )
+            // What CanonicalTimelineStore's playback settle writes: a dense per-buffer index.
+            db.canonicalTimelineDao().updateTimelineOrder(ids[0], timelineOrder = 0, confirmed = true)
+
+            val rows = db.messageDao().firehoseRows(firehosePagingQuery(MessageVisibilitySpec()))
+
+            assertEquals(listOf("live", "settled-history"), rows.map { it.message.text })
+        }
+
+    /** All three foldings plus the two default paths — unknown CASEMAPPING and no identity row at all. */
+    @Test
+    fun everyCasemapGetsItsOwnFoldingInOneQuery() =
+        runTest {
+            val cases =
+                listOf(
+                    "rfc1459" to "rfc1459",
+                    "ascii" to "ascii",
+                    "strict" to "rfc1459-strict",
+                    "unknown" to "totally-made-up",
+                    "default" to null,
+                )
+            cases.forEach { (name, casemap) ->
+                val networkId = db.networkDao().insert(network(name = name))
+                casemap?.let {
+                    db.networkIdentityDao().upsert(NetworkIdentityEntity(networkId, caseMapping = it))
+                }
+                val room = db.bufferDao().insert(buffer(networkId, "#$name"))
+                db.messageDao().insertAll(
+                    listOf(
+                        // "Ann[ie]" folds to this only where brackets fold: rfc1459 and strict.
+                        message(room, "$name-brackets", sender = "ann{ie}", serverTime = 100, dedupKey = "$name-b"),
+                        // "Bo~b" folds to this only under rfc1459, the one mapping that folds tilde.
+                        message(room, "$name-tilde", sender = "bo^b", serverTime = 200, dedupKey = "$name-t"),
+                    ),
+                )
+            }
+            val spec = MessageVisibilitySpec(fools = setOf("Ann[ie]", "Bo~b"))
+
+            val rows = db.messageDao().firehoseRows(firehosePagingQuery(spec))
+
+            assertEquals(
+                setOf(
+                    // rfc1459 mutes both; the row with no identity row is held to the same default.
+                    "ascii-brackets",
+                    "ascii-tilde",
+                    "strict-tilde",
+                    "unknown-brackets",
+                    "unknown-tilde",
+                ),
+                rows.mapTo(mutableSetOf()) { it.message.text },
+            )
+        }
+
+    /** Seek paging, not offset paging: each continuation starts from the previous page's last key. */
+    @Test
+    fun theFirstPageAndItsContinuationsDrainTheStreamNewestFirstWithoutRepeats() =
+        runTest {
+            db.messageDao().insertAll(
+                (1..5).map { message(bufferA, "line-$it", serverTime = it * 100L, dedupKey = "p$it") },
+            )
+            val source = FirehosePagingSource(db, MessageVisibilitySpec())
+
+            val first = source.refresh(key = null, loadSize = 2)
+            assertEquals(listOf("line-5", "line-4"), first.data.map { it.message.text })
+
+            val second = source.append(first.nextKey!!, loadSize = 2)
+            assertEquals(listOf("line-3", "line-2"), second.data.map { it.message.text })
+
+            val third = source.append(second.nextKey!!, loadSize = 2)
+            assertEquals(listOf("line-1"), third.data.map { it.message.text })
+            // A short page is the end of the stream; the next seek finds nothing and closes it.
+            assertNull(source.append(third.nextKey!!, loadSize = 2).nextKey)
+        }
+
+    /** Prepend seeks the other way: rows newer than the key, handed back newest-first. */
+    @Test
+    fun prependingFromAKeyReturnsTheNewerRowsInStreamOrder() =
+        runTest {
+            db.messageDao().insertAll(
+                (1..4).map { message(bufferA, "line-$it", serverTime = it * 100L, dedupKey = "q$it") },
+            )
+            val source = FirehosePagingSource(db, MessageVisibilitySpec())
+            val bottom = source.refresh(key = null, loadSize = 10).data.last()
+
+            val newer =
+                source.load(
+                    PagingSource.LoadParams.Prepend(
+                        key = FirehoseKey(bottom.message.serverTime, bottom.message.id),
+                        loadSize = 10,
+                        placeholdersEnabled = false,
+                    ),
+                ) as PagingSource.LoadResult.Page
+
+            assertEquals(listOf("line-4", "line-3", "line-2"), newer.data.map { it.message.text })
+        }
+
+    /** An arriving message must retire the live source; the screen reloads from the refresh key. */
+    @Test
+    fun anInsertInvalidatesTheLiveSource() =
+        runTest {
+            db.messageDao().insertAll(
+                listOf(message(bufferA, "hello", serverTime = 100, dedupKey = "i1")),
+            )
+            val source = FirehosePagingSource(db, MessageVisibilitySpec())
+            assertEquals(listOf("hello"), source.refresh(key = null, loadSize = 10).data.map { it.message.text })
+            assertFalse(source.invalid)
+
+            db.messageDao().insertAll(
+                listOf(message(bufferA, "arrived", serverTime = 200, dedupKey = "i2")),
+            )
+
+            assertTrue(source.invalid)
+        }
+
+    /** The identity table is observed too: a late CASEMAPPING changes which rows a page contains. */
+    @Test
+    fun anIdentityRowWrittenLaterInvalidatesTheLiveStream() =
+        runTest {
+            val spec = MessageVisibilitySpec(fools = setOf("Ann[ie]"))
+            db.messageDao().insertAll(
+                listOf(
+                    message(bufferA, "hello", sender = "bob", serverTime = 100, dedupKey = "n1"),
+                    message(bufferA, "troll", sender = "ann{ie}", serverTime = 200, dedupKey = "n2"),
+                ),
+            )
+            val live = FirehosePagingSource(db, spec)
+
+            // No identity row yet: CASEMAPPING was never advertised, so RFC1459 applies and the
+            // configured fool folds onto the stored actor.
+            assertEquals(listOf("hello"), live.refresh(key = null, loadSize = 10).data.map { it.message.text })
+            assertFalse(live.invalid)
+
+            db.networkIdentityDao().upsert(NetworkIdentityEntity(networkA, caseMapping = "ascii"))
+
+            assertTrue(live.invalid)
+            val reloaded = FirehosePagingSource(db, spec)
+            assertEquals(
+                listOf("troll", "hello"),
+                reloaded.refresh(key = null, loadSize = 10).data.map { it.message.text },
+            )
+        }
+
+    /** Refresh re-seeks from the anchor row's own key, so the viewport keeps the line it was on. */
+    @Test
+    fun refreshResumesFromTheAnchorRowAndStillReachesTheRowsAboveIt() =
+        runTest {
+            db.messageDao().insertAll(
+                (1..6).map { message(bufferA, "line-$it", serverTime = it * 100L, dedupKey = "r$it") },
+            )
+            val source = FirehosePagingSource(db, MessageVisibilitySpec())
+            val loaded = source.refresh(key = null, loadSize = 6)
+            // Anchored three rows down: "line-3".
+            val anchorKey =
+                source.getRefreshKey(
+                    PagingState(
+                        pages = listOf(loaded),
+                        anchorPosition = 3,
+                        config = FIREHOSE_PAGING_CONFIG,
+                        leadingPlaceholderCount = 0,
+                    ),
+                )
+            assertNotNull(anchorKey)
+
+            val refreshed = FirehosePagingSource(db, MessageVisibilitySpec()).refresh(anchorKey, loadSize = 2)
+
+            // The anchor row itself heads the page, so the viewport survives.
+            assertEquals(listOf("line-3", "line-2"), refreshed.data.map { it.message.text })
+            // And the rows above it stay reachable through prepend.
+            assertEquals(FirehoseKey(300, loaded.data[3].message.id), refreshed.prevKey)
+        }
+
+    /** The plan must stay an ordered index walk with a real seek, not a per-page sort. */
+    @Test
+    fun theKeysetSeekWalksTheTimelineIndexInsteadOfSortingEveryPage() =
+        runTest {
+            val query =
+                firehosePagingQuery(
+                    MessageVisibilitySpec(),
+                    key = FirehoseKey(serverTime = 400, id = 9),
+                    seek = FirehoseSeek.OLDER,
+                    limit = 50,
+                )
+
+            val plan = db.explainQueryPlan(query.sql)
+
+            assertFalse(plan.toString(), plan.any { "USE TEMP B-TREE FOR ORDER BY" in it })
+            assertTrue(plan.toString(), plan.any { "index_messages_serverTime_id" in it })
+        }
+
+    @Test
+    fun theUnkeyedFirstPageWalksTheSameIndex() =
+        runTest {
+            val plan = db.explainQueryPlan(firehosePagingQuery(MessageVisibilitySpec()).sql)
+
+            assertFalse(plan.toString(), plan.any { "USE TEMP B-TREE FOR ORDER BY" in it })
+            assertTrue(plan.toString(), plan.any { "index_messages_serverTime_id" in it })
         }
 
     @Test
@@ -97,8 +316,10 @@ class FirehosePagingDbTest {
             val closing = db.bufferDao().insert(buffer(networkA, "#closing").copy(pendingCloseAt = 5_000))
             val redirected = db.bufferDao().insert(buffer(networkA, "#renamed").copy(redirectToRoomId = bufferA))
             val console = db.bufferDao().insert(buffer(networkB, "libera", type = BufferType.SERVER))
+            // BufferStore coercion plus the v36 backfill make a QUERY-typed console impossible; the
+            // stream drops it on type alone.
             val bouncerServ =
-                db.bufferDao().insert(buffer(networkA, "bouncerserv", type = BufferType.QUERY))
+                db.bufferDao().insert(buffer(networkA, "bouncerserv", type = BufferType.SERVER))
             val ids =
                 db.messageDao().insertAll(
                     listOf(
@@ -116,20 +337,52 @@ class FirehosePagingDbTest {
                 EventRedirectEntity(losingEventId = ids[1], canonicalEventId = ids[0]),
             )
 
-            val rows =
-                db.messageDao().firehoseRows(
-                    firehosePagingQuery(MessageVisibilitySpec(), networks = emptyList()),
-                )
+            val rows = db.messageDao().firehoseRows(firehosePagingQuery(MessageVisibilitySpec()))
 
             assertEquals(listOf("canonical"), rows.map { it.message.text })
         }
+
+    @Test
+    fun firehoseRowKeepsIsSelfAndReportsAnUnadvertisedIdentityAsNull() =
+        runTest {
+            db.messageDao().insertAll(
+                listOf(
+                    message(bufferA, "mine", sender = "me", serverTime = 100, dedupKey = "s1", isSelf = true),
+                    message(bufferA, "theirs", sender = "alice", serverTime = 200, dedupKey = "s2", isSelf = false),
+                ),
+            )
+
+            val rows = db.messageDao().firehoseRows(firehosePagingQuery(MessageVisibilitySpec()))
+
+            assertEquals(listOf("theirs" to false, "mine" to true), rows.map { it.message.text to it.message.isSelf })
+            assertNull(rows.first().caseMapping)
+            assertNull(rows.first().chanTypes)
+        }
 }
 
-// Drain the firehose PagingSource into a list without Paging machinery (mirrors MessageDaoTest).
-private suspend fun MessageDao.firehoseRows(query: SupportSQLiteQuery): List<FirehoseRow> {
-    val result =
-        firehosePagingSource(query).load(
-            PagingSource.LoadParams.Refresh(key = null, loadSize = 100, placeholdersEnabled = false),
-        )
-    return (result as PagingSource.LoadResult.Page).data
-}
+private fun MotdDatabase.explainQueryPlan(sql: String): List<String> =
+    openHelper.readableDatabase.query("EXPLAIN QUERY PLAN $sql").use { cursor ->
+        buildList {
+            // The plan's detail is the last column in every SQLite version that reports one.
+            while (cursor.moveToNext()) add(cursor.getString(cursor.columnCount - 1))
+        }
+    }
+
+// Whole-stream read for the query-shape tests: no paging machinery, one page big enough for all.
+private suspend fun MessageDao.firehoseRows(query: SupportSQLiteQuery): List<SearchHit> = firehosePage(query)
+
+private suspend fun FirehosePagingSource.refresh(
+    key: FirehoseKey?,
+    loadSize: Int,
+): PagingSource.LoadResult.Page<FirehoseKey, SearchHit> =
+    load(
+        PagingSource.LoadParams.Refresh(key = key, loadSize = loadSize, placeholdersEnabled = false),
+    ) as PagingSource.LoadResult.Page
+
+private suspend fun FirehosePagingSource.append(
+    key: FirehoseKey,
+    loadSize: Int,
+): PagingSource.LoadResult.Page<FirehoseKey, SearchHit> =
+    load(
+        PagingSource.LoadParams.Append(key = key, loadSize = loadSize, placeholdersEnabled = false),
+    ) as PagingSource.LoadResult.Page
