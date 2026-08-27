@@ -345,20 +345,27 @@ class SearchViewModel
         // Independent of the debounced local FTS pipeline above: the "smart" row is a name filter
         // over an already-loaded list, not a query, so there is no reason to make it wait.
         @OptIn(ExperimentalCoroutinesApi::class)
-        private val bufferMatches: Flow<List<ChatListRow>> =
+        private val bufferMatches: Flow<Pair<SearchKey, List<ChatListRow>>> =
             searchKey.flatMapLatest { key ->
                 val parsed = parseSearchQuery(key.rawQuery)
                 if (key.scope != SearchScope.ALL || parsed.text.isBlank()) {
-                    flowOf(emptyList())
+                    flowOf(key to emptyList())
                 } else {
-                    bufferRepository.observeChatList().map { rows -> matchingBufferRows(rows, parsed.text) }
+                    bufferRepository.observeChatList().map { rows -> key to matchingBufferRows(rows, parsed.text) }
                 }
             }
 
         val state: StateFlow<SearchUiState> =
-            combine(localState, serverSection, bufferMatches) { local, server, matches ->
+            combine(localState, serverSection, bufferMatches) { local, server, (matchKey, matches) ->
                 local.copy(
-                    bufferMatches = matches,
+                    // Independent keyed flows can arrive in either order. Never pair a new query or
+                    // scope with name matches produced for the previous one.
+                    bufferMatches =
+                        if (matchKey.rawQuery == local.rawQuery && matchKey.scope == local.scope) {
+                            matches
+                        } else {
+                            emptyList()
+                        },
                     serverSearchAvailable = server.available,
                     // Leaving the server scope is two writes — the key, then the cancel — and they
                     // reach this combine separately, so a state pairing a local scope with the
