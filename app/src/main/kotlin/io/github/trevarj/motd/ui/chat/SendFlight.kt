@@ -370,14 +370,13 @@ private fun MorphingGhost(
     LaunchedEffect(flight.token) {
         morph.animateTo(1f, MotdMotion.sendMorphGrow)
     }
+    val scheme = MaterialTheme.colorScheme
+    val semantic = LocalMotdSemanticColors.current
+    // Keyed by color value, not scheme identity: Material3 mutates its retained ColorScheme in place.
     val roles =
-        messageBubbleRoleColors(
-            MaterialTheme.colorScheme,
-            isSelf = true,
-            mentionHighlighted = false,
-            kind = MessageKind.PRIVMSG,
-            semantic = LocalMotdSemanticColors.current,
-        )
+        remember(scheme.primaryContainer, scheme.primary, scheme.onPrimaryContainer, semantic) {
+            messageBubbleRoleColors(scheme, isSelf = true, mentionHighlighted = false, kind = MessageKind.PRIVMSG, semantic = semantic)
+        }
     val fieldInk = MaterialTheme.colorScheme.onSurface
     val plainText = remember(flight.text) { plainIrcText(flight.text) }
     val topCorner = if (showSender) spacing.bubbleCorner else spacing.bubbleGroupedCorner

@@ -8,6 +8,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -45,6 +46,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
@@ -93,6 +95,7 @@ import io.github.trevarj.motd.ui.theme.MotdMotion
 import io.github.trevarj.motd.ui.theme.MotdSemanticColors
 import io.github.trevarj.motd.ui.theme.MotdTheme
 import io.github.trevarj.motd.ui.theme.NickColorScheme
+import io.github.trevarj.motd.ui.theme.ensureContrast
 import io.github.trevarj.motd.ui.theme.lottieStrokeColor
 import kotlin.math.roundToInt
 import java.text.DateFormat as JavaDateFormat
@@ -123,6 +126,18 @@ internal data class MessageBubbleRoleColors(
     val content: Color,
 )
 
+/** How far an own bubble's container is pulled off `primaryContainer` toward the primary accent. */
+private const val SELF_BUBBLE_ACCENT_BLEND = 0.28f
+
+/**
+ * Dynamic/accessible schemes flatten `primaryContainer` toward `surfaceContainerHigh`; blend back
+ * toward the accent and re-fit the ink against the color actually painted.
+ */
+private fun selfBubbleRoleColors(scheme: ColorScheme): MessageBubbleRoleColors {
+    val container = lerp(scheme.primaryContainer, scheme.primary, SELF_BUBBLE_ACCENT_BLEND)
+    return MessageBubbleRoleColors(container, ensureContrast(scheme.onPrimaryContainer, listOf(container)))
+}
+
 internal fun messageBubbleRoleColors(
     scheme: ColorScheme,
     isSelf: Boolean,
@@ -141,7 +156,7 @@ internal fun messageBubbleRoleColors(
         }
 
         isSelf -> {
-            MessageBubbleRoleColors(scheme.primaryContainer, scheme.onPrimaryContainer)
+            selfBubbleRoleColors(scheme)
         }
 
         kind == MessageKind.NOTICE -> {
@@ -182,6 +197,27 @@ internal fun Modifier.chatBubbleWidth(): Modifier =
         }
     }
 
+/**
+ * Tap + long-press shared by every message density. Indication follows [onClick]: a real tap target
+ * (the firehose jump) ripples; an inert chat row keeps none, since its tap does nothing.
+ */
+@Composable
+internal fun Modifier.messageRowClicks(
+    onClick: (() -> Unit)?,
+    onClickLabel: String?,
+    onLongPress: () -> Unit,
+    onLongPressLabel: String,
+): Modifier =
+    combinedClickable(
+        // Null lazily avoids an interaction object until something actually needs one.
+        interactionSource = null,
+        indication = if (onClick != null) LocalIndication.current else null,
+        onClick = onClick ?: {},
+        onClickLabel = onClickLabel,
+        onLongClick = onLongPress,
+        onLongClickLabel = onLongPressLabel,
+    )
+
 /** Persistent, non-animated mention marker shared by every message density. */
 private fun Modifier.mentionHighlight(accent: Color): Modifier =
     drawWithContent {
@@ -211,7 +247,7 @@ private fun Modifier.mentionHighlight(accent: Color): Modifier =
  * Grouping: [showSender] draws the nick-colored name on a group's first bubble, own included — a
  * silent nick change (e.g. an identify failure bouncing you to Guest-1234) belongs on your own
  * bubble too, not just others'. Only the avatar stays other-senders-only. Own bubbles are
- * right-aligned `primaryContainer`; others left `surfaceContainerHigh`. Corner radii tighten on
+ * right-aligned on the primary accent; others left `surfaceContainerHigh`. Corner radii tighten on
  * the grouped inner edge.
  */
 internal fun botDisplayName(
@@ -249,6 +285,10 @@ fun MessageBubble(
     knownNicks: Set<String> = emptySet(),
     identityRules: IrcIdentityRules = IrcIdentityRules(),
     onLongPress: () -> Unit = {},
+    // Plain tap; null (chat) = inert and no press feedback, non-null (firehose) = a jump target
+    // that ripples. Label it so TalkBack names the destination.
+    onClick: (() -> Unit)? = null,
+    onClickLabel: String? = null,
     onReact: (String) -> Unit = {},
     onImageClick: (String) -> Unit = {},
     onLinkPreviewClick: () -> Unit = {},
@@ -259,8 +299,6 @@ fun MessageBubble(
     // previews/direct callers source-compatible without making every real row query system time
     // settings and construct its own formatter.
     val displayedTime = formattedTime ?: formatTime(timeMs)
-    // A shared no-op onClick with a null indication removes the dead ripple on plain taps; long-press
-    // is the only action entry, labeled for TalkBack.
     // Density tokens + nick-color scheme flow through CompositionLocals; no signature churn.
     val spacing = LocalSpacing.current
     val nickColors = LocalNickColors.current
@@ -301,6 +339,8 @@ fun MessageBubble(
                 knownNicks = knownNicks,
                 identityRules = identityRules,
                 onLongPress = onLongPress,
+                onClick = onClick,
+                onClickLabel = onClickLabel,
                 onReact = onReact,
                 onImageClick = onImageClick,
                 onLinkPreviewClick = onLinkPreviewClick,
@@ -333,6 +373,8 @@ fun MessageBubble(
                 knownNicks = knownNicks,
                 identityRules = identityRules,
                 onLongPress = onLongPress,
+                onClick = onClick,
+                onClickLabel = onClickLabel,
                 onReact = onReact,
                 onImageClick = onImageClick,
                 onLinkPreviewClick = onLinkPreviewClick,
@@ -369,6 +411,8 @@ fun MessageBubble(
             identityRules = identityRules,
             showSender = showSender,
             onLongPress = onLongPress,
+            onClick = onClick,
+            onClickLabel = onClickLabel,
             onReact = onReact,
             onImageClick = onImageClick,
             onLinkPreviewClick = onLinkPreviewClick,
@@ -407,6 +451,8 @@ fun MessageBubble(
             identityRules = identityRules,
             showSender = showSender,
             onLongPress = onLongPress,
+            onClick = onClick,
+            onClickLabel = onClickLabel,
             onReact = onReact,
             onImageClick = onImageClick,
             onLinkPreviewClick = onLinkPreviewClick,
@@ -419,14 +465,19 @@ fun MessageBubble(
     val codeBackground = MaterialTheme.colorScheme.surfaceVariant
     val codeColor = MaterialTheme.colorScheme.onSurfaceVariant
 
+    val scheme = MaterialTheme.colorScheme
+    val semantic = LocalMotdSemanticColors.current
+    // Keyed by color value, not scheme identity: Material3 mutates its retained ColorScheme in place.
     val bubbleRoles =
-        messageBubbleRoleColors(
-            MaterialTheme.colorScheme,
+        remember(
+            scheme.primaryContainer,
+            scheme.primary,
+            scheme.onPrimaryContainer,
             isSelf,
             mentionHighlighted,
             kind,
-            LocalMotdSemanticColors.current,
-        )
+            semantic,
+        ) { messageBubbleRoleColors(scheme, isSelf, mentionHighlighted, kind, semantic) }
     val bubbleColor = bubbleRoles.container
     val textColor = bubbleRoles.content
     // Tighten the inner grouped edge while retaining the shared outer silhouette.
@@ -473,12 +524,11 @@ fun MessageBubble(
                     .chatBubbleWidth()
                     .clip(shape)
                     .background(bubbleColor)
-                    .combinedClickable(
-                        interactionSource = null,
-                        indication = null,
-                        onClick = {},
-                        onLongClick = onLongPress,
-                        onLongClickLabel = actionsLabel,
+                    .messageRowClicks(
+                        onClick = onClick,
+                        onClickLabel = onClickLabel,
+                        onLongPress = onLongPress,
+                        onLongPressLabel = actionsLabel,
                     ).padding(horizontal = spacing.bubbleInnerHPad, vertical = spacing.bubbleInnerVPad),
         ) {
             if (showSender) {
@@ -645,6 +695,8 @@ private fun ComfortableActionBubble(
     knownNicks: Set<String> = emptySet(),
     identityRules: IrcIdentityRules = IrcIdentityRules(),
     onLongPress: () -> Unit = {},
+    onClick: (() -> Unit)? = null,
+    onClickLabel: String? = null,
     onReact: (String) -> Unit = {},
     onImageClick: (String) -> Unit = {},
     onLinkPreviewClick: () -> Unit = {},
@@ -754,12 +806,11 @@ private fun ComfortableActionBubble(
                     .semantics {
                         contentDescription = actionLabel
                         stateDescription = actionDescription
-                    }.combinedClickable(
-                        interactionSource = null,
-                        indication = null,
-                        onClick = {},
-                        onLongClick = onLongPress,
-                        onLongClickLabel = actionsLabel,
+                    }.messageRowClicks(
+                        onClick = onClick,
+                        onClickLabel = onClickLabel,
+                        onLongPress = onLongPress,
+                        onLongPressLabel = actionsLabel,
                     ).padding(horizontal = spacing.bubbleInnerHPad, vertical = spacing.bubbleInnerVPad),
         ) {
             reply?.let { ReplyMiniBubble(it, nickColors, onReplyClick) }
@@ -873,6 +924,8 @@ private fun ActionMessageRow(
     knownNicks: Set<String> = emptySet(),
     identityRules: IrcIdentityRules = IrcIdentityRules(),
     onLongPress: () -> Unit = {},
+    onClick: (() -> Unit)? = null,
+    onClickLabel: String? = null,
     onReact: (String) -> Unit = {},
     onImageClick: (String) -> Unit = {},
     onLinkPreviewClick: () -> Unit = {},
@@ -962,12 +1015,11 @@ private fun ActionMessageRow(
                         stateDescription = actionDescription
                     }.background(rowColor)
                     .actionAccentRail(accent)
-                    .combinedClickable(
-                        interactionSource = null,
-                        indication = null,
-                        onClick = {},
-                        onLongClick = onLongPress,
-                        onLongClickLabel = actionsLabel,
+                    .messageRowClicks(
+                        onClick = onClick,
+                        onClickLabel = onClickLabel,
+                        onLongPress = onLongPress,
+                        onLongPressLabel = actionsLabel,
                     ).padding(
                         horizontal = spacing.messageOuterHPad,
                         vertical = spacing.actionVPad,
@@ -1188,6 +1240,8 @@ private fun TwoLineMessageRow(
     knownNicks: Set<String> = emptySet(),
     identityRules: IrcIdentityRules = IrcIdentityRules(),
     onLongPress: () -> Unit = {},
+    onClick: (() -> Unit)? = null,
+    onClickLabel: String? = null,
     onReact: (String) -> Unit = {},
     onImageClick: (String) -> Unit = {},
     onLinkPreviewClick: () -> Unit = {},
@@ -1215,12 +1269,11 @@ private fun TwoLineMessageRow(
                 // Tint fills the full row width (behind the horizontal padding) so the speaker band is
                 // unbroken edge to edge, matching COMPACT.
                 .background(rowTint)
-                .combinedClickable(
-                    interactionSource = null,
-                    indication = null,
-                    onClick = {},
-                    onLongClick = onLongPress,
-                    onLongClickLabel = actionsLabel,
+                .messageRowClicks(
+                    onClick = onClick,
+                    onClickLabel = onClickLabel,
+                    onLongPress = onLongPress,
+                    onLongPressLabel = actionsLabel,
                 ).padding(horizontal = spacing.messageOuterHPad, vertical = spacing.bubbleRowVPad),
     ) {
         // Line 1 (header): avatar + nick + (own) sent check + timestamp — only on a group's first

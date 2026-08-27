@@ -1,9 +1,13 @@
 package io.github.trevarj.motd.ui.components
 
 import io.github.trevarj.motd.data.db.MessageKind
+import io.github.trevarj.motd.data.prefs.ColorThemePreset
 import io.github.trevarj.motd.data.prefs.TimeFormat
+import io.github.trevarj.motd.data.prefs.isDark
+import io.github.trevarj.motd.ui.theme.MotdDarkScheme
 import io.github.trevarj.motd.ui.theme.MotdLightScheme
 import io.github.trevarj.motd.ui.theme.contrastRatio
+import io.github.trevarj.motd.ui.theme.fixedThemeScheme
 import io.github.trevarj.motd.ui.theme.semanticColors
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -33,19 +37,24 @@ class MessageBubbleLayoutTest {
     }
 
     @Test fun bubbleRoles_areDistinctAndReadable() {
-        val scheme = MotdLightScheme
-        val semantic = semanticColors(scheme, dark = false)
-        val roles =
-            listOf(
-                messageBubbleRoleColors(scheme, isSelf = false, mentionHighlighted = false, MessageKind.PRIVMSG, semantic),
-                messageBubbleRoleColors(scheme, isSelf = true, mentionHighlighted = false, MessageKind.PRIVMSG, semantic),
-                messageBubbleRoleColors(scheme, isSelf = false, mentionHighlighted = true, MessageKind.PRIVMSG, semantic),
-                messageBubbleRoleColors(scheme, isSelf = false, mentionHighlighted = false, MessageKind.NOTICE, semantic),
-            )
+        // Every palette: the own-bubble container is blended, so its ink is re-fitted per scheme.
+        val schemes =
+            listOf(MotdLightScheme to false, MotdDarkScheme to true) +
+                ColorThemePreset.entries.mapNotNull { preset -> fixedThemeScheme(preset)?.let { it to preset.isDark } }
+        schemes.forEach { (scheme, dark) ->
+            val semantic = semanticColors(scheme, dark)
+            val roles =
+                listOf(
+                    messageBubbleRoleColors(scheme, isSelf = false, mentionHighlighted = false, MessageKind.PRIVMSG, semantic),
+                    messageBubbleRoleColors(scheme, isSelf = true, mentionHighlighted = false, MessageKind.PRIVMSG, semantic),
+                    messageBubbleRoleColors(scheme, isSelf = false, mentionHighlighted = true, MessageKind.PRIVMSG, semantic),
+                    messageBubbleRoleColors(scheme, isSelf = false, mentionHighlighted = false, MessageKind.NOTICE, semantic),
+                )
 
-        assertEquals(4, roles.map { it.container }.distinct().size)
-        roles.forEach { role ->
-            assertTrue(contrastRatio(role.content, role.container) >= 4.5)
+            assertEquals(4, roles.map { it.container }.distinct().size)
+            roles.forEach { role ->
+                assertTrue(contrastRatio(role.content, role.container) >= 4.5)
+            }
         }
     }
 }

@@ -1,7 +1,6 @@
 package io.github.trevarj.motd.ui.components
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -83,6 +82,8 @@ internal fun CompactMessageRow(
     knownNicks: Set<String> = emptySet(),
     identityRules: IrcIdentityRules = IrcIdentityRules(),
     onLongPress: () -> Unit = {},
+    onClick: (() -> Unit)? = null,
+    onClickLabel: String? = null,
     onReact: (String) -> Unit = {},
     onImageClick: (String) -> Unit = {},
     onLinkPreviewClick: () -> Unit = {},
@@ -153,13 +154,11 @@ internal fun CompactMessageRow(
                 // Tint fills the full row width (behind the horizontal padding) so the speaker band is
                 // unbroken edge to edge.
                 .background(rowTint)
-                .combinedClickable(
-                    // Null lazily avoids an interaction object because this row has no indication.
-                    interactionSource = null,
-                    indication = null,
-                    onClick = {},
-                    onLongClick = onLongPress,
-                    onLongClickLabel = actionsLabel,
+                .messageRowClicks(
+                    onClick = onClick,
+                    onClickLabel = onClickLabel,
+                    onLongPress = onLongPress,
+                    onLongPressLabel = actionsLabel,
                 ).padding(horizontal = spacing.messageOuterHPad, vertical = spacing.compactRowVPad),
     ) {
         reply?.let { ReplyMiniBubble(it, nickColors, onReplyClick) }
