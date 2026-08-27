@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.github.trevarj.motd.data.db.BufferEntity
 import io.github.trevarj.motd.data.db.BufferType
+import io.github.trevarj.motd.data.db.ChatListRow
 import io.github.trevarj.motd.data.db.SearchHit
 import io.github.trevarj.motd.data.repo.BufferRepository
 import io.github.trevarj.motd.data.repo.SearchCoverage
@@ -75,6 +76,9 @@ data class SearchGroup(
     val bufferId: Long,
     val bufferDisplayName: String,
     val networkName: String,
+    val bufferType: BufferType,
+    val networkId: Long,
+    val avatarOverrideModel: String?,
     val hits: List<SearchHit>,
 )
 
@@ -83,6 +87,13 @@ data class SearchUiState(
     val scope: SearchScope = SearchScope.ALL,
     /** True when this screen was launched scoped to a buffer (enables the "current" chip). */
     val hasBufferScope: Boolean = false,
+    /**
+     * Channel/DM name matches ("smart" results): shown as a row above the message-content groups
+     * below, so a query matching a room's name surfaces it even when no message matches. Populated
+     * only for [SearchScope.ALL] — a buffer- or server-scoped search is already about message
+     * content within one target, not room discovery.
+     */
+    val bufferMatches: List<ChatListRow> = emptyList(),
     val groups: List<SearchGroup> = emptyList(),
     val searching: Boolean = false,
     /** What the searched corpus covers for the active scope; null until the first emission. */
@@ -331,9 +342,23 @@ class SearchViewModel
                     }
                 }
 
+        // Independent of the debounced local FTS pipeline above: the "smart" row is a name filter
+        // over an already-loaded list, not a query, so there is no reason to make it wait.
+        @OptIn(ExperimentalCoroutinesApi::class)
+        private val bufferMatches: Flow<List<ChatListRow>> =
+            searchKey.flatMapLatest { key ->
+                val parsed = parseSearchQuery(key.rawQuery)
+                if (key.scope != SearchScope.ALL || parsed.text.isBlank()) {
+                    flowOf(emptyList())
+                } else {
+                    bufferRepository.observeChatList().map { rows -> matchingBufferRows(rows, parsed.text) }
+                }
+            }
+
         val state: StateFlow<SearchUiState> =
-            combine(localState, serverSection) { local, server ->
+            combine(localState, serverSection, bufferMatches) { local, server, matches ->
                 local.copy(
+                    bufferMatches = matches,
                     serverSearchAvailable = server.available,
                     // Leaving the server scope is two writes — the key, then the cancel — and they
                     // reach this combine separately, so a state pairing a local scope with the
@@ -366,6 +391,29 @@ class SearchViewModel
         }
     }
 
+/** Cap on the "smart" channel/DM match row: a handful of best fits, not a second results list. */
+internal const val BUFFER_MATCH_LIMIT = 5
+
+/**
+ * Room-name matches for the "smart" results row: non-archived, non-server rows whose display name
+ * contains [query] (case-insensitive substring — this is name matching, not FTS). Pure and ordered
+ * by the chat list's own order (already pinned/recency-sorted), so no extra ranking logic is needed
+ * here.
+ */
+internal fun matchingBufferRows(
+    rows: List<ChatListRow>,
+    query: String,
+    limit: Int = BUFFER_MATCH_LIMIT,
+): List<ChatListRow> {
+    if (query.isBlank()) return emptyList()
+    return rows
+        .asSequence()
+        .filter { it.type != BufferType.SERVER && !it.archived }
+        .filter { it.displayName.contains(query, ignoreCase = true) }
+        .take(limit)
+        .toList()
+}
+
 /** Group hits by buffer, preserving overall recency order (hits already time-ordered by DAO). */
 fun groupHits(hits: List<SearchHit>): List<SearchGroup> =
     hits
@@ -376,6 +424,9 @@ fun groupHits(hits: List<SearchHit>): List<SearchGroup> =
                 bufferId = bufferId,
                 bufferDisplayName = first.bufferDisplayName,
                 networkName = first.networkName,
+                bufferType = first.bufferType,
+                networkId = first.networkId,
+                avatarOverrideModel = first.avatarOverrideModel,
                 hits = groupHits,
             )
         }

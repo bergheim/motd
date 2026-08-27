@@ -1528,6 +1528,7 @@ interface MessageDao {
     @Query(
         """
         SELECT m.*, b.displayName AS bufferDisplayName, n.name AS networkName,
+               b.type AS bufferType, b.networkId AS networkId, b.avatarOverrideModel AS avatarOverrideModel,
                ni.caseMapping AS caseMapping, ni.chanTypes AS chanTypes
         FROM messages m
         JOIN messages_fts f ON m.id = f.rowid
@@ -1558,6 +1559,9 @@ data class SearchHit(
     @Embedded val message: MessageEntity,
     val bufferDisplayName: String,
     val networkName: String,
+    val bufferType: BufferType,
+    val networkId: Long,
+    val avatarOverrideModel: String? = null,
     val caseMapping: String? = null,
     val chanTypes: String? = null,
 )

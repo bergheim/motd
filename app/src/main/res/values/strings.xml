@@ -346,6 +346,7 @@
     <string name="search_server_truncated">The server limits results to 100 matches. Narrow the query to see the rest.</string>
     <string name="search_prompt_title">Search your history</string>
     <string name="search_prompt_message">Type to search. Use from:nick to filter by sender.</string>
+    <string name="search_section_buffers">Channels &amp; DMs</string>
 
     <!-- Channel info (WP8) -->
     <string name="channelinfo_title">Channel info</string>
