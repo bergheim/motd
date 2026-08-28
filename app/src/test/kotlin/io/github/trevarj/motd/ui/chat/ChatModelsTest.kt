@@ -196,6 +196,21 @@ class ChatModelsTest {
         assertTrue(chips.getValue("m1").single().mine)
     }
 
+    @Test fun `account and nick aliases do not duplicate one reaction`() {
+        val chip =
+            aggregateReactions(
+                listOf(
+                    react("m1", "Alice", "👍", actorKey = "account:alice"),
+                    react("m1", "alice", "👍", actorKey = "nick:alice"),
+                ),
+                myNick = "alice",
+                myAccount = "alice",
+            ).getValue("m1").single()
+
+        assertEquals(1, chip.count)
+        assertTrue(chip.mine)
+    }
+
     @Test fun `counts aggregate per emoji preserving first-appearance order`() {
         val chips =
             aggregateReactions(

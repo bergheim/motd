@@ -1755,7 +1755,9 @@ fun aggregateReactions(
     for (r in reactions) {
         val emojiMap = byMsg.getOrPut(r.targetMsgid) { LinkedHashMap() }
         val agg = emojiMap.getOrPut(r.emoji) { MutableReactionAgg() }
-        agg.count++
+        // Account-tag availability can differ between live, push, and history copies of one event.
+        // Count its account and nick rows once by the actor spelling shown to the user.
+        if (agg.senders.add(identityRules.normalize(r.sender))) agg.count++
         if (
             r.actorKey in myActorKeys ||
             (
@@ -1774,4 +1776,5 @@ fun aggregateReactions(
 private class MutableReactionAgg(
     var count: Int = 0,
     var mine: Boolean = false,
+    val senders: MutableSet<String> = mutableSetOf(),
 )
