@@ -1327,6 +1327,14 @@ class ChatViewModel
             }
         }
 
+        fun redact(message: MessageEntity) =
+            viewModelScope.launch {
+                val msgid = message.msgid ?: return@launch
+                if (!connectionManager.redactMessage(operationalBufferId.value, msgid)) {
+                    uiEventQueue.enqueue(ChatUiEvent.RedactionSendFailed)
+                }
+            }
+
         /**
          * A bouncer without labeled-response can echo our send before its durable msgid is available.
          * The normal chat-open reconciliation may already own the network-wide history gate for target

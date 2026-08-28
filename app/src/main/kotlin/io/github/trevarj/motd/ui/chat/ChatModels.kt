@@ -16,6 +16,7 @@ import io.github.trevarj.motd.data.visibility.CONVERSATION_KINDS
 import io.github.trevarj.motd.data.visibility.MessageVisibilityPolicy
 import io.github.trevarj.motd.data.visibility.MessageVisibilitySpec
 import io.github.trevarj.motd.irc.client.HistoryAvailability
+import io.github.trevarj.motd.irc.client.hasMessageRedactionCap
 import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 import io.github.trevarj.motd.service.HistorySyncStatus
@@ -1394,6 +1395,19 @@ data class ReplyJumpRequest(
     val msgid: String,
 )
 
+private val CLIENT_REDACTABLE_MESSAGE_KINDS: Set<MessageKind> =
+    setOf(MessageKind.PRIVMSG, MessageKind.NOTICE, MessageKind.ACTION)
+
+internal fun canRedactMessage(
+    message: MessageEntity,
+    bufferType: BufferType?,
+    connectionState: IrcClientState?,
+): Boolean =
+    message.msgid != null &&
+        message.kind in CLIENT_REDACTABLE_MESSAGE_KINDS &&
+        bufferType != BufferType.SERVER &&
+        (connectionState as? IrcClientState.Ready)?.let { hasMessageRedactionCap(it.caps) } == true
+
 sealed interface ChatUiEvent {
     data object InvalidCommand : ChatUiEvent
 
@@ -1402,6 +1416,8 @@ sealed interface ChatUiEvent {
     data object ReactionTargetUnavailable : ChatUiEvent
 
     data object ReactionSendFailed : ChatUiEvent
+
+    data object RedactionSendFailed : ChatUiEvent
 
     data object SendRejected : ChatUiEvent
 

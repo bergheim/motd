@@ -48,7 +48,7 @@ internal object CapTiers {
             "draft/relaymsg",
             "draft/pre-away",
             "draft/channel-rename",
-            "draft/message-redaction",
+            MESSAGE_REDACTION_CAP,
             ACCOUNT_REGISTRATION_CAP,
             "soju.im/bouncer-networks",
             "soju.im/bouncer-networks-notify",
@@ -86,8 +86,8 @@ internal object CapNegotiator {
         ) {
             req.remove(MULTILINE_CAP)
         }
-        if ("draft/message-redaction" in req && "message-tags" !in advertised) {
-            req.remove("draft/message-redaction")
+        if (MESSAGE_REDACTION_CAP in req && "message-tags" !in advertised) {
+            req.remove(MESSAGE_REDACTION_CAP)
         }
         val selectedNames = preferredNoImplicitNames(advertised)
         req.removeAll(NO_IMPLICIT_NAMES_ALIASES)
@@ -144,6 +144,13 @@ internal object CapNegotiator {
         if (sb.isNotEmpty()) out.add(sb.toString())
         return out
     }
+}
+
+const val MESSAGE_REDACTION_CAP: String = "draft/message-redaction"
+
+fun hasMessageRedactionCap(caps: Set<String>): Boolean {
+    val names = caps.mapTo(HashSet()) { it.substringBefore('=') }
+    return MESSAGE_REDACTION_CAP in names && "message-tags" in names
 }
 
 val NO_IMPLICIT_NAMES_ALIASES: List<String> =

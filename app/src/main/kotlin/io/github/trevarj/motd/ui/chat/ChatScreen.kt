@@ -501,6 +501,7 @@ fun ChatScreen(
         onTyping = viewModel::sendTyping,
         onSetReply = viewModel::setReply,
         onReact = viewModel::react,
+        onRedact = viewModel::redact,
         onRetry = viewModel::retry,
         onDelete = viewModel::deleteFailed,
         onAcceptInvite = viewModel::acceptInvite,
@@ -817,6 +818,7 @@ fun ChatContent(
     onMarkRead: (io.github.trevarj.motd.data.db.TimelineAnchor) -> Unit = {},
     viewportReadEnabled: Boolean = true,
     onDelete: (MessageEntity) -> Unit = {},
+    onRedact: (MessageEntity) -> Unit = {},
     onAcceptInvite: (Long) -> Unit = {},
     onDismissInvite: (Long) -> Unit = {},
     // Re-join the current channel from the parted banner.
@@ -1236,6 +1238,10 @@ fun ChatContent(
 
                 ChatUiEvent.ReactionSendFailed -> {
                     stringResource(R.string.chat_reaction_send_failed)
+                }
+
+                ChatUiEvent.RedactionSendFailed -> {
+                    stringResource(R.string.chat_redaction_send_failed)
                 }
 
                 ChatUiEvent.SendRejected -> {
@@ -1785,6 +1791,7 @@ fun ChatContent(
 
     // Long-press action sheet target.
     var sheetTarget by remember { mutableStateOf<MessageEntity?>(null) }
+    var redactionTarget by remember { mutableStateOf<MessageEntity?>(null) }
     val sheetState = rememberModalBottomSheetState()
 
     // Raw ignored tails do not make the user leave the meaningful bottom of the conversation.
@@ -2972,8 +2979,35 @@ fun ChatContent(
                     onDraftChanged(composerText.text)
                 }
             },
+            canRedact = canRedactMessage(target, state.buffer?.type, state.connState),
+            onRedact = { hideThen { redactionTarget = target } },
             // Outbound share: the raw message text, no formatting or attribution.
             onShare = { hideThen { shareMessageText(ctx, target.text) } },
+        )
+    }
+
+    redactionTarget?.let { target ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { redactionTarget = null },
+            title = { Text(stringResource(R.string.chat_redaction_confirm_title)) },
+            text = { Text(stringResource(R.string.chat_redaction_confirm_body)) },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = {
+                        redactionTarget = null
+                        onRedact(target)
+                    },
+                    modifier = Modifier.testTag("message_redact_confirm"),
+                ) {
+                    Text(stringResource(R.string.action_delete))
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { redactionTarget = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+            modifier = Modifier.testTag("message_redact_dialog"),
         )
     }
 

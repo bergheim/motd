@@ -144,6 +144,22 @@ class ChatModelsTest {
         dedupKey = "1",
     )
 
+    @Test fun `redaction action requires target msgid chat kind and negotiated capability`() {
+        val ready =
+            IrcClientState.Ready(
+                "me",
+                setOf("message-tags", "draft/message-redaction"),
+                emptyMap(),
+            )
+        val target = message().copy(msgid = "m1")
+
+        assertTrue(canRedactMessage(target, BufferType.CHANNEL, ready))
+        assertFalse(canRedactMessage(target.copy(msgid = null), BufferType.CHANNEL, ready))
+        assertFalse(canRedactMessage(target.copy(kind = MessageKind.REDACTED), BufferType.CHANNEL, ready))
+        assertFalse(canRedactMessage(target, BufferType.SERVER, ready))
+        assertFalse(canRedactMessage(target, BufferType.CHANNEL, IrcClientState.Disconnected))
+    }
+
     @Test fun `mine matches own nick case-insensitively`() {
         val chips = aggregateReactions(listOf(react("m1", "Alice", "👍")), myNick = "alice")
         assertTrue(chips.getValue("m1").single().mine)

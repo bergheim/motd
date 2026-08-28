@@ -1469,6 +1469,28 @@ class ChatViewModelTest {
         }
 
     @Test
+    fun `redaction sends canonical target and reports rejected writes`() =
+        runTest {
+            val acceptedManager = FakeConnectionManager(network.id, redactionAccepted = true)
+            val accepted = viewModel(channel, acceptedManager)
+            accepted.state.first { it.buffer != null }
+            accepted.redact(message(channel.id, "delete me", "m1", "alice"))
+            advanceUntilIdle()
+            assertEquals(listOf(channel.id to "m1"), acceptedManager.redactions)
+
+            val rejected = viewModel(channel, FakeConnectionManager(network.id))
+            rejected.state.first { it.buffer != null }
+            rejected.redact(message(channel.id, "keep me", "m2", "alice"))
+            advanceUntilIdle()
+            assertEquals(
+                ChatUiEvent.RedactionSendFailed,
+                rejected.uiEvents.value
+                    .single()
+                    .value,
+            )
+        }
+
+    @Test
     fun `retry preserves failed row when no replacement is accepted`() =
         runTest {
             val messages = FakeMessageRepository()
@@ -3497,6 +3519,7 @@ class ChatViewModelTest {
         private val sendAccepted: Boolean = true,
         private val sendGate: CompletableDeferred<Unit>? = null,
         private val reactionError: Boolean = false,
+        private val redactionAccepted: Boolean = false,
         private val storedTexts: ((String) -> List<String>)? = null,
         private val sendRejection: io.github.trevarj.motd.service.SendRejectionReason? = null,
         private val retryRejection: io.github.trevarj.motd.service.SendRejectionReason? = null,
@@ -3521,6 +3544,7 @@ class ChatViewModelTest {
             )
         val messages = mutableListOf<SentMessage>()
         val reactions = mutableListOf<SentReaction>()
+        val redactions = mutableListOf<Pair<Long, String>>()
         val typing = mutableListOf<Pair<Long, String>>()
         val sentLines = mutableListOf<String>()
         val commandOrigins = mutableListOf<Pair<Long, IrcMessage>>()
@@ -3616,6 +3640,14 @@ class ChatViewModelTest {
         ) {
             if (reactionError) error("reaction rejected")
             reactions += SentReaction(bufferId, msgid, emoji)
+        }
+
+        override suspend fun redactMessage(
+            bufferId: Long,
+            msgid: String,
+        ): Boolean {
+            if (redactionAccepted) redactions += bufferId to msgid
+            return redactionAccepted
         }
 
         override suspend fun sendCommand(

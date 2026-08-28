@@ -242,6 +242,12 @@ interface ConnectionManager {
         emoji: String,
     )
 
+    /** Ask the server to redact one canonical message. True means the transport accepted REDACT. */
+    suspend fun redactMessage(
+        bufferId: Long,
+        msgid: String,
+    ): Boolean = false
+
     /** Send a composer command while retaining the chat that owns its server feedback. */
     suspend fun sendCommand(
         networkId: Long,

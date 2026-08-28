@@ -490,6 +490,10 @@
     <string name="chat_action_share">Share</string>
     <string name="chat_action_share_chooser">Share message</string>
     <string name="chat_action_more_reactions">More reactions</string>
+    <string name="chat_action_delete_message">Delete message</string>
+    <string name="chat_redaction_confirm_title">Delete this message?</string>
+    <string name="chat_redaction_confirm_body">This asks the server to delete it for everyone. The server may refuse, and other clients may retain copies.</string>
+    <string name="chat_redaction_send_failed">Couldn\'t ask the server to delete this message.</string>
     <string name="chat_bubble_actions">Message actions</string>
     <string name="chat_action_message">Action message</string>
     <string name="chat_message_mentions_you">Mentions you</string>

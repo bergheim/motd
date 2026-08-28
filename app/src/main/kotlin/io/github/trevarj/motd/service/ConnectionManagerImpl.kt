@@ -47,6 +47,7 @@ import io.github.trevarj.motd.irc.client.NickServIdentifySyntax
 import io.github.trevarj.motd.irc.client.SaslMechanism
 import io.github.trevarj.motd.irc.client.canSendClientTag
 import io.github.trevarj.motd.irc.client.canSendReactionTags
+import io.github.trevarj.motd.irc.client.hasMessageRedactionCap
 import io.github.trevarj.motd.irc.client.preferredExtendedMonitor
 import io.github.trevarj.motd.irc.client.preferredNoImplicitNames
 import io.github.trevarj.motd.irc.event.IrcClientState
@@ -477,6 +478,33 @@ internal suspend fun attemptChannelInviteWrite(
                 params = listOf(targetNick, buffer.ircTarget),
             ),
         )
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        false
+    }
+}
+
+/** Narrow transport boundary for one IRCv3 REDACT command. */
+internal suspend fun writeMessageRedactionIfReady(
+    buffer: BufferEntity?,
+    msgid: String,
+    client: IrcClient?,
+): Boolean {
+    val ready = client?.state?.value as? IrcClientState.Ready ?: return false
+    if (!hasMessageRedactionCap(ready.caps)) return false
+    return attemptMessageRedactionWrite(buffer, msgid) { message -> client.sendIfConnected(message) }
+}
+
+internal suspend fun attemptMessageRedactionWrite(
+    buffer: BufferEntity?,
+    msgid: String,
+    send: suspend (IrcMessage) -> Boolean,
+): Boolean {
+    if (buffer == null || buffer.type == BufferType.SERVER || buffer.pendingCloseAt != null) return false
+    if (msgid.isEmpty() || msgid.first() == ':' || msgid.any { it.isWhitespace() || it.isISOControl() }) return false
+    return try {
+        send(IrcMessage(command = "REDACT", params = listOf(buffer.ircTarget, msgid)))
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (_: Exception) {
@@ -2597,6 +2625,19 @@ class ConnectionManagerImpl
             }
             return accepted
         }
+
+        override suspend fun redactMessage(
+            bufferId: Long,
+            msgid: String,
+        ): Boolean =
+            try {
+                val buffer = bufferDao.observeById(bufferId)
+                writeMessageRedactionIfReady(buffer, msgid, buffer?.let { clientFor(it.networkId) })
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                false
+            }
 
         override suspend fun inviteToChannel(
             bufferId: Long,
