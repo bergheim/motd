@@ -1,0 +1,6 @@
+- Organize chats into local folders with custom icons, backup and restore.
+- Review Auto-group suggestions before applying folder assignments.
+- Try the optional Global Feed for one stream across conversations.
+- Find chats faster with smarter search results and highlighting.
+- Send channel invites and redact supported messages.
+- Improved network setup, account registration, uploads and link previews.
