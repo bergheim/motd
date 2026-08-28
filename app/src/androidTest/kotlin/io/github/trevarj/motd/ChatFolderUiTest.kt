@@ -46,7 +46,7 @@ class ChatFolderUiTest {
         }
 
         compose.onAllNodesWithTag("chatlist_row_1").assertCountEquals(0)
-        compose.onNodeWithTag("chatlist_folder_preview_sender").assertExists()
+        compose.onNodeWithTag("chatlist_folder_preview_sender", useUnmergedTree = true).assertExists()
         compose.onNodeWithTag("chatlist_folder_7").assertIsDisplayed().performClick()
         compose.onNodeWithTag("chatlist_row_1").assertIsDisplayed()
         compose.onNodeWithTag("chatlist_folder_7").performTouchInput { longClick() }

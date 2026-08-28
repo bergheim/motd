@@ -25,8 +25,9 @@ class InviteIntentTest {
         assertEquals(JoinInviteCodec.encode(invite), parseJoinInvitePayload(intent))
     }
 
+    /** Camera and photo-library access remain runtime-granted optional capabilities. */
     @Test
-    fun `manifest exposes browsable invite and optional camera permission`() {
+    fun `manifest exposes browsable invite and optional media permissions`() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val resolved = context.packageManager.resolveActivity(Intent(Intent.ACTION_VIEW, Uri.parse("motd://invite?v=x")), PackageManager.MATCH_DEFAULT_ONLY)
         assertNotNull(resolved)
@@ -36,6 +37,8 @@ class InviteIntentTest {
                 .requestedPermissions
                 .orEmpty()
         assertTrue(Manifest.permission.CAMERA in requested)
+        assertTrue(Manifest.permission.READ_MEDIA_IMAGES in requested)
+        assertTrue(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED in requested)
     }
 
     @Test

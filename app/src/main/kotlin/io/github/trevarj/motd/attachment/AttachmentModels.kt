@@ -13,13 +13,13 @@ enum class AttachmentBackend(
     val endpoint: String?,
     val acceptsBinary: Boolean,
 ) {
+    CUSTOM_0X0("Custom", PasteProtocol.MULTIPART_0X0, null, true),
     CRAFTERBIN("CrafterBin", PasteProtocol.MULTIPART_0X0, "https://crafterbin.glennstack.dev", true),
     ZERO_X_ZERO("0x0.st", PasteProtocol.MULTIPART_0X0, "https://0x0.st", true),
 
     // x0.at is a filehost2 instance with a 0x0-compatible wire format but a 1 GiB ceiling and
     // no expires/secret/deletion support; retention is automatic and size-based (3-100 days).
     X0_AT("x0.at", PasteProtocol.MULTIPART_0X0, "https://x0.at", true),
-    CUSTOM_0X0("Custom 0x0-compatible", PasteProtocol.MULTIPART_0X0, null, true),
     CNET("paste.c-net.org", PasteProtocol.RAW_CNET, "https://paste.c-net.org", true),
     UGUU("Uguu", PasteProtocol.MULTIPART_UGUU, "https://uguu.se/upload", true),
     LITTERBOX(
@@ -78,6 +78,8 @@ data class PasteBackendConfig(
     val litterboxExpiry: String = DEFAULT_LITTERBOX_EXPIRY,
     val secretUrl: Boolean = true,
     val sizeLimitBytes: Long = DEFAULT_PUBLIC_LIMIT_BYTES,
+    val username: String = "",
+    val password: String = "",
 ) {
     val protocol: PasteProtocol get() = backend.protocol
 }
@@ -113,6 +115,8 @@ interface AttachmentPrefs {
     val recentUploads: Flow<List<UploadRecord>>
 
     suspend fun setConfig(config: PasteBackendConfig)
+
+    suspend fun updateConfig(transform: (PasteBackendConfig) -> PasteBackendConfig)
 
     suspend fun addUpload(record: UploadRecord)
 

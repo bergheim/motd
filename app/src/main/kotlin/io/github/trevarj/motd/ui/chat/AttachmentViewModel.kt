@@ -63,6 +63,10 @@ class AttachmentViewModel
                 }
         }
 
+        fun fail(message: String) {
+            _error.value = message
+        }
+
         fun cancel() {
             job?.cancel()
             _progress.value = null

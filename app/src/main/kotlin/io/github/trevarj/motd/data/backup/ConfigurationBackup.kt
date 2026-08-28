@@ -37,6 +37,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import java.net.URI
 import java.security.SecureRandom
 import java.util.Base64
 import javax.crypto.Cipher
@@ -209,7 +210,10 @@ class ConfigurationBackupRepositoryImpl
             validatePayload(decoded.payload)
             val plan = planImport(decoded.payload, importMode)
 
-            applySettings(decoded.payload.settings)
+            applySettings(
+                decoded.payload.settings,
+                includeSecrets = decoded.envelope.mode == BackupEnvelopeMode.ENCRYPTED_WITH_CREDENTIALS,
+            )
             val idMap = mutableMapOf<String, Long>()
             val importedIds = mutableSetOf<Long>()
             db.withTransaction {
@@ -314,7 +318,10 @@ class ConfigurationBackupRepositoryImpl
                         appearance = appearancePrefs.config.first(),
                         contentPreviews = contentPreviewPrefs.config.first(),
                         replies = replyPrefs.config.first(),
-                        attachments = attachmentPrefs.config.first(),
+                        attachments =
+                            attachmentPrefs.config.first().let { config ->
+                                if (includeSecrets) config else config.copy(username = "", password = "")
+                            },
                         voice = voicePrefs.config.first(),
                         showSharedAvatars = avatarPrefs.config.first().showSharedAvatars,
                         selfAvatars = selfAvatars,
@@ -463,7 +470,10 @@ class ConfigurationBackupRepositoryImpl
                 network.id
             }
 
-        private suspend fun applySettings(settings: PortableSettings) {
+        private suspend fun applySettings(
+            settings: PortableSettings,
+            includeSecrets: Boolean,
+        ) {
             settings.general?.let {
                 val current = settingsRepository.settings.first()
                 settingsRepository.setThemeMode(it.themeMode)
@@ -521,7 +531,21 @@ class ConfigurationBackupRepositoryImpl
                 contentPreviewPrefs.setDirectMediaOnProxiedNetworks(it.directMediaOnProxiedNetworks)
             }
             settings.replies?.let { replyPrefs.setVisibleChannelPrefix(it.visibleChannelPrefix) }
-            settings.attachments?.let { attachmentPrefs.setConfig(it) }
+            settings.attachments?.let { imported ->
+                val resolved =
+                    if (includeSecrets) {
+                        imported
+                    } else {
+                        val local = attachmentPrefs.config.first()
+                        val importedAuthority = credentialAuthority(imported.customEndpoint)
+                        if (importedAuthority != null && importedAuthority == credentialAuthority(local.customEndpoint)) {
+                            imported.copy(username = local.username, password = local.password)
+                        } else {
+                            imported.copy(username = "", password = "")
+                        }
+                    }
+                attachmentPrefs.setConfig(resolved)
+            }
             settings.voice?.let {
                 voicePrefs.replace(it)
             }
@@ -619,6 +643,13 @@ private data class BackupEnvelope(
 
 @Serializable
 private enum class BackupEnvelopeMode { CREDENTIALS_EXCLUDED, ENCRYPTED_WITH_CREDENTIALS }
+
+private fun credentialAuthority(endpoint: String): String? =
+    runCatching {
+        val uri = URI(endpoint)
+        require(uri.scheme.equals("https", ignoreCase = true) && !uri.host.isNullOrBlank())
+        "${uri.host.lowercase()}:${if (uri.port >= 0) uri.port else 443}"
+    }.getOrNull()
 
 @Serializable
 private data class EncryptedPayload(

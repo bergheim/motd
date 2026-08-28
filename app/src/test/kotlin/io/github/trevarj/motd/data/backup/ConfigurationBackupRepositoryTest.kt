@@ -2,7 +2,9 @@ package io.github.trevarj.motd.data.backup
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import io.github.trevarj.motd.attachment.AttachmentBackend
 import io.github.trevarj.motd.attachment.AttachmentPrefsImpl
+import io.github.trevarj.motd.attachment.PasteBackendConfig
 import io.github.trevarj.motd.audio.VoicePrefs
 import io.github.trevarj.motd.avatar.AvatarPrefsImpl
 import io.github.trevarj.motd.data.db.BufferType
@@ -245,6 +247,60 @@ class ConfigurationBackupRepositoryTest {
             settings.setShowComposerFormattingTools(true)
             backup.import(oldRaw, importMode = BackupImportMode.MERGE)
             assertTrue(settings.settings.first().showComposerFormattingTools)
+        }
+
+    @Test
+    fun uploadCredentialsOnlyRoundTripInEncryptedCredentialBackups() =
+        runTest {
+            val context = ApplicationProvider.getApplicationContext<Context>()
+            val prefs = AttachmentPrefsImpl(context)
+            val backup = repository(inMemoryDb())
+            val configured =
+                PasteBackendConfig(
+                    backend = AttachmentBackend.CUSTOM_0X0,
+                    endpoint = "https://share.example/upload",
+                    customEndpoint = "https://share.example/upload",
+                    username = "camera-user",
+                    password = "camera-secret",
+                )
+            prefs.setConfig(configured)
+
+            val plain = backup.exportToString(mode = BackupExportMode.CREDENTIALS_EXCLUDED, nowEpochMillis = 1_000L)
+            prefs.setConfig(
+                configured.copy(
+                    backend = AttachmentBackend.CRAFTERBIN,
+                    endpoint = AttachmentBackend.CRAFTERBIN.endpoint!!,
+                    username = "local-user",
+                    password = "local-secret",
+                ),
+            )
+            backup.import(plain, importMode = BackupImportMode.MERGE)
+            assertEquals("local-user", prefs.config.first().username)
+            assertEquals("local-secret", prefs.config.first().password)
+
+            prefs.setConfig(
+                configured.copy(
+                    endpoint = "https://other.example/upload",
+                    customEndpoint = "https://other.example/upload",
+                    username = "other-user",
+                    password = "other-secret",
+                ),
+            )
+            backup.import(plain, importMode = BackupImportMode.MERGE)
+            assertEquals("", prefs.config.first().username)
+            assertEquals("", prefs.config.first().password)
+
+            prefs.setConfig(configured)
+            val encrypted =
+                backup.exportToString(
+                    mode = BackupExportMode.ENCRYPTED_WITH_CREDENTIALS,
+                    password = "backup-password",
+                    nowEpochMillis = 2_000L,
+                )
+            prefs.setConfig(PasteBackendConfig())
+            backup.import(encrypted, password = "backup-password", importMode = BackupImportMode.MERGE)
+            assertEquals("camera-user", prefs.config.first().username)
+            assertEquals("camera-secret", prefs.config.first().password)
         }
 
     @Test
