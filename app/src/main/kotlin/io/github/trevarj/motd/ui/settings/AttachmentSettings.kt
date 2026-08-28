@@ -22,6 +22,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -192,9 +193,13 @@ fun UploadsSettingsContent(viewModel: AttachmentSettingsViewModel = hiltViewMode
                             onCheckedChange = { value -> viewModel.update { it.copy(secretUrl = value) } },
                             switchTag = "settings_upload_secret",
                         )
+                        val expiryDays = uploadExpiryWholeDays(config.expiry)
                         OutlinedTextField(
-                            value = config.expiry.orEmpty(),
-                            onValueChange = { value -> viewModel.update { it.copy(expiry = value.ifBlank { null }) } },
+                            value =
+                                expiryDays?.let {
+                                    pluralStringResource(io.github.trevarj.motd.R.plurals.settings_upload_expiry_days, it, it)
+                                } ?: config.expiry.orEmpty(),
+                            onValueChange = { value -> viewModel.update { it.copy(expiry = uploadExpiryHours(value)) } },
                             label = { Text(stringResource(io.github.trevarj.motd.R.string.settings_upload_expiry)) },
                             supportingText = { Text(stringResource(io.github.trevarj.motd.R.string.settings_upload_expiry_desc)) },
                             singleLine = true,
@@ -310,6 +315,25 @@ internal fun sameUploadAuthority(
             a.host.equals(b.host, ignoreCase = true) &&
             aPort == bPort
     }.getOrDefault(false)
+
+internal fun uploadExpiryWholeDays(hours: String?): Int? =
+    hours
+        ?.toLongOrNull()
+        ?.takeIf { it > 0L && it % 24L == 0L && it / 24L <= Int.MAX_VALUE.toLong() }
+        ?.div(24L)
+        ?.toInt()
+
+internal fun uploadExpiryHours(value: String): String? {
+    val trimmed = value.trim()
+    if (trimmed.isEmpty()) return null
+    val days =
+        Regex("""(\d+)\s+days?""", RegexOption.IGNORE_CASE)
+            .matchEntire(trimmed)
+            ?.groupValues
+            ?.get(1)
+            ?.toLongOrNull()
+    return days?.let { runCatching { Math.multiplyExact(it, 24L).toString() }.getOrNull() } ?: trimmed
+}
 
 internal fun uploadLimitMaximumMiB(backend: AttachmentBackend): Long = backendMaxBytes(backend) / MIB
 

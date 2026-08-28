@@ -83,6 +83,15 @@ class SettingsUiModelsTest {
     }
 
     @Test
+    fun `upload expiry displays whole days while preserving wire hours`() {
+        assertEquals(7, uploadExpiryWholeDays("168"))
+        assertEquals(null, uploadExpiryWholeDays("12"))
+        assertEquals("168", uploadExpiryHours("7 days"))
+        assertEquals("24", uploadExpiryHours("1 day"))
+        assertEquals(null, uploadExpiryHours("  "))
+    }
+
+    @Test
     fun `networks are grouped with children directly under alphabetized roots`() {
         val rootB = network(2, "Zulu", NetworkRole.BOUNCER_ROOT)
         val rootA = network(1, "Alpha", NetworkRole.BOUNCER_ROOT)

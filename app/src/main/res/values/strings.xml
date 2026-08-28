@@ -263,7 +263,11 @@
     <string name="settings_upload_secret">Secret URL</string>
     <string name="settings_upload_secret_desc">Ask the service not to list the upload publicly.</string>
     <string name="settings_upload_expiry">Default expiry</string>
-    <string name="settings_upload_expiry_desc">Maximum lifetime in hours, such as 168; leave blank for its default.</string>
+    <string name="settings_upload_expiry_desc">Maximum lifetime, such as 7 days; leave blank for its default.</string>
+    <plurals name="settings_upload_expiry_days">
+        <item quantity="one">%1$d day</item>
+        <item quantity="other">%1$d days</item>
+    </plurals>
     <string name="settings_upload_litterbox_expiry_desc">The link is removed automatically after this duration.</string>
     <string name="settings_upload_uguu_warning">Uguu uploads are public to anyone with the link and expire after 3 hours.</string>
     <string name="settings_upload_cnet_warning">paste.c-net.org uses an unguessable link and supports deletion. Retention resets to 180 days whenever the file is accessed.</string>
