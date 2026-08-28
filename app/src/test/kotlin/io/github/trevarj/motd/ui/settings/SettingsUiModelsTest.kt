@@ -66,6 +66,14 @@ class SettingsUiModelsTest {
     }
 
     @Test
+    fun `upload credentials stay bound to one endpoint authority`() {
+        assertTrue(sameUploadAuthority("https://share.example/upload", "https://share.example/other"))
+        assertTrue(sameUploadAuthority("https://share.example/upload", "https://SHARE.example:443/other"))
+        assertFalse(sameUploadAuthority("https://share.example/upload", "https://other.example/upload"))
+        assertFalse(sameUploadAuthority("https://share.example/upload", "https://share.example:8443/upload"))
+    }
+
+    @Test
     fun `upload endpoint classification controls the visible size maximum`() {
         assertEquals(25L, uploadLimitMaximumMiB(AttachmentBackend.CRAFTERBIN))
         assertEquals(25L, uploadLimitMaximumMiB(AttachmentBackend.LITTERBOX))

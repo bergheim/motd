@@ -17,6 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -51,7 +52,7 @@ class AttachmentSettingsViewModel
     ) : ViewModel() {
         val config = prefs.config.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), PasteBackendConfig())
 
-        fun update(transform: (PasteBackendConfig) -> PasteBackendConfig) = viewModelScope.launch { prefs.setConfig(transform(config.value)) }
+        fun update(transform: (PasteBackendConfig) -> PasteBackendConfig) = viewModelScope.launch { prefs.updateConfig(transform) }
     }
 
 @Composable
@@ -92,13 +93,37 @@ fun UploadsSettingsContent(viewModel: AttachmentSettingsViewModel = hiltViewMode
             }
             if (backend == AttachmentBackend.CUSTOM_0X0) {
                 SettingsGroup(title = stringResource(io.github.trevarj.motd.R.string.settings_upload_endpoint)) {
+                    var usernameDraft by remember { mutableStateOf<String?>(null) }
+                    var passwordDraft by remember { mutableStateOf<String?>(null) }
                     val endpointError = customEndpoint.isNotBlank() && validateEndpoint(customEndpoint) == null
                     OutlinedTextField(
                         value = customEndpoint,
                         onValueChange = { value ->
                             customEndpoint = value
-                            validateEndpoint(value)?.let { endpoint ->
-                                viewModel.update { it.copy(endpoint = endpoint, customEndpoint = endpoint) }
+                            if (value.isBlank()) {
+                                usernameDraft = ""
+                                passwordDraft = ""
+                                viewModel.update {
+                                    it.copy(endpoint = "", customEndpoint = "", username = "", password = "")
+                                }
+                            } else {
+                                validateEndpoint(value)?.let { endpoint ->
+                                    val authorityChanged =
+                                        config.endpoint.isNotBlank() &&
+                                            !sameUploadAuthority(config.endpoint, endpoint)
+                                    if (authorityChanged) {
+                                        usernameDraft = ""
+                                        passwordDraft = ""
+                                    }
+                                    viewModel.update {
+                                        it.copy(
+                                            endpoint = endpoint,
+                                            customEndpoint = endpoint,
+                                            username = if (authorityChanged) "" else it.username,
+                                            password = if (authorityChanged) "" else it.password,
+                                        )
+                                    }
+                                }
                             }
                         },
                         label = { Text(stringResource(io.github.trevarj.motd.R.string.settings_upload_custom_url)) },
@@ -121,6 +146,38 @@ fun UploadsSettingsContent(viewModel: AttachmentSettingsViewModel = hiltViewMode
                                 .fillMaxWidth()
                                 .padding(horizontal = 16.dp, vertical = 8.dp)
                                 .testTag("settings_upload_custom_endpoint"),
+                    )
+                    OutlinedTextField(
+                        value = usernameDraft ?: config.username,
+                        onValueChange = { value ->
+                            usernameDraft = value
+                            viewModel.update { it.copy(username = value) }
+                        },
+                        label = { Text(stringResource(io.github.trevarj.motd.R.string.settings_upload_custom_username)) },
+                        singleLine = true,
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                                .testTag("settings_upload_custom_username"),
+                    )
+                    OutlinedTextField(
+                        value = passwordDraft ?: config.password,
+                        onValueChange = { value ->
+                            passwordDraft = value
+                            viewModel.update { it.copy(password = value) }
+                        },
+                        label = { Text(stringResource(io.github.trevarj.motd.R.string.settings_upload_custom_password)) },
+                        visualTransformation =
+                            androidx.compose.ui.text.input
+                                .PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        singleLine = true,
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                                .testTag("settings_upload_custom_password"),
                     )
                 }
             }
@@ -196,9 +253,7 @@ fun UploadsSettingsContent(viewModel: AttachmentSettingsViewModel = hiltViewMode
                     )
                 }
 
-                AttachmentBackend.TERMBIN -> {
-                    Unit
-                }
+                AttachmentBackend.TERMBIN -> {}
             }
         }
     }
@@ -241,6 +296,21 @@ private fun UploadWarning(
     }
 }
 
+internal fun sameUploadAuthority(
+    first: String,
+    second: String,
+): Boolean =
+    runCatching {
+        val a = java.net.URI(first)
+        val b = java.net.URI(second)
+        val aPort = if (a.port >= 0) a.port else 443
+        val bPort = if (b.port >= 0) b.port else 443
+        a.scheme.equals("https", ignoreCase = true) &&
+            b.scheme.equals("https", ignoreCase = true) &&
+            a.host.equals(b.host, ignoreCase = true) &&
+            aPort == bPort
+    }.getOrDefault(false)
+
 internal fun uploadLimitMaximumMiB(backend: AttachmentBackend): Long = backendMaxBytes(backend) / MIB
 
 internal fun backendDescription(backend: AttachmentBackend): String =
@@ -248,7 +318,7 @@ internal fun backendDescription(backend: AttachmentBackend): String =
         AttachmentBackend.CRAFTERBIN -> "Files, photos, and text • configurable expiry"
         AttachmentBackend.ZERO_X_ZERO -> "Files, photos, and text • public service"
         AttachmentBackend.X0_AT -> "Files, photos, and text • 3–100 days by size • no deletion"
-        AttachmentBackend.CUSTOM_0X0 -> "Your own HTTPS 0x0-compatible endpoint"
+        AttachmentBackend.CUSTOM_0X0 -> "HTTPS URL, optional username and password"
         AttachmentBackend.CNET -> "Files, photos, and text • rolling 180 days • deletable"
         AttachmentBackend.UGUU -> "Files, photos, and text • 3 hours"
         AttachmentBackend.LITTERBOX -> "Files, photos, and text • 1–72 hours"

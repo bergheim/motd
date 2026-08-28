@@ -45,6 +45,13 @@ class AttachmentPrefsImpl
             store.edit { it[CONFIG] = encodeConfig(normalizedConfig(config)) }
         }
 
+        override suspend fun updateConfig(transform: (PasteBackendConfig) -> PasteBackendConfig) {
+            store.edit { prefs ->
+                val current = prefs[CONFIG]?.let(::decodeConfig) ?: PasteBackendConfig()
+                prefs[CONFIG] = encodeConfig(normalizedConfig(transform(current)))
+            }
+        }
+
         override suspend fun addUpload(record: UploadRecord) {
             store.edit { prefs ->
                 val records =
@@ -70,6 +77,8 @@ class AttachmentPrefsImpl
                 put("litterboxExpiry", c.litterboxExpiry)
                 put("secret", c.secretUrl)
                 put("limit", c.sizeLimitBytes)
+                put("username", c.username)
+                put("password", c.password)
             }.toString()
 
         private fun decodeConfig(raw: String) =
@@ -78,7 +87,11 @@ class AttachmentPrefsImpl
                 val endpoint = o["endpoint"]?.jsonPrimitive?.content ?: EndpointPreset.CRAFTERBIN.endpoint!!
                 val backend =
                     o["backend"]?.jsonPrimitive?.content?.let { value ->
-                        runCatching { AttachmentBackend.valueOf(value) }.getOrNull()
+                        if (value == "MICROBIN") {
+                            AttachmentBackend.CUSTOM_0X0
+                        } else {
+                            runCatching { AttachmentBackend.valueOf(value) }.getOrNull()
+                        }
                     } ?: legacyAttachmentBackend(o["protocol"]?.jsonPrimitive?.content, endpoint)
                 normalizedConfig(
                     PasteBackendConfig(
@@ -91,6 +104,8 @@ class AttachmentPrefsImpl
                                 ?: DEFAULT_LITTERBOX_EXPIRY,
                         secretUrl = o["secret"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: true,
                         sizeLimitBytes = o["limit"]?.jsonPrimitive?.longOrNull ?: DEFAULT_PUBLIC_LIMIT_BYTES,
+                        username = o["username"]?.jsonPrimitive?.content.orEmpty(),
+                        password = o["password"]?.jsonPrimitive?.content.orEmpty(),
                     ),
                 )
             }.getOrDefault(PasteBackendConfig())

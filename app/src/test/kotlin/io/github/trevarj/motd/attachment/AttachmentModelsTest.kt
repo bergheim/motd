@@ -12,6 +12,12 @@ class AttachmentModelsTest {
         assertEquals("https://0x0.st", EndpointPreset.ZERO_X_ZERO.endpoint)
     }
 
+    @Test fun crafterBinRemainsTheWorkingDefault() {
+        val config = PasteBackendConfig()
+        assertEquals(AttachmentBackend.CRAFTERBIN, config.backend)
+        assertEquals(EndpointPreset.CRAFTERBIN.endpoint, config.endpoint)
+    }
+
     @Test fun curatedBackendsHaveExpectedProtocolsAndHttpsEndpoints() {
         val public = AttachmentBackend.entries.filter { it.endpoint != null }
         assertTrue(public.all { validateEndpoint(it.endpoint!!) != null })
@@ -124,7 +130,13 @@ class AttachmentModelsTest {
     }
 
     @Test fun publicLimitIsCappedAt25MiB() {
-        val config = normalizedConfig(PasteBackendConfig(sizeLimitBytes = MAX_CUSTOM_LIMIT_BYTES))
+        val config =
+            normalizedConfig(
+                PasteBackendConfig(
+                    backend = AttachmentBackend.CRAFTERBIN,
+                    sizeLimitBytes = MAX_CUSTOM_LIMIT_BYTES,
+                ),
+            )
         assertEquals(DEFAULT_PUBLIC_LIMIT_BYTES, config.sizeLimitBytes)
     }
 

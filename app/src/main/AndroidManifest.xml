@@ -3,9 +3,15 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Optional: QR scanning and the photo-picker tile show live frames; full capture delegates
+         to the system Camera app. Runtime access is requested only when camera UI is tapped. -->
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Custom photo grid reads only images after explicit runtime access; Browse keeps the
+         permissionless system picker available. -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    <!-- QR invitations have a paste fallback; camera-less devices remain supported. -->
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
     <!-- Connectivity-aware reconnect: ConnectionManagerImpl.registerDefaultNetworkCallback. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -169,6 +175,16 @@
         <receiver android:name=".service.BootReceiver" android:exported="false">
             <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED" /></intent-filter>
         </receiver>
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.camera"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/camera_capture_paths" />
+        </provider>
+
         <receiver android:name=".service.ReplyReceiver" android:exported="false" />
         <receiver android:name=".service.InviteReceiver" android:exported="false" />
 

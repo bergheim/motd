@@ -84,6 +84,9 @@ class AttachmentUploaderImpl
         ): Flow<UploadProgress> =
             flow {
                 val safe = normalizedConfig(config)
+                if (safe.backend == AttachmentBackend.CUSTOM_0X0 && validateEndpoint(safe.endpoint) == null) {
+                    throw UploadException("Configure a valid Custom HTTPS URL in Settings › Uploads.")
+                }
                 val knownSize = source.sizeOrNull()
                 if (knownSize != null && knownSize > safe.sizeLimitBytes) throw UploadException("File exceeds the configured upload limit")
                 require(safe.backend.supports(source)) { "${safe.backend.label} does not support this attachment type" }
@@ -91,14 +94,80 @@ class AttachmentUploaderImpl
                     emit(UploadProgress.Transferring(sent, total))
                 }
                 when (safe.protocol) {
-                    PasteProtocol.TERMBIN -> emit(uploadTermbin(source as AttachmentSource.Text, safe))
-                    PasteProtocol.MULTIPART_0X0 -> emit(upload0x0(source, safe, progress))
-                    PasteProtocol.RAW_CNET -> emit(uploadCNet(source, safe, progress))
-                    PasteProtocol.MULTIPART_UGUU -> emit(uploadUguu(source, safe, progress))
-                    PasteProtocol.MULTIPART_CATBOX -> emit(uploadCatbox(source, safe, progress))
-                    PasteProtocol.SOJU_FILEHOST -> emit(uploadSojuFileHost(source, safe, context, progress))
+                    PasteProtocol.TERMBIN -> {
+                        emit(uploadTermbin(source as AttachmentSource.Text, safe))
+                    }
+
+                    PasteProtocol.MULTIPART_0X0 -> {
+                        emit(
+                            if (safe.backend == AttachmentBackend.CUSTOM_0X0) {
+                                uploadCustom(source, safe, progress)
+                            } else {
+                                upload0x0(source, safe, progress)
+                            },
+                        )
+                    }
+
+                    PasteProtocol.RAW_CNET -> {
+                        emit(uploadCNet(source, safe, progress))
+                    }
+
+                    PasteProtocol.MULTIPART_UGUU -> {
+                        emit(uploadUguu(source, safe, progress))
+                    }
+
+                    PasteProtocol.MULTIPART_CATBOX -> {
+                        emit(uploadCatbox(source, safe, progress))
+                    }
+
+                    PasteProtocol.SOJU_FILEHOST -> {
+                        emit(uploadSojuFileHost(source, safe, context, progress))
+                    }
                 }
             }.flowOn(Dispatchers.IO)
+
+        private suspend fun uploadCustom(
+            source: AttachmentSource,
+            config: PasteBackendConfig,
+            progress: suspend (Long, Long?) -> Unit,
+        ): UploadProgress.Complete {
+            val boundary = "motd-${java.util.UUID.randomUUID()}"
+            val fields =
+                buildList {
+                    addAll(multipart0x0Fields(config))
+                    add("expiration" to "never")
+                    add("burn_after" to "0")
+                    add("privacy" to "unlisted")
+                    add("syntax_highlight" to "none")
+                    if (config.password.isNotBlank()) add("uploader_password" to config.password)
+                }
+            val connection =
+                connection(config.endpoint, "POST").apply {
+                    instanceFollowRedirects = false
+                    doOutput = true
+                    setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+                    basicAuthHeader(config.username, config.password)?.let { setRequestProperty("Authorization", it) }
+                    setChunkedStreamingMode(STREAM_BUFFER_BYTES)
+                }
+            return executeUpload(connection) {
+                connection.outputStream.use { output ->
+                    fields.forEach { (name, value) -> output.write(MultipartEncoding.field(boundary, name, value)) }
+                    output.write(MultipartEncoding.fileHeader(boundary, "file", source.displayName(), source.mimeType()))
+                    streamSource(source, config, output, progress)
+                    output.write(MultipartEncoding.ending(boundary))
+                }
+                val code = connection.responseCode
+                val location = connection.getHeaderField("Location")
+                val body = if (code in 200..299) response(connection) else ""
+                if (code !in 200..299 && code !in 300..399) {
+                    throw UploadException("Upload failed (HTTP $code)")
+                }
+                if (code in 300..399 && !isCustomUploadRedirect(config.endpoint, location)) {
+                    throw UploadException("Upload returned an unexpected redirect.")
+                }
+                UploadProgress.Complete(record(source, config, customResultUrl(config.endpoint, location, body)))
+            }
+        }
 
         private suspend fun uploadTermbin(
             source: AttachmentSource.Text,
@@ -405,6 +474,74 @@ class AttachmentUploaderImpl
         }
     }
 
+internal fun basicAuthHeader(
+    username: String,
+    password: String,
+): String? {
+    if (username.isBlank()) return null
+    val token =
+        java.util.Base64
+            .getEncoder()
+            .encodeToString("$username:$password".toByteArray(StandardCharsets.UTF_8))
+    return "Basic $token"
+}
+
+internal fun isCustomUploadRedirect(
+    endpoint: String,
+    location: String?,
+): Boolean {
+    val (origin, resolved) =
+        runCatching {
+            val origin = URI(endpoint)
+            origin to origin.resolve(location?.trim()?.takeIf(String::isNotBlank) ?: return false)
+        }.getOrNull() ?: return false
+    val originPort = if (origin.port >= 0) origin.port else 443
+    val resolvedPort = if (resolved.port >= 0) resolved.port else 443
+    if (
+        !resolved.scheme.equals("https", ignoreCase = true) ||
+        !origin.host.equals(resolved.host, ignoreCase = true) ||
+        originPort != resolvedPort
+    ) {
+        return false
+    }
+    val path = resolved.path.orEmpty().trimEnd('/')
+    if (path.endsWith("/incorrect") || path == "incorrect") return true
+    val slug = path.substringAfterLast("/upload/", missingDelimiterValue = "")
+    return slug.isNotBlank() && '/' !in slug
+}
+
+/** Custom POST: Location `/upload/{slug}` becomes `/file/{slug}`; else Location if https; else body. */
+internal fun customResultUrl(
+    endpoint: String,
+    location: String?,
+    body: String = "",
+): String {
+    val resolved =
+        location
+            ?.trim()
+            ?.takeIf(String::isNotBlank)
+            ?.let { runCatching { URI(endpoint).resolve(it).toString() }.getOrNull() }
+    if (resolved != null) {
+        val uri =
+            runCatching { URI(resolved) }.getOrNull()
+                ?: throw UploadException("Upload returned an invalid URL.")
+        val path = uri.path.orEmpty().trimEnd('/')
+        if (path.endsWith("/incorrect") || path == "incorrect") {
+            throw UploadException("Password was rejected.")
+        }
+        val slug =
+            path
+                .substringAfterLast("/upload/", missingDelimiterValue = "")
+                .takeIf { it.isNotBlank() && '/' !in it }
+        if (slug != null) {
+            return validateEndpoint(URI(uri.scheme, uri.authority, "/file/$slug", null, null).toString())
+                ?: throw UploadException("Upload returned an invalid HTTPS URL.")
+        }
+        validateEndpoint(resolved)?.let { return it }
+    }
+    return firstHttpsUrl(body)
+}
+
 /**
  * The URL a completed upload reports, resolved against the endpoint it was posted to.
  *
@@ -511,7 +648,7 @@ private fun parseJson(body: String) =
     runCatching { Json.parseToJsonElement(body) }
         .getOrElse { throw UploadException("Backend returned an invalid response") }
 
-private fun firstHttpsUrl(body: String): String =
+internal fun firstHttpsUrl(body: String): String =
     body
         .lineSequence()
         .map(String::trim)

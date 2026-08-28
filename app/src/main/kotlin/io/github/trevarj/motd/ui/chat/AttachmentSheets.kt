@@ -1,13 +1,26 @@
 package io.github.trevarj.motd.ui.chat
 
+import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ContentResolver
+import android.content.ContentUris
+import android.content.Context
+import android.content.pm.PackageManager
 import android.database.Cursor
 import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.provider.MediaStore
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,12 +28,16 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -37,6 +54,7 @@ import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.InsertLink
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.PhotoCamera
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.AlertDialog
@@ -58,10 +76,13 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -75,7 +96,11 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import io.github.trevarj.motd.R
@@ -91,11 +116,16 @@ import io.github.trevarj.motd.attachment.supports
 import io.github.trevarj.motd.ui.share.PendingShare
 import io.github.trevarj.motd.ui.theme.LocalMotdSemanticColors
 import io.github.trevarj.motd.ui.theme.SheetSystemBars
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
 
 private sealed interface AttachmentFlow {
     data object Idle : AttachmentFlow
 
     data object Sources : AttachmentFlow
+
+    data object Photos : AttachmentFlow
 
     data object EditText : AttachmentFlow
 
@@ -109,6 +139,13 @@ private sealed interface AttachmentFlow {
 internal data class UploadDestination(
     val label: String,
     val config: PasteBackendConfig,
+)
+
+internal data class GalleryPhoto(
+    val uri: Uri,
+    val name: String,
+    val mimeType: String?,
+    val size: Long?,
 )
 
 internal fun uploadDestinations(
@@ -143,6 +180,7 @@ fun AttachmentSheets(
     viewModel: AttachmentViewModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
+    val cameraStartError = stringResource(R.string.upload_camera_failed)
     val defaultConfig by viewModel.config.collectAsStateWithLifecycle()
     val recent by viewModel.recent.collectAsStateWithLifecycle()
     val progress by viewModel.progress.collectAsStateWithLifecycle()
@@ -150,11 +188,47 @@ fun AttachmentSheets(
     var flow by remember { mutableStateOf<AttachmentFlow>(AttachmentFlow.Idle) }
     var pasteText by remember { mutableStateOf("") }
     var lastAttempt by remember { mutableStateOf<AttachmentFlow.Confirm?>(null) }
+    var capturePath by rememberSaveable { mutableStateOf<String?>(null) }
     var deleteTarget by remember { mutableStateOf<UploadRecord?>(null) }
     var backendPickerRequest by remember { mutableStateOf<AttachmentFlow.Confirm?>(null) }
+    var cameraPermissionGranted by remember { mutableStateOf(context.hasCameraPermission()) }
+    var photoAccessGranted by remember { mutableStateOf(context.hasPhotoAccess()) }
+    val galleryPhotos by
+        produceState(emptyList<GalleryPhoto>(), flow, photoAccessGranted) {
+            value =
+                if (flow == AttachmentFlow.Photos && photoAccessGranted) {
+                    withContext(Dispatchers.IO) {
+                        runCatching { context.contentResolver.recentGalleryPhotos() }.getOrDefault(emptyList())
+                    }
+                } else {
+                    emptyList()
+                }
+        }
+
+    LaunchedEffect(flow) {
+        if (flow == AttachmentFlow.Photos) {
+            cameraPermissionGranted = context.hasCameraPermission()
+            photoAccessGranted = context.hasPhotoAccess()
+        }
+    }
 
     LaunchedEffect(open, startWithCurrentDraft, sharedFile) {
         if (!open) return@LaunchedEffect
+        capturePath?.let(::File)?.let { captured ->
+            if (captured.length() > 0L) {
+                flow =
+                    AttachmentFlow.Confirm(
+                        AttachmentSource.LocalFile(captured, captured.name, "image/jpeg", captured.length()),
+                        false,
+                        defaultConfig,
+                    )
+            } else {
+                captured.delete()
+                capturePath = null
+                flow = AttachmentFlow.Photos
+            }
+            return@LaunchedEffect
+        }
         flow =
             when {
                 sharedFile != null -> {
@@ -208,6 +282,7 @@ fun AttachmentSheets(
             AttachmentUploadContext(networkId),
         ) { record ->
             if (request.replaceDraft) onReplaceDraft(record.url) else onInsertUrl(record.url)
+            if (request.source.deleteCameraCapture()) capturePath = null
             lastAttempt = null
             onDismiss()
         }
@@ -225,11 +300,46 @@ fun AttachmentSheets(
         rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) {
             it?.let { uri -> select(uri, true) }
         }
+    val takePicture =
+        rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+            val file = capturePath?.let(::File)
+            if (!ok || file == null || file.length() <= 0L) {
+                file?.delete()
+                capturePath = null
+                flow = AttachmentFlow.Photos
+                return@rememberLauncherForActivityResult
+            }
+            val source = AttachmentSource.LocalFile(file, file.name, "image/jpeg", file.length())
+            flow = AttachmentFlow.Confirm(source, false, defaultConfig)
+        }
+
+    fun launchCamera() {
+        flow = AttachmentFlow.Idle
+        val file = cameraCaptureFile(context)
+        capturePath = file.absolutePath
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.camera", file)
+        try {
+            takePicture.launch(uri)
+        } catch (_: Exception) {
+            capturePath = null
+            file.delete()
+            flow = AttachmentFlow.Photos
+            viewModel.fail(cameraStartError)
+        }
+    }
+
+    val cameraPermission =
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            cameraPermissionGranted = granted
+            if (granted) launchCamera()
+        }
+    val photoPermissions =
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+            photoAccessGranted = context.hasPhotoAccess()
+        }
 
     when (val current = flow) {
-        AttachmentFlow.Idle -> {
-            Unit
-        }
+        AttachmentFlow.Idle -> {}
 
         AttachmentFlow.Sources -> {
             SourceSheet(
@@ -237,10 +347,7 @@ fun AttachmentSheets(
                 recent = if (imageOnly) recent.filter { it.mimeType?.startsWith("image/") == true } else recent,
                 imageOnly = imageOnly,
                 onDismiss = ::closeSourceSheet,
-                onPhoto = {
-                    closeSourceSheet()
-                    photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                },
+                onPhoto = { flow = AttachmentFlow.Photos },
                 onFile = {
                     closeSourceSheet()
                     filePicker.launch(arrayOf(if (imageOnly) "image/*" else "*/*"))
@@ -272,6 +379,34 @@ fun AttachmentSheets(
             )
         }
 
+        AttachmentFlow.Photos -> {
+            PhotoPickerSheet(
+                photos = galleryPhotos,
+                cameraPermissionGranted = cameraPermissionGranted,
+                photoAccessGranted = photoAccessGranted,
+                onCamera = {
+                    if (cameraPermissionGranted) {
+                        launchCamera()
+                    } else {
+                        cameraPermission.launch(Manifest.permission.CAMERA)
+                    }
+                },
+                onRequestPhotoAccess = { photoPermissions.launch(photoReadPermissions()) },
+                onBrowse = {
+                    photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                },
+                onPhoto = { photo ->
+                    flow =
+                        AttachmentFlow.Confirm(
+                            AttachmentSource.Photo(photo.uri, photo.name, photo.mimeType, photo.size),
+                            false,
+                            defaultConfig,
+                        )
+                },
+                onDismiss = { flow = AttachmentFlow.Sources },
+            )
+        }
+
         AttachmentFlow.EditText -> {
             TextPasteSheet(
                 text = pasteText,
@@ -292,7 +427,10 @@ fun AttachmentSheets(
                     backendPickerRequest = current
                     flow = AttachmentFlow.Idle
                 },
-                onDismiss = ::closeSourceSheet,
+                onDismiss = {
+                    if (current.source.deleteCameraCapture()) capturePath = null
+                    closeSourceSheet()
+                },
                 onUpload = { startUpload(current) },
             )
         }
@@ -326,7 +464,10 @@ fun AttachmentSheets(
 
     error?.let { message ->
         AlertDialog(
-            onDismissRequest = viewModel::clearError,
+            onDismissRequest = {
+                viewModel.clearError()
+                lastAttempt?.let { flow = it }
+            },
             icon = { Icon(Icons.Outlined.CloudUpload, null) },
             title = { Text(stringResource(R.string.upload_failed)) },
             text = { Text(message) },
@@ -372,6 +513,190 @@ fun AttachmentSheets(
             },
             dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text(stringResource(R.string.action_cancel)) } },
         )
+    }
+}
+
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+internal fun PhotoPickerSheet(
+    photos: List<GalleryPhoto>,
+    cameraPermissionGranted: Boolean,
+    photoAccessGranted: Boolean,
+    onCamera: () -> Unit,
+    onRequestPhotoAccess: () -> Unit,
+    onBrowse: () -> Unit,
+    onPhoto: (GalleryPhoto) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        modifier = Modifier.testTag("attachment_photo_sheet"),
+    ) {
+        SheetSystemBars()
+        Column(Modifier.fillMaxWidth().heightIn(min = 320.dp, max = 700.dp).padding(horizontal = 16.dp)) {
+            Text(
+                stringResource(R.string.upload_photos_title),
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(12.dp))
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(3),
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                item(key = "camera") {
+                    CameraPreviewTile(cameraPermissionGranted, onCamera)
+                }
+                if (!photoAccessGranted) {
+                    item(key = "permission") {
+                        GalleryActionTile(
+                            icon = Icons.Outlined.Image,
+                            label = stringResource(R.string.upload_photos_allow),
+                            tag = "attachment_photos_permission",
+                            onClick = onRequestPhotoAccess,
+                        )
+                    }
+                }
+                item(key = "browse") {
+                    GalleryActionTile(
+                        icon = Icons.Filled.MoreVert,
+                        label = stringResource(R.string.upload_photos_browse),
+                        tag = "attachment_photos_browse",
+                        onClick = onBrowse,
+                    )
+                }
+                items(photos, key = { it.uri.toString() }) { photo ->
+                    AsyncImage(
+                        model = photo.uri,
+                        contentDescription = photo.name,
+                        contentScale = ContentScale.Crop,
+                        modifier =
+                            Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { onPhoto(photo) }
+                                .testTag("attachment_photo_${photo.uri}"),
+                    )
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+        }
+    }
+}
+
+@Composable
+private fun GalleryActionTile(
+    icon: ImageVector,
+    label: String,
+    tag: String,
+    onClick: () -> Unit,
+) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .aspectRatio(1f)
+                .clickable(onClick = onClick)
+                .testTag(tag),
+    ) {
+        Column(
+            Modifier.fillMaxSize().padding(8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.height(4.dp))
+            Text(label, style = MaterialTheme.typography.labelMedium, maxLines = 2)
+        }
+    }
+}
+
+@Composable
+private fun CameraPreviewTile(
+    permissionGranted: Boolean,
+    onClick: () -> Unit,
+) {
+    var previewFailed by remember(permissionGranted) { mutableStateOf(false) }
+    val label = stringResource(R.string.upload_camera)
+    Box(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .aspectRatio(1f)
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                .clickable(onClick = onClick)
+                .testTag("attachment_camera_tile"),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (permissionGranted && !previewFailed) {
+            LiveCameraPreview(onError = { previewFailed = true }, modifier = Modifier.matchParentSize())
+            Box(
+                Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(8.dp)
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.8f), RoundedCornerShape(12.dp))
+                    .padding(6.dp),
+            ) {
+                Icon(Icons.Outlined.PhotoCamera, contentDescription = label, tint = MaterialTheme.colorScheme.primary)
+            }
+        } else {
+            Icon(
+                Icons.Outlined.PhotoCamera,
+                contentDescription = label,
+                modifier = Modifier.size(40.dp),
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        }
+    }
+}
+
+@Composable
+private fun LiveCameraPreview(
+    onError: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val previewView =
+        remember(context) {
+            PreviewView(context).apply {
+                implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                scaleType = PreviewView.ScaleType.FILL_CENTER
+            }
+        }
+
+    AndroidView(factory = { previewView }, modifier = modifier)
+
+    DisposableEffect(previewView, lifecycleOwner) {
+        var disposed = false
+        var provider: ProcessCameraProvider? = null
+        var preview: Preview? = null
+        val future = ProcessCameraProvider.getInstance(context)
+        val executor = ContextCompat.getMainExecutor(context)
+        future.addListener(
+            {
+                runCatching {
+                    val cameraProvider = future.get()
+                    if (disposed) return@addListener
+                    val useCase = Preview.Builder().build().also { it.surfaceProvider = previewView.surfaceProvider }
+                    cameraProvider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, useCase)
+                    provider = cameraProvider
+                    preview = useCase
+                }.onFailure { onError() }
+            },
+            executor,
+        )
+        onDispose {
+            disposed = true
+            preview?.let { provider?.unbind(it) }
+        }
     }
 }
 
@@ -549,6 +874,10 @@ internal fun ConfirmationSheet(
     onUpload: () -> Unit,
 ) {
     val sojuUnavailable = config.backend == AttachmentBackend.SOJU_FILEHOST && !sojuFileHostAvailable
+    val customUnavailable =
+        config.backend == AttachmentBackend.CUSTOM_0X0 &&
+            io.github.trevarj.motd.attachment
+                .validateEndpoint(config.endpoint) == null
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
@@ -563,9 +892,15 @@ internal fun ConfirmationSheet(
             ) {
                 Text(stringResource(R.string.upload_confirm_title), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(12.dp))
-                if (source is AttachmentSource.Photo) {
+                val preview =
+                    when (source) {
+                        is AttachmentSource.Photo -> source.uri
+                        is AttachmentSource.LocalFile -> source.file.takeIf { source.mimeType.startsWith("image/") }
+                        else -> null
+                    }
+                if (preview != null) {
                     AsyncImage(
-                        model = source.uri,
+                        model = preview,
                         contentDescription = null,
                         modifier =
                             Modifier
@@ -584,10 +919,10 @@ internal fun ConfirmationSheet(
                     headlineContent = { Text(config.backend.label, fontWeight = FontWeight.SemiBold) },
                     supportingContent = {
                         Text(
-                            if (sojuUnavailable) {
-                                stringResource(R.string.upload_soju_unavailable)
-                            } else {
-                                backendRetention(config)
+                            when {
+                                sojuUnavailable -> stringResource(R.string.upload_soju_unavailable)
+                                customUnavailable -> stringResource(R.string.upload_custom_unavailable)
+                                else -> backendRetention(config)
                             },
                         )
                     },
@@ -601,7 +936,7 @@ internal fun ConfirmationSheet(
             Column(Modifier.padding(horizontal = 16.dp)) {
                 Button(
                     onClick = onUpload,
-                    enabled = !sojuUnavailable,
+                    enabled = !sojuUnavailable && !customUnavailable,
                     modifier = Modifier.fillMaxWidth().height(52.dp).testTag("attachment_upload"),
                 ) {
                     Icon(Icons.Outlined.CloudUpload, null)
@@ -656,7 +991,8 @@ private fun BackendPickerSheet(
 private fun AttachmentMetadata(source: AttachmentSource) {
     Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
         Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(if (source is AttachmentSource.Photo) Icons.Outlined.Image else Icons.Outlined.Description, null, modifier = Modifier.size(28.dp), tint = MaterialTheme.colorScheme.primary)
+            val image = source is AttachmentSource.Photo || source is AttachmentSource.LocalFile && source.mimeType.startsWith("image/")
+            Icon(if (image) Icons.Outlined.Image else Icons.Outlined.Description, null, modifier = Modifier.size(28.dp), tint = MaterialTheme.colorScheme.primary)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(source.displayName(), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -826,3 +1162,89 @@ private fun android.content.ContentResolver.queryMeta(uri: Uri): Pair<String, Lo
 }
 
 fun isLongDraft(text: String): Boolean = text.length >= 1_200 || text.lineSequence().count() >= 4
+
+private fun Context.hasCameraPermission(): Boolean = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+
+private fun Context.hasPhotoAccess(): Boolean =
+    when {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> {
+            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED ||
+                ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED,
+                ) == PackageManager.PERMISSION_GRANTED
+        }
+
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> {
+            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
+        }
+
+        else -> {
+            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+private fun photoReadPermissions(): Array<String> =
+    when {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> {
+            arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
+        }
+
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> {
+            arrayOf(Manifest.permission.READ_MEDIA_IMAGES)
+        }
+
+        else -> {
+            arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+    }
+
+private fun ContentResolver.recentGalleryPhotos(): List<GalleryPhoto> {
+    val projection =
+        arrayOf(
+            MediaStore.Images.Media._ID,
+            MediaStore.Images.Media.DISPLAY_NAME,
+            MediaStore.Images.Media.MIME_TYPE,
+            MediaStore.Images.Media.SIZE,
+        )
+    val queryArgs =
+        Bundle().apply {
+            putStringArray(ContentResolver.QUERY_ARG_SORT_COLUMNS, arrayOf(MediaStore.Images.Media.DATE_ADDED))
+            putInt(ContentResolver.QUERY_ARG_SORT_DIRECTION, ContentResolver.QUERY_SORT_DIRECTION_DESCENDING)
+            // ponytail: 500 recent thumbnails keep sheet cheap; Browse reaches older media.
+            putInt(ContentResolver.QUERY_ARG_LIMIT, 500)
+        }
+    return query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, projection, queryArgs, null)
+        ?.use { cursor ->
+            val id = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+            val name = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
+            val mime = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.MIME_TYPE)
+            val size = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE)
+            buildList {
+                while (cursor.moveToNext()) {
+                    val mediaId = cursor.getLong(id)
+                    add(
+                        GalleryPhoto(
+                            uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, mediaId),
+                            name = cursor.getString(name) ?: "photo-$mediaId",
+                            mimeType = cursor.getString(mime),
+                            size = cursor.getLong(size).takeUnless { cursor.isNull(size) },
+                        ),
+                    )
+                }
+            }
+        }.orEmpty()
+}
+
+internal fun cameraCaptureFile(context: Context): File {
+    val dir = File(context.cacheDir, "camera").also { it.mkdirs() }
+    return File(dir, "capture-${System.currentTimeMillis()}.jpg")
+}
+
+private fun AttachmentSource.deleteCameraCapture(): Boolean =
+    if (this is AttachmentSource.LocalFile && file.parentFile?.name == "camera") {
+        file.delete()
+        true
+    } else {
+        false
+    }
