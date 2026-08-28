@@ -17,7 +17,7 @@ mapfile -t changed < <(git diff --name-only "$BASE"...HEAD)
 }
 
 matches() { printf '%s\n' "${changed[@]}" | grep -Eq "$1"; }
-gradle() { nix develop -c ./gradlew "$@" --stacktrace; }
+gradle() { nix develop -c bash ./gradlew "$@" --stacktrace; }
 pr_gradle() {
   MOTD_FUZZ_PROFILE=pr MOTD_FUZZ_SEED="$(git rev-parse HEAD)" gradle "$@"
 }
