@@ -40,6 +40,7 @@ class ChatSettingsComposerToolsTest {
                     onOpenFools = {},
                     onOpenDirectConnections = {},
                     onPresenceMode = {},
+                    onShowRedactedMessages = {},
                     onAutoAwayEnabled = {},
                     onAutoAwayMinutes = {},
                     onAutoAwayMessage = {},

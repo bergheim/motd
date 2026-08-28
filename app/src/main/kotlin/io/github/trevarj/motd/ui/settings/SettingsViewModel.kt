@@ -226,6 +226,11 @@ class SettingsViewModel
                 settingsRepository.setPresenceMode(mode)
             }
 
+        fun setShowRedactedMessages(show: Boolean) =
+            viewModelScope.launch {
+                settingsRepository.setShowRedactedMessages(show)
+            }
+
         fun setAutoAwayEnabled(enabled: Boolean) =
             viewModelScope.launch {
                 settingsRepository.setAutoAwayEnabled(enabled)

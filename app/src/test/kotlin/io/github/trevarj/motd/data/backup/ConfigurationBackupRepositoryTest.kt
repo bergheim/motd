@@ -253,18 +253,22 @@ class ConfigurationBackupRepositoryTest {
 
             settings.setShowComposerEmoji(false)
             settings.setShowComposerFormattingTools(false)
+            settings.setShowRedactedMessages(false)
             val raw = backup.exportToString(mode = BackupExportMode.CREDENTIALS_EXCLUDED, nowEpochMillis = 1_000L)
 
             settings.setShowComposerEmoji(true)
             settings.setShowComposerFormattingTools(true)
+            settings.setShowRedactedMessages(true)
             backup.import(raw, importMode = BackupImportMode.MERGE)
 
             val restored = settings.settings.first()
             assertFalse(restored.showComposerEmoji)
             assertFalse(restored.showComposerFormattingTools)
+            assertFalse(restored.showRedactedMessages)
 
             settings.setShowComposerEmoji(true)
             settings.setShowComposerFormattingTools(true)
+            settings.setShowRedactedMessages(true)
         }
 
     private fun repository(db: io.github.trevarj.motd.data.db.MotdDatabase): ConfigurationBackupRepositoryImpl {

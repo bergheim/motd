@@ -786,12 +786,14 @@ class CanonicalTimelineStore
                 senderAccount = existing.senderAccount ?: incoming.senderAccount,
                 text =
                     when {
+                        existing.kind == MessageKind.REDACTED -> existing.text
                         existing.pendingLabel != null -> incoming.text
                         authoritative && !existing.serverTimeAuthoritative -> incoming.text
                         else -> existing.text
                     },
                 ircFormattedText =
                     when {
+                        existing.kind == MessageKind.REDACTED -> null
                         existing.pendingLabel != null -> incoming.ircFormattedText
                         authoritative && !existing.serverTimeAuthoritative -> incoming.ircFormattedText
                         else -> existing.ircFormattedText

@@ -1751,6 +1751,12 @@ interface ReactionDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(r: ReactionEntity)
 
+    @Query("DELETE FROM reactions WHERE bufferId = :bufferId AND targetMsgid = :targetMsgid")
+    suspend fun deleteForTarget(
+        bufferId: Long,
+        targetMsgid: String,
+    )
+
     @Query(
         """DELETE FROM reactions
            WHERE bufferId = :bufferId AND targetMsgid = :targetMsgid

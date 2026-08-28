@@ -48,6 +48,7 @@ internal object CapTiers {
             "draft/relaymsg",
             "draft/pre-away",
             "draft/channel-rename",
+            "draft/message-redaction",
             ACCOUNT_REGISTRATION_CAP,
             "soju.im/bouncer-networks",
             "soju.im/bouncer-networks-notify",
@@ -84,6 +85,9 @@ internal object CapNegotiator {
             listOf("batch", "message-tags", "standard-replies").any { it !in advertised }
         ) {
             req.remove(MULTILINE_CAP)
+        }
+        if ("draft/message-redaction" in req && "message-tags" !in advertised) {
+            req.remove("draft/message-redaction")
         }
         val selectedNames = preferredNoImplicitNames(advertised)
         req.removeAll(NO_IMPLICIT_NAMES_ALIASES)

@@ -130,6 +130,28 @@ class MessageVisibilityReaderTest {
         }
 
     @Test
+    fun hiddenRedactionTombstoneIsExcludedFromSqlTimelineAndPreview() =
+        runTest {
+            db.messageDao().insertAll(
+                listOf(
+                    message(
+                        bufferId,
+                        "Message deleted by oper",
+                        sender = "alice",
+                        serverTime = 200,
+                        dedupKey = "redacted",
+                        kind = MessageKind.REDACTED,
+                    ),
+                ),
+            )
+            val hidden = MessageVisibilitySpec(showRedactedMessages = false)
+
+            assertEquals(1, reader.countTimelineNewer(bufferId, 0, 0, MessageVisibilitySpec()))
+            assertEquals(0, reader.countTimelineNewer(bufferId, 0, 0, hidden))
+            assertNull(reader.resolveChatList(db.bufferDao().observeChatList().first(), hidden).single().lastMessageText)
+        }
+
+    @Test
     fun timelineIndexIncludesCollapsedFoolButNotHiddenFoolOrHiddenJoin() =
         runTest {
             val ids =

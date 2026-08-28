@@ -906,9 +906,9 @@ fun ChatContent(
         ) {
             MessageVisibilityPolicy(
                 MessageVisibilitySpec(
-                    presenceMode,
-                    fools,
-                    foolsMode,
+                    presenceMode = presenceMode,
+                    fools = fools,
+                    foolsMode = foolsMode,
                     revealHiddenFools = hiddenFoolsRevealed,
                 ),
                 identityRules,

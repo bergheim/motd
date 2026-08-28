@@ -434,6 +434,10 @@ class EventProcessor
                     onTag(networkId, event, origin, historyTarget)
                 }
 
+                is IrcEvent.MessageRedacted -> {
+                    onMessageRedacted(networkId, event, historyTarget)
+                }
+
                 is IrcEvent.HistoryBatch -> {
                     onHistoryBatch(networkId, event, expectedHistoryRoomId)
                 }
@@ -905,6 +909,44 @@ class EventProcessor
                         targetEventId = targetEvent?.id,
                     ),
                 )
+            }
+        }
+
+        private suspend fun onMessageRedacted(
+            networkId: Long,
+            event: IrcEvent.MessageRedacted,
+            historyTarget: String?,
+        ) {
+            val st = stateFor(networkId)
+            val route = resolveReactionRoute(networkId, event.source.nick, event.target, historyTarget, st)
+            val expectedRoomId = existingReactionRoomId(networkId, route, st, event.ctx.account) ?: return
+            val target =
+                db.canonicalTimelineDao().eventByAlias(
+                    networkId,
+                    EventAliasNamespace.MSGID,
+                    event.targetMsgid.toByteArray(Charsets.UTF_8),
+                ) ?: return
+            val canonicalExpectedRoomId = bufferDao.canonicalId(expectedRoomId) ?: expectedRoomId
+            if (target.bufferId != canonicalExpectedRoomId || target.kind !in REDACTABLE_MESSAGE_KINDS) return
+
+            val tombstone =
+                "Message deleted by ${event.source.nick}" +
+                    event.reason
+                        ?.takeIf(String::isNotBlank)
+                        ?.let { " ($it)" }
+                        .orEmpty()
+            db.withTransaction {
+                messageDao.update(
+                    target.copy(
+                        kind = MessageKind.REDACTED,
+                        text = tombstone,
+                        ircFormattedText = null,
+                        hasMention = false,
+                        pendingLabel = null,
+                        failed = false,
+                    ),
+                )
+                reactionDao.deleteForTarget(target.bufferId, event.targetMsgid)
             }
         }
 
@@ -4469,6 +4511,8 @@ class EventProcessor
                     "476",
                 )
             val PART_ALREADY_CLOSED_NUMERICS: Set<String> = setOf("403", "442")
+            val REDACTABLE_MESSAGE_KINDS: Set<MessageKind> =
+                setOf(MessageKind.PRIVMSG, MessageKind.NOTICE, MessageKind.ACTION, MessageKind.REDACTED)
 
             // The server confirms you are no longer on this channel. Flip joined=false so the channel
             // UI shows its parted banner instead of an enabled composer.

@@ -49,6 +49,7 @@ internal object PrefKeys {
     /** Superseded by [PRESENCE_MODE]; still read so an existing hide/show choice is honored. */
     val SHOW_JOIN_PART_QUIT = stringPreferencesKey("show_join_part_quit")
     val PRESENCE_MODE = stringPreferencesKey("presence_mode")
+    val SHOW_REDACTED_MESSAGES = stringPreferencesKey("show_redacted_messages")
     val AVATAR_STYLE = stringPreferencesKey("avatar_style")
     val CHAT_WALLPAPER = stringPreferencesKey("chat_wallpaper")
     val SHOW_COMPOSER_EMOJI = stringPreferencesKey("show_composer_emoji")
@@ -131,6 +132,7 @@ class DataStoreSettingsRepository
                             prefs[PrefKeys.PRESENCE_MODE],
                             prefs[PrefKeys.SHOW_JOIN_PART_QUIT],
                         ),
+                    showRedactedMessages = prefs[PrefKeys.SHOW_REDACTED_MESSAGES]?.toBooleanStrictOrNull() ?: true,
                     avatarStyle = avatarStyleFromPreference(prefs[PrefKeys.AVATAR_STYLE]),
                     chatWallpaper =
                         prefs[PrefKeys.CHAT_WALLPAPER]?.let { runCatching { ChatWallpaper.valueOf(it) }.getOrNull() }
@@ -275,6 +277,10 @@ class DataStoreSettingsRepository
                 it[PrefKeys.PRESENCE_MODE] = m.name
                 it.remove(PrefKeys.SHOW_JOIN_PART_QUIT)
             }
+        }
+
+        override suspend fun setShowRedactedMessages(show: Boolean) {
+            store.edit { it[PrefKeys.SHOW_REDACTED_MESSAGES] = show.toString() }
         }
 
         override suspend fun setAvatarStyle(style: AvatarStyle) {

@@ -128,6 +128,13 @@ class EventMapper(
                 mapTagMessage(msg, c())
             }
 
+            "REDACT" -> {
+                val source = msg.source ?: return IrcEvent.Raw(msg)
+                val target = msg.params.getOrNull(0) ?: return IrcEvent.Raw(msg)
+                val targetMsgid = msg.params.getOrNull(1) ?: return IrcEvent.Raw(msg)
+                IrcEvent.MessageRedacted(c(), source, target, targetMsgid, msg.params.getOrNull(2))
+            }
+
             "JOIN" -> {
                 mapJoin(msg, c())
             }

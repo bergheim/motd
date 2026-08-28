@@ -68,6 +68,7 @@ enum class MessageKind {
     NETJOIN,
     DCC_TRANSFER,
     DCC_UNSUPPORTED,
+    REDACTED,
 }
 
 /** Durable state for an invitation timeline event. Null for every non-invitation message. */

@@ -85,6 +85,7 @@ fun ChatSettingsScreen(
         onOpenFools = onOpenFools,
         onOpenDirectConnections = onOpenDirectConnections,
         onPresenceMode = viewModel::setPresenceMode,
+        onShowRedactedMessages = viewModel::setShowRedactedMessages,
         onAutoAwayEnabled = viewModel::setAutoAwayEnabled,
         onAutoAwayMinutes = viewModel::setAutoAwayMinutes,
         onAutoAwayMessage = viewModel::setAutoAwayMessage,
@@ -116,6 +117,7 @@ fun ChatSettingsContent(
     onOpenFools: () -> Unit,
     onOpenDirectConnections: () -> Unit,
     onPresenceMode: (PresenceMode) -> Unit,
+    onShowRedactedMessages: (Boolean) -> Unit,
     onAutoAwayEnabled: (Boolean) -> Unit,
     onAutoAwayMinutes: (Int) -> Unit,
     onAutoAwayMessage: (String) -> Unit,
@@ -140,6 +142,14 @@ fun ChatSettingsContent(
         SettingsGroup(title = stringResource(R.string.settings_messages_section)) {
             SubLabel(stringResource(R.string.settings_presence_title))
             PresenceModeGroup(current = settings.presenceMode, onSelect = onPresenceMode)
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            SwitchRow(
+                title = stringResource(R.string.settings_show_redacted_messages),
+                subtitle = stringResource(R.string.settings_show_redacted_messages_desc),
+                checked = settings.showRedactedMessages,
+                onCheckedChange = onShowRedactedMessages,
+                switchTag = "settings_switch_show_redacted_messages",
+            )
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             SwitchRow(
                 title = stringResource(R.string.settings_show_images),
@@ -481,6 +491,7 @@ private fun ChatSettingsPreview() {
             onOpenFools = {},
             onOpenDirectConnections = {},
             onPresenceMode = {},
+            onShowRedactedMessages = {},
             onAutoAwayEnabled = {},
             onAutoAwayMinutes = {},
             onAutoAwayMessage = {},

@@ -40,6 +40,7 @@ val CONVERSATION_KINDS: Set<MessageKind> =
 
 data class MessageVisibilitySpec(
     val presenceMode: PresenceMode = PresenceMode.SMART,
+    val showRedactedMessages: Boolean = true,
     /** Stored configured nicks; consumers normalize them with the room's IRC identity rules. */
     val fools: Set<String> = emptySet(),
     val foolsMode: FoolsMode = FoolsMode.COLLAPSE,
@@ -54,6 +55,7 @@ data class MessageVisibilitySpec(
         ): MessageVisibilitySpec =
             MessageVisibilitySpec(
                 presenceMode = override ?: settings.presenceMode,
+                showRedactedMessages = settings.showRedactedMessages,
                 fools = settings.fools,
                 foolsMode = settings.foolsMode,
             )
@@ -89,10 +91,14 @@ class MessageVisibilityPolicy(
      */
     fun timeline(message: MessageEntity): Boolean =
         (spec.presenceMode != PresenceMode.HIDDEN || message.kind !in PRESENCE_KINDS) &&
+            (spec.showRedactedMessages || message.kind != MessageKind.REDACTED) &&
             !(spec.foolsMode == FoolsMode.HIDE && !spec.revealHiddenFools && isFool(message))
 
     /** Preview and activity use the same eligibility; fools never reorder the chat list. */
-    fun preview(message: MessageEntity): Boolean = message.kind !in PRESENCE_KINDS && !isFool(message)
+    fun preview(message: MessageEntity): Boolean =
+        message.kind !in PRESENCE_KINDS &&
+            (spec.showRedactedMessages || message.kind != MessageKind.REDACTED) &&
+            !isFool(message)
 
     fun activity(message: MessageEntity): Boolean = preview(message)
 
@@ -146,12 +152,13 @@ internal class MessageVisibilitySql(
                 PresenceMode.HIDDEN -> notPresence(alias)
                 PresenceMode.SMART -> smartPresence(alias)
             },
+            redactionVisibility(alias),
             if (spec.foolsMode == FoolsMode.HIDE && !spec.revealHiddenFools) notFool(alias) else TRUE,
         )
 
     fun anchor(alias: String = "m"): String = allOf(timeline(alias), notFool(alias))
 
-    fun preview(alias: String = "m"): String = allOf(notPresence(alias), notFool(alias))
+    fun preview(alias: String = "m"): String = allOf(notPresence(alias), redactionVisibility(alias), notFool(alias))
 
     // The DCC disjunct mirrors the chat-list unreadCount SQL in Daos.kt: a payload-bearing
     // incoming offer is counted by the cue, so the unread anchor must see the same row.
@@ -165,6 +172,8 @@ internal class MessageVisibilitySql(
         )
 
     private fun notPresence(alias: String): String = "${column(alias, "kind")} NOT IN ($PRESENCE_KIND_SQL)"
+
+    private fun redactionVisibility(alias: String): String = if (spec.showRedactedMessages) TRUE else "${column(alias, "kind")} != '${MessageKind.REDACTED.name}'"
 
     /**
      * Keep an actor-attributable presence row only when that actor took part in the conversation:

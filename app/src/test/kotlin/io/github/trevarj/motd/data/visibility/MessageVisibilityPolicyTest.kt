@@ -31,6 +31,19 @@ class MessageVisibilityPolicyTest {
     }
 
     @Test
+    fun `redaction tombstones follow their display setting`() {
+        val redacted = message(kind = MessageKind.REDACTED)
+        val shown = MessageVisibilityPolicy(MessageVisibilitySpec(showRedactedMessages = true))
+        val hidden = MessageVisibilityPolicy(MessageVisibilitySpec(showRedactedMessages = false))
+
+        assertTrue(shown.timeline(redacted))
+        assertTrue(shown.preview(redacted))
+        assertFalse(hidden.timeline(redacted))
+        assertFalse(hidden.preview(redacted))
+        assertFalse(redacted.kind in CONVERSATION_KINDS)
+    }
+
+    @Test
     fun `collapsed fool is presented and searchable but excluded from state consumers`() {
         val fool = message(sender = "Alice")
         val policy = policy(FoolsMode.COLLAPSE)

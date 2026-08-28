@@ -84,6 +84,14 @@ sealed interface IrcEvent {
         val reactTargetMsgid: String?, // +draft/reply on a react carries the reacted-to msgid
     ) : IrcEvent
 
+    data class MessageRedacted(
+        val ctx: MessageContext,
+        val source: io.github.trevarj.motd.irc.proto.Prefix,
+        val target: String,
+        val targetMsgid: String,
+        val reason: String?,
+    ) : IrcEvent
+
     /** Fully reassembled chathistory batch for one target, in server order. */
     data class HistoryBatch(
         val target: String,

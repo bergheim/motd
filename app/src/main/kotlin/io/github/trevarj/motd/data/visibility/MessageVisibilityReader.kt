@@ -265,7 +265,7 @@ class MessageVisibilityReader
             rows: List<ChatListRow>,
             spec: MessageVisibilitySpec,
         ): List<ChatListRow> {
-            if (spec.fools.isEmpty() || rows.isEmpty()) return rows
+            if ((spec.fools.isEmpty() && spec.showRedactedMessages) || rows.isEmpty()) return rows
             val replacements =
                 rows
                     .groupBy { row -> IrcIdentityRules.from(row.caseMapping, row.chanTypes) }

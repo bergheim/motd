@@ -72,6 +72,31 @@ class EventMapperMessageTagsTest {
     }
 
     @Test
+    fun `message redaction maps target msgid and optional reason`() {
+        val event =
+            mapper.map(
+                IrcMessage.parse(":oper!u@h REDACT #chan parent :spam cleanup"),
+            ) as IrcEvent.MessageRedacted
+
+        assertEquals("oper", event.source.nick)
+        assertEquals("#chan", event.target)
+        assertEquals("parent", event.targetMsgid)
+        assertEquals("spam cleanup", event.reason)
+    }
+
+    @Test
+    fun `message redaction cap requires message tags`() {
+        assertEquals(
+            setOf("message-tags", "draft/message-redaction"),
+            CapNegotiator.requestSet(setOf("message-tags", "draft/message-redaction"), emptySet()),
+        )
+        assertFalse(
+            "draft/message-redaction" in
+                CapNegotiator.requestSet(setOf("draft/message-redaction"), emptySet()),
+        )
+    }
+
+    @Test
     fun `standard replies map to typed events`() {
         val event =
             mapper.map(

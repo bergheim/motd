@@ -137,6 +137,8 @@ data class Settings(
     val foolsMode: FoolsMode = FoolsMode.COLLAPSE,
     /** Global presence-event presentation; a conversation may override it (RoomEntity). */
     val presenceMode: PresenceMode = PresenceMode.SMART,
+    /** Keep visible accountability tombstones for messages deleted through IRCv3 redaction. */
+    val showRedactedMessages: Boolean = true,
     /**
      * Backup compatibility only, never populated at runtime. Archives written before presence modes
      * existed carry the former boolean here; restore maps it onto [presenceMode] (see
@@ -230,6 +232,8 @@ interface SettingsRepository {
     suspend fun setFoolsMode(m: FoolsMode)
 
     suspend fun setPresenceMode(m: PresenceMode)
+
+    suspend fun setShowRedactedMessages(show: Boolean) {}
 
     suspend fun setAvatarStyle(style: AvatarStyle)
 

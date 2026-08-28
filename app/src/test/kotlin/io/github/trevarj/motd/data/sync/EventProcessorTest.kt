@@ -2366,6 +2366,87 @@ class EventProcessorTest {
         }
 
     @Test
+    fun redaction_tombstonesKnownMessageInTargetHistory_andRemovesItsReactions() =
+        runTest {
+            processor.process(
+                networkId,
+                IrcEvent.ChatMessage(
+                    ctx = ctx(msgid = "m1").copy(serverTimeSource = ServerTimeSource.LOCAL),
+                    kind = IrcEvent.ChatKind.PRIVMSG,
+                    source = Prefix("alice"),
+                    target = "#chan",
+                    text = "\u0002secret\u000f",
+                    isSelf = false,
+                    replyToMsgid = null,
+                ),
+            )
+            processor.process(
+                networkId,
+                IrcEvent.TagMessage(
+                    ctx = ctx(),
+                    source = Prefix("bob"),
+                    target = "#chan",
+                    typing = null,
+                    reactEmoji = "👍",
+                    reactTargetMsgid = "m1",
+                ),
+            )
+            val buffer = db.bufferDao().byName(networkId, "#chan")!!
+
+            // A known msgid outside the command target must not be touched.
+            processor.process(
+                networkId,
+                IrcEvent.MessageRedacted(ctx(), Prefix("oper"), "#other", "m1", "wrong room"),
+            )
+            assertEquals(MessageKind.PRIVMSG, db.messageDao().byMsgid(buffer.id, "m1")!!.kind)
+
+            processor.process(
+                networkId,
+                IrcEvent.HistoryBatch(
+                    "#chan",
+                    listOf(
+                        IrcEvent.MessageRedacted(ctx(time = 2_000), Prefix("oper"), "#chan", "m1", "spam"),
+                    ),
+                ),
+            )
+
+            val redacted = db.messageDao().byMsgid(buffer.id, "m1")!!
+            assertEquals(MessageKind.REDACTED, redacted.kind)
+            assertEquals("Message deleted by oper (spam)", redacted.text)
+            assertNull(redacted.ircFormattedText)
+            assertFalse(redacted.hasMention)
+            assertTrue(
+                db
+                    .reactionDao()
+                    .observeFor(buffer.id, listOf("m1"))
+                    .first()
+                    .isEmpty(),
+            )
+
+            // Later authoritative history may enrich identity and time, but cannot restore content.
+            processor.process(
+                networkId,
+                IrcEvent.HistoryBatch(
+                    "#chan",
+                    listOf(
+                        IrcEvent.ChatMessage(
+                            ctx = ctx(msgid = "m1", time = 1_000),
+                            kind = IrcEvent.ChatKind.PRIVMSG,
+                            source = Prefix("alice"),
+                            target = "#chan",
+                            text = "secret",
+                            isSelf = false,
+                            replyToMsgid = null,
+                        ),
+                    ),
+                ),
+            )
+            val replayed = db.messageDao().byMsgid(buffer.id, "m1")!!
+            assertEquals(MessageKind.REDACTED, replayed.kind)
+            assertEquals("Message deleted by oper (spam)", replayed.text)
+        }
+
+    @Test
     fun unreact_removesMatchingReaction_andReplayIsIdempotent() =
         runTest {
             processor.process(

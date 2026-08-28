@@ -421,6 +421,7 @@ class ConfigurationBackupRepositoryImpl
                 it.fools.forEach { nick -> settingsRepository.setFool(nick, true) }
                 settingsRepository.setFoolsMode(it.foolsMode)
                 settingsRepository.setPresenceMode(it.restoredPresenceMode())
+                settingsRepository.setShowRedactedMessages(it.showRedactedMessages)
                 settingsRepository.setAvatarStyle(it.avatarStyle)
                 settingsRepository.setChatWallpaper(it.chatWallpaper)
                 settingsRepository.setShowComposerEmoji(it.showComposerEmoji)
