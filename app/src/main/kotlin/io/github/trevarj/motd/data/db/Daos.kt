@@ -185,6 +185,106 @@ interface NetworkIgnoreDao {
 }
 
 @Dao
+interface ChatFolderDao {
+    @Query("SELECT * FROM chat_folders ORDER BY ordering, id")
+    fun observeFolders(): Flow<List<ChatFolderEntity>>
+
+    @Query("SELECT * FROM chat_folders ORDER BY ordering, id")
+    suspend fun allFolders(): List<ChatFolderEntity>
+
+    @Query("SELECT * FROM chat_folders WHERE id = :id")
+    suspend fun folder(id: Long): ChatFolderEntity?
+
+    @Query("SELECT * FROM chat_folders WHERE normalizedName = :normalizedName")
+    suspend fun folderByName(normalizedName: String): ChatFolderEntity?
+
+    @Insert
+    suspend fun insertFolder(folder: ChatFolderEntity): Long
+
+    @Update
+    suspend fun updateFolder(folder: ChatFolderEntity)
+
+    @Query("DELETE FROM chat_folders WHERE id = :id")
+    suspend fun deleteFolder(id: Long): Int
+
+    @Query("UPDATE chat_folders SET ordering = :ordering WHERE id = :id")
+    suspend fun setOrdering(
+        id: Long,
+        ordering: Int,
+    )
+
+    @Query("UPDATE chat_folders SET expanded = :expanded WHERE id = :id")
+    suspend fun setExpanded(
+        id: Long,
+        expanded: Boolean,
+    ): Int
+
+    @Query("UPDATE buffers SET folderId = :folderId WHERE id = COALESCE((SELECT redirectToRoomId FROM buffers WHERE id = :bufferId), :bufferId) AND type IN ('CHANNEL', 'QUERY')")
+    suspend fun assign(
+        bufferId: Long,
+        folderId: Long?,
+    ): Int
+
+    @Query("SELECT * FROM buffers WHERE id = COALESCE((SELECT redirectToRoomId FROM buffers WHERE id = :bufferId), :bufferId)")
+    suspend fun canonicalRoom(bufferId: Long): RoomEntity?
+
+    @Query("SELECT * FROM buffers WHERE folderId IS NOT NULL AND type IN ('CHANNEL', 'QUERY') AND redirectToRoomId IS NULL")
+    suspend fun assignedRooms(): List<RoomEntity>
+
+    @Query("SELECT COUNT(*) FROM buffers WHERE folderId = :folderId AND type IN ('CHANNEL', 'QUERY') AND redirectToRoomId IS NULL")
+    suspend fun assignedCount(folderId: Long): Int
+
+    @Query("DELETE FROM ignored_auto_group_patterns")
+    suspend fun clearIgnored()
+
+    @Query("DELETE FROM ignored_auto_group_patterns WHERE networkId = :networkId AND normalizedPrefix = :normalizedPrefix")
+    suspend fun deleteIgnored(
+        networkId: Long,
+        normalizedPrefix: String,
+    ): Int
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertIgnored(pattern: IgnoredAutoGroupPatternEntity)
+
+    @Query("SELECT * FROM ignored_auto_group_patterns ORDER BY networkId, normalizedPrefix")
+    fun observeIgnored(): Flow<List<IgnoredAutoGroupPatternEntity>>
+
+    @Query("SELECT * FROM ignored_auto_group_patterns ORDER BY networkId, normalizedPrefix")
+    suspend fun allIgnored(): List<IgnoredAutoGroupPatternEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertPending(assignment: PendingFolderAssignmentEntity)
+
+    @Query("SELECT * FROM pending_folder_assignments ORDER BY networkId, chatType, identityKind, identityValue")
+    suspend fun allPending(): List<PendingFolderAssignmentEntity>
+
+    @Query("SELECT * FROM pending_folder_assignments WHERE networkId = :networkId AND chatType = :chatType AND identityKind = :identityKind AND identityValue = :identityValue")
+    suspend fun pending(
+        networkId: Long,
+        chatType: BufferType,
+        identityKind: FolderIdentityKind,
+        identityValue: String,
+    ): PendingFolderAssignmentEntity?
+
+    @Query("DELETE FROM pending_folder_assignments WHERE networkId = :networkId AND chatType = :chatType AND identityKind = :identityKind AND identityValue = :identityValue")
+    suspend fun deletePending(
+        networkId: Long,
+        chatType: BufferType,
+        identityKind: FolderIdentityKind,
+        identityValue: String,
+    ): Int
+
+    @Query("DELETE FROM pending_folder_assignments")
+    suspend fun clearPending()
+
+    @Query("UPDATE buffers SET folderId = NULL")
+    suspend fun clearAssignments()
+
+    @Query("DELETE FROM chat_folders")
+    suspend fun clearFolders()
+}
+
+@Dao
 interface BufferDao {
     // Chat-list projection: each non-SERVER buffer joins one newest preview-eligible message by
     // identity. Presence events are timeline-only and never become previews or activity.
@@ -227,6 +327,7 @@ interface BufferDao {
             b.muted AS muted,
             b.archived AS archived,
             b.avatarOverrideModel AS avatarOverrideModel,
+            b.folderId AS folderId,
             lm.text AS lastMessageText,
             lm.sender AS lastMessageSender,
             lm.serverTime AS lastMessageTime,
@@ -431,7 +532,7 @@ interface BufferDao {
 
     /** Mark a CHANNEL for an asynchronous server-side close, preserving its first attempt time. */
     @Query(
-        "UPDATE buffers SET pendingCloseAt = :timestamp " +
+        "UPDATE buffers SET pendingCloseAt = :timestamp, folderId = NULL " +
             "WHERE id = :id AND type = 'CHANNEL' AND pendingCloseAt IS NULL",
     )
     suspend fun markPendingClose(
@@ -908,6 +1009,7 @@ interface BufferDao {
             room.copy(
                 pinned = false,
                 muted = false,
+                folderId = null,
                 localReadAnchorTime = floorTime,
                 localReadAnchorEventId = null,
                 oldestFetchedTime = null,
@@ -963,6 +1065,7 @@ data class ChatListRow(
     val chanTypes: String? = null,
     val archived: Boolean = false,
     val avatarOverrideModel: String? = null,
+    val folderId: Long? = null,
     val unreadCountIncomplete: Boolean = false,
     val mentionCountIncomplete: Boolean = false,
     /**
@@ -1849,6 +1952,9 @@ interface RoomAliasDao {
 
     @Query("SELECT * FROM room_aliases WHERE roomId = :roomId")
     suspend fun forRoom(roomId: RoomId): List<RoomAliasEntity>
+
+    @Query("SELECT * FROM room_aliases ORDER BY networkId, roomId, namespace, value")
+    suspend fun allNow(): List<RoomAliasEntity>
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertIgnore(alias: RoomAliasEntity): Long

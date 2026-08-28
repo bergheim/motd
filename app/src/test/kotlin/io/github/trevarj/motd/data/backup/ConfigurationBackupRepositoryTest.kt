@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import io.github.trevarj.motd.attachment.AttachmentPrefsImpl
 import io.github.trevarj.motd.audio.VoicePrefs
 import io.github.trevarj.motd.avatar.AvatarPrefsImpl
+import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
 import io.github.trevarj.motd.data.db.ObfsMode
@@ -19,6 +20,8 @@ import io.github.trevarj.motd.data.prefs.LauncherIcon
 import io.github.trevarj.motd.data.prefs.MessageSpacing
 import io.github.trevarj.motd.data.prefs.ReplyPrefsImpl
 import io.github.trevarj.motd.data.prefs.TimeFormat
+import io.github.trevarj.motd.data.repo.ChatFolderRepository
+import io.github.trevarj.motd.data.sync.BufferStore
 import io.github.trevarj.motd.gesture.GestureMenuConfig
 import io.github.trevarj.motd.gesture.GestureNode
 import io.github.trevarj.motd.gesture.GesturePrefsImpl
@@ -269,6 +272,73 @@ class ConfigurationBackupRepositoryTest {
             settings.setShowComposerEmoji(true)
             settings.setShowComposerFormattingTools(true)
             settings.setShowRedactedMessages(true)
+        }
+
+    @Test
+    fun malformedFolderIconIsRejectedAtPreviewBoundary() =
+        runTest {
+            val db = inMemoryDb()
+            ChatFolderRepository(db).create("Dev")
+            val raw = repository(db).exportToString(BackupExportMode.CREDENTIALS_EXCLUDED, nowEpochMillis = 1_000L)
+            val malformed = raw.replace("\"iconKey\": \"folder\"", "\"iconKey\": \"${"x".repeat(129)}\"")
+
+            assertTrue(runCatching { repository(inMemoryDb()).preview(malformed, importMode = BackupImportMode.MERGE) }.isFailure)
+        }
+
+    @Test
+    fun oldV1PayloadWithoutFolderFieldsStillImports() =
+        runTest {
+            val sourceDb = inMemoryDb()
+            sourceDb.networkDao().insert(secretNetwork(clientCertAlias = null))
+            val raw =
+                repository(sourceDb)
+                    .exportToString(BackupExportMode.CREDENTIALS_EXCLUDED, nowEpochMillis = 1_000L)
+                    .lineSequence()
+                    .filterNot { line ->
+                        line.contains("\"folders\":") ||
+                            line.contains("\"folderAssignments\":") ||
+                            line.contains("\"ignoredAutoGroupPatterns\":")
+                    }.joinToString("\n")
+                    .replace("\n        },\n    },\n    \"encryptedPayload\"", "\n        }\n    },\n    \"encryptedPayload\"")
+
+            val target = repository(inMemoryDb())
+            val preview = target.preview(raw, importMode = BackupImportMode.MERGE)
+            assertEquals(0, preview.folderCount)
+            assertEquals(0, preview.folderAssignmentCount)
+        }
+
+    @Test
+    fun foldersRoundTripAndDeferredChannelAssignmentClaimsOnCreation() =
+        runTest {
+            val sourceDb = inMemoryDb()
+            val networkId = sourceDb.networkDao().insert(secretNetwork(clientCertAlias = null))
+            val room = BufferStore(sourceDb).getOrCreate(networkId, "#kotlin", "#Kotlin", BufferType.CHANNEL)
+            val sourceFolders = ChatFolderRepository(sourceDb)
+            val folderId = sourceFolders.create("Development")
+            sourceFolders.assign(listOf(room.id), folderId)
+            sourceFolders.rejectAutoGroup(networkId, "old.prefix")
+            val raw = repository(sourceDb).exportToString(BackupExportMode.CREDENTIALS_EXCLUDED, nowEpochMillis = 1_000L)
+
+            val targetDb = inMemoryDb()
+            val target = repository(targetDb)
+            val preview = target.preview(raw, importMode = BackupImportMode.REPLACE)
+            assertEquals(1, preview.folderCount)
+            assertEquals(1, preview.folderAssignmentCount)
+            target.import(raw, importMode = BackupImportMode.REPLACE)
+
+            val restoredFolders = ChatFolderRepository(targetDb)
+            val restoredFolder = restoredFolders.folders().single()
+            val restoredNetwork = targetDb.networkDao().allNow().single()
+            val restoredRoom = BufferStore(targetDb).getOrCreate(restoredNetwork.id, "#kotlin", "#Kotlin", BufferType.CHANNEL)
+            assertEquals(restoredFolder.id, targetDb.bufferDao().observeById(restoredRoom.id)?.folderId)
+            assertEquals(
+                "old.prefix",
+                restoredFolders
+                    .backupSnapshot()
+                    .ignored
+                    .single()
+                    .normalizedPrefix,
+            )
         }
 
     private fun repository(db: io.github.trevarj.motd.data.db.MotdDatabase): ConfigurationBackupRepositoryImpl {

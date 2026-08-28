@@ -45,6 +45,16 @@ import kotlinx.serialization.Serializable
 
 @Serializable data object BackupRestoreRoute
 
+@Serializable data object ManageFoldersRoute
+
+@Serializable data class FolderEditorRoute(
+    val folderId: Long = 0,
+)
+
+@Serializable data class AutoGroupRoute(
+    val networkId: Long? = null,
+)
+
 // Experimental features (gestures, Agentwire harness) live under their own category.
 @Serializable data object LabsRoute
 

@@ -14,6 +14,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         NetworkEntity::class,
         NetworkIdentityEntity::class,
         NetworkIgnoreEntity::class,
+        ChatFolderEntity::class,
+        IgnoredAutoGroupPatternEntity::class,
+        PendingFolderAssignmentEntity::class,
         RoomEntity::class,
         DiscardedMessageIdEntity::class,
         RoomAliasEntity::class,
@@ -34,7 +37,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         MemberEntity::class,
         DccTransferEntity::class,
     ],
-    version = 37,
+    version = 38,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -44,6 +47,8 @@ abstract class MotdDatabase : RoomDatabase() {
     abstract fun networkIdentityDao(): NetworkIdentityDao
 
     abstract fun networkIgnoreDao(): NetworkIgnoreDao
+
+    abstract fun chatFolderDao(): ChatFolderDao
 
     abstract fun bufferDao(): BufferDao
 
@@ -974,6 +979,48 @@ val MIGRATION_36_37 =
         }
     }
 
+/** v37 -> v38 adds local flat chat folders, ignored Auto-group prefixes, and deferred restore intent. */
+val MIGRATION_37_38 =
+    object : Migration(37, 38) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """CREATE TABLE IF NOT EXISTS `chat_folders` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `displayName` TEXT NOT NULL,
+                `normalizedName` TEXT NOT NULL,
+                `iconKind` TEXT NOT NULL,
+                `iconKey` TEXT NOT NULL,
+                `ordering` INTEGER NOT NULL,
+                `expanded` INTEGER NOT NULL
+            )""",
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_chat_folders_normalizedName` ON `chat_folders` (`normalizedName`)")
+            db.execSQL("ALTER TABLE buffers ADD COLUMN folderId INTEGER REFERENCES chat_folders(id) ON DELETE SET NULL")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_buffers_folderId` ON `buffers` (`folderId`)")
+            db.execSQL(
+                """CREATE TABLE IF NOT EXISTS `ignored_auto_group_patterns` (
+                `networkId` INTEGER NOT NULL,
+                `normalizedPrefix` TEXT NOT NULL,
+                PRIMARY KEY(`networkId`, `normalizedPrefix`),
+                FOREIGN KEY(`networkId`) REFERENCES `networks`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+            )""",
+            )
+            db.execSQL(
+                """CREATE TABLE IF NOT EXISTS `pending_folder_assignments` (
+                `networkId` INTEGER NOT NULL,
+                `chatType` TEXT NOT NULL,
+                `identityKind` TEXT NOT NULL,
+                `identityValue` TEXT NOT NULL,
+                `folderId` INTEGER NOT NULL,
+                PRIMARY KEY(`networkId`, `chatType`, `identityKind`, `identityValue`),
+                FOREIGN KEY(`networkId`) REFERENCES `networks`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE,
+                FOREIGN KEY(`folderId`) REFERENCES `chat_folders`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+            )""",
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_pending_folder_assignments_folderId` ON `pending_folder_assignments` (`folderId`)")
+        }
+    }
+
 /**
  * The complete registered upgrade path, single-sourced so the runtime builder (DbModule) and the
  * migration tests cannot drift apart.
@@ -1023,6 +1070,7 @@ val ALL_MIGRATIONS: Array<Migration> =
         MIGRATION_34_35,
         MIGRATION_35_36,
         MIGRATION_36_37,
+        MIGRATION_37_38,
     )
 
 private fun legacyReactionNormalizedSender(column: String): String = "replace(replace(replace(replace(lower($column), '[', '{'), ']', '}'), '\\', '|'), '~', '^')"

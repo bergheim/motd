@@ -21,6 +21,7 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
@@ -155,13 +156,16 @@ import io.github.trevarj.motd.data.db.ChatListRow
 import io.github.trevarj.motd.data.db.InviteState
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
+import io.github.trevarj.motd.data.repo.FolderIconRef
 import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.ui.components.AudioMiniPlayer
 import io.github.trevarj.motd.ui.components.AudioPlaybackViewModel
 import io.github.trevarj.motd.ui.components.ConnectionBanner
 import io.github.trevarj.motd.ui.components.EmptyState
+import io.github.trevarj.motd.ui.components.FolderIcon
 import io.github.trevarj.motd.ui.components.HistorySyncSpinner
 import io.github.trevarj.motd.ui.components.MuteBacklogUndoEffect
+import io.github.trevarj.motd.ui.theme.LocalNickColors
 import io.github.trevarj.motd.ui.theme.MotdMotion
 import io.github.trevarj.motd.ui.theme.MotdTheme
 import kotlinx.coroutines.Job
@@ -177,6 +181,9 @@ fun ChatListScreen(
     onOpenSettings: () -> Unit = {},
     onOpenSearch: () -> Unit = {},
     onOpenFeed: () -> Unit = {},
+    onOpenManageFolders: () -> Unit = {},
+    onOpenFolderEditor: (Long) -> Unit = {},
+    onOpenAutoGroup: (Long?) -> Unit = {},
     onOpenOnboarding: () -> Unit = {},
     // Round 5: drawer/network-management pass-throughs.
     onOpenNetworkSettings: (Long) -> Unit = {},
@@ -232,6 +239,12 @@ fun ChatListScreen(
         onOpenSettings = onOpenSettings,
         onOpenSearch = onOpenSearch,
         onOpenFeed = onOpenFeed,
+        onOpenManageFolders = onOpenManageFolders,
+        onOpenFolderEditor = onOpenFolderEditor,
+        onOpenAutoGroup = onOpenAutoGroup,
+        onAssignFolder = viewModel::assignFolder,
+        onCreateFolderAndAssign = viewModel::createFolderAndAssign,
+        onSetFolderExpanded = viewModel::setFolderExpanded,
         onSetPinned = viewModel::setPinned,
         onSetMuted = viewModel::setMuted,
         onSetArchived = viewModel::setArchived,
@@ -306,6 +319,12 @@ fun ChatListContent(
     onOpenSettings: () -> Unit,
     onOpenSearch: () -> Unit,
     onOpenFeed: () -> Unit = {},
+    onOpenManageFolders: () -> Unit = {},
+    onOpenFolderEditor: (Long) -> Unit = {},
+    onOpenAutoGroup: (Long?) -> Unit = {},
+    onAssignFolder: (Collection<Long>, Long?, (Boolean) -> Unit) -> Unit = { _, _, done -> done(false) },
+    onCreateFolderAndAssign: (String, FolderIconRef, Collection<Long>, (Boolean) -> Unit) -> Unit = { _, _, _, done -> done(false) },
+    onSetFolderExpanded: (Long, Boolean) -> Unit = { _, _ -> },
     onSetPinned: (Collection<Long>, Boolean) -> Unit,
     onSetMuted: (Collection<Long>, Boolean) -> Unit,
     onSetArchived: (Collection<Long>, Boolean) -> Unit = { _, _ -> },
@@ -336,6 +355,7 @@ fun ChatListContent(
     var invitationMode by rememberSaveable { mutableStateOf(false) }
     var showSheet by remember { mutableStateOf(false) }
     var showMarkAllReadDialog by remember { mutableStateOf(false) }
+    var showFolderAssignment by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState()
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -581,6 +601,15 @@ fun ChatListContent(
                                             }
                                             DropdownMenu(expanded = overflowOpen, onDismissRequest = { overflowOpen = false }) {
                                                 DropdownMenuItem(
+                                                    text = { Text(stringResource(R.string.folders_add_to)) },
+                                                    leadingIcon = { Icon(Icons.Outlined.Forum, contentDescription = null) },
+                                                    modifier = Modifier.testTag("chatlist_selection_add_folder"),
+                                                    onClick = {
+                                                        showFolderAssignment = true
+                                                        overflowOpen = false
+                                                    },
+                                                )
+                                                DropdownMenuItem(
                                                     text = { Text(stringResource(if (pinTarget) R.string.chatlist_pin else R.string.chatlist_unpin)) },
                                                     leadingIcon = { Icon(Icons.Filled.PushPin, contentDescription = null) },
                                                     modifier = Modifier.testTag("chatlist_selection_pin"),
@@ -617,28 +646,51 @@ fun ChatListContent(
                                                 contentDescription = stringResource(R.string.chatlist_search),
                                             )
                                         }
-                                        if (state.globalFeedEnabled) {
-                                            IconButton(
-                                                onClick = onOpenFeed,
-                                                modifier = Modifier.testTag("chatlist_open_feed"),
-                                            ) {
-                                                Icon(
-                                                    Icons.Outlined.DynamicFeed,
-                                                    contentDescription = stringResource(R.string.chatlist_feed),
+                                        var moreOpen by remember { mutableStateOf(false) }
+                                        Box {
+                                            IconButton(onClick = { moreOpen = true }, modifier = Modifier.testTag("chatlist_more")) {
+                                                Icon(Icons.Filled.MoreVert, stringResource(R.string.chatlist_more_actions))
+                                            }
+                                            DropdownMenu(moreOpen, { moreOpen = false }) {
+                                                DropdownMenuItem(
+                                                    text = { Text(stringResource(R.string.folders_manage)) },
+                                                    onClick = {
+                                                        moreOpen = false
+                                                        onOpenManageFolders()
+                                                    },
+                                                    modifier = Modifier.testTag("chatlist_manage_folders"),
+                                                )
+                                                DropdownMenuItem(
+                                                    text = { Text(stringResource(R.string.folders_auto_group)) },
+                                                    onClick = {
+                                                        moreOpen = false
+                                                        onOpenAutoGroup(state.selectedNetworkId)
+                                                    },
+                                                    modifier = Modifier.testTag("chatlist_auto_group"),
+                                                )
+                                                if (state.globalFeedEnabled) {
+                                                    DropdownMenuItem(
+                                                        text = { Text(stringResource(R.string.chatlist_feed)) },
+                                                        onClick = {
+                                                            moreOpen = false
+                                                            onOpenFeed()
+                                                        },
+                                                        modifier = Modifier.testTag("chatlist_open_feed"),
+                                                    )
+                                                }
+                                                DropdownMenuItem(
+                                                    text = { Text(stringResource(R.string.chatlist_settings)) },
+                                                    onClick = {
+                                                        moreOpen = false
+                                                        onOpenSettings()
+                                                    },
+                                                    modifier = Modifier.testTag("chatlist_open_settings"),
                                                 )
                                             }
                                         }
-                                        IconButton(onClick = onOpenSettings, modifier = Modifier.testTag("chatlist_open_settings")) {
-                                            Icon(
-                                                Icons.Outlined.Settings,
-                                                contentDescription = stringResource(R.string.chatlist_settings),
-                                            )
-                                        }
                                     }
 
-                                    ChatListTopBarMode.INVITATIONS, ChatListTopBarMode.ARCHIVE -> {
-                                        Unit
-                                    }
+                                    ChatListTopBarMode.INVITATIONS, ChatListTopBarMode.ARCHIVE -> {}
                                 }
                             }
                         }
@@ -686,7 +738,7 @@ fun ChatListContent(
                         )
                     }
 
-                    val hasInvitationRoute = !archiveMode && state.invitations.any(ChatListInvitation::actionable)
+                    val hasInvitationRoute = state.invitations.any(ChatListInvitation::actionable)
                     if (!invitationMode && !shouldRenderChatList(archiveMode, state.rows, state.archivedRows) && !hasInvitationRoute && !state.loading) {
                         val noNetworks = !archiveMode && state.networks.isEmpty()
                         EmptyState(
@@ -726,6 +778,7 @@ fun ChatListContent(
                         ChatList(
                             rows = visibleRows,
                             archivedRows = state.archivedRows,
+                            folders = state.folders,
                             invitations = state.invitations,
                             archiveMode = archiveMode,
                             invitationMode = invitationMode,
@@ -744,6 +797,8 @@ fun ChatListContent(
                             onSetMuted = onSetMuted,
                             onSetArchived = ::setArchivedWithReveal,
                             onDeleteBuffers = onDeleteBuffers,
+                            onSetFolderExpanded = onSetFolderExpanded,
+                            onOpenFolderEditor = onOpenFolderEditor,
                             activeBufferId = selectedBufferId,
                             selectedIds = selectedIds.toSet(),
                             selectionActive = selectionActive,
@@ -767,6 +822,32 @@ fun ChatListContent(
                 )
             }
         }
+    }
+
+    if (showFolderAssignment && selectedRows.isNotEmpty()) {
+        val ids = selectedRows.map(ChatListRow::bufferId)
+        FolderAssignmentSheet(
+            folders = state.folders,
+            onAssign = { folderId, result ->
+                onAssignFolder(ids, folderId) { success ->
+                    if (success) {
+                        selectedIds = emptyList()
+                        showFolderAssignment = false
+                    }
+                    result(success)
+                }
+            },
+            onCreate = { name, icon, result ->
+                onCreateFolderAndAssign(name, icon, ids) { success ->
+                    if (success) {
+                        selectedIds = emptyList()
+                        showFolderAssignment = false
+                    }
+                    result(success)
+                }
+            },
+            onDismiss = { showFolderAssignment = false },
+        )
     }
 
     if (showSheet) {
@@ -977,6 +1058,7 @@ internal object ChatListItemMotion {
 private fun ChatList(
     rows: List<ChatListRow>,
     archivedRows: List<ChatListRow>,
+    folders: List<io.github.trevarj.motd.data.db.ChatFolderEntity>,
     invitations: List<ChatListInvitation>,
     archiveMode: Boolean,
     invitationMode: Boolean,
@@ -995,6 +1077,8 @@ private fun ChatList(
     onSetMuted: (Collection<Long>, Boolean) -> Unit,
     onSetArchived: (Collection<Long>, Boolean) -> Unit,
     onDeleteBuffers: (Collection<ChatListRow>) -> Unit,
+    onSetFolderExpanded: (Long, Boolean) -> Unit,
+    onOpenFolderEditor: (Long) -> Unit,
     activeBufferId: Long?,
     selectedIds: Set<Long>,
     selectionActive: Boolean,
@@ -1002,9 +1086,9 @@ private fun ChatList(
     onStartSelection: (Long) -> Unit,
     onRemoveSelection: (Collection<Long>) -> Unit,
 ) {
-    // Pinning has global priority, then unpinned friends, recent chats, and collapsed fools.
-    // Pin state remains an inline row marker; it does not add a visible section header.
-    val sections = sectionChatList(rows, friends, fools)
+    // Pinned rows escape folders; non-empty folders follow in manual order, then legacy tiers.
+    val presentation = presentChatFolders(rows, folders, friends, fools, activeBufferId)
+    val sections = presentation.remaining
     // Fools section is collapsed by default; state is local to the screen (accepted).
     var foolsExpanded by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
@@ -1018,7 +1102,7 @@ private fun ChatList(
     // the new order: the promoted row surfaces in place and the rows it displaced spring down
     // via their placement animation. Scroll state is peeked without observation because this is
     // a same-frame decision, not a recomposition dependency.
-    val topItemKey = chatListTopItemKey(invitationMode, invitations, actionableInvitationCount, sections)
+    val topItemKey = chatListTopItemKey(invitationMode, invitations, actionableInvitationCount, sections, presentation.folders, presentation.pinned)
     val topItemTracker = remember { ChatListTopItemTracker(topItemKey) }
     if (topItemTracker.key != topItemKey) {
         val repin =
@@ -1313,7 +1397,7 @@ private fun ChatList(
                         }
                     }
                 }
-                items(sections.pinned, key = { it.bufferId }) { row ->
+                items(presentation.pinned, key = { it.bufferId }) { row ->
                     SelectableChatListRow(
                         row,
                         presence[row.bufferId],
@@ -1335,6 +1419,49 @@ private fun ChatList(
                                 placementSpec = placementSpec,
                             ),
                     )
+                }
+                presentation.folders.forEach { folder ->
+                    item(key = "folder-${folder.folder.id}") {
+                        ChatFolderHeader(
+                            folder = folder,
+                            onToggle = {
+                                if (folder.expanded) onRemoveSelection(folder.children.map(ChatListRow::bufferId))
+                                onSetFolderExpanded(folder.folder.id, !folder.folder.expanded)
+                            },
+                            onEdit = { onOpenFolderEditor(folder.folder.id) },
+                            modifier =
+                                Modifier.animateItem(
+                                    fadeInSpec = ChatListItemMotion.fadeInSpec,
+                                    fadeOutSpec = ChatListItemMotion.fadeOutSpec,
+                                    placementSpec = placementSpec,
+                                ),
+                        )
+                    }
+                    if (folder.expanded) {
+                        items(folder.children, key = { it.bufferId }) { row ->
+                            SelectableChatListRow(
+                                row,
+                                presence[row.bufferId],
+                                isFriend = isFriendQuery(row, friends),
+                                multiNetwork,
+                                onOpenBuffer,
+                                archiveMode,
+                                selected = row.bufferId in selectedIds,
+                                active = row.bufferId == activeBufferId,
+                                selectionActive = selectionActive,
+                                onToggleSelection = onToggleSelection,
+                                onStartSelection = onStartSelection,
+                                onArchive = { onSetArchived(listOf(row.bufferId), !archiveMode) },
+                                syncIndicator = syncIndicators[row.bufferId] ?: ChatListSyncIndicator.NONE,
+                                modifier =
+                                    Modifier.animateItem(
+                                        fadeInSpec = ChatListItemMotion.fadeInSpec,
+                                        fadeOutSpec = ChatListItemMotion.fadeOutSpec,
+                                        placementSpec = placementSpec,
+                                    ),
+                            )
+                        }
+                    }
                 }
                 if (sections.friends.isNotEmpty()) {
                     item(key = "friends-header") {
@@ -1491,6 +1618,85 @@ private fun ChatList(
                         .padding(end = 16.dp, bottom = 88.dp),
             )
         }
+    }
+}
+
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun ChatFolderHeader(
+    folder: PresentedChatFolder,
+    onToggle: () -> Unit,
+    onEdit: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val expandLabel = stringResource(if (folder.expanded) R.string.folders_collapse else R.string.folders_expand)
+    val editLabel = stringResource(R.string.folders_edit)
+    val tint = remember(folder.folder.displayName) { Color.hsv((folderColorSeed(folder.folder.displayName).toUInt() % 360u).toFloat(), .55f, .72f) }
+    Row(
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .combinedClickable(onClick = onToggle, onLongClick = onEdit)
+                .semantics {
+                    stateDescription = expandLabel
+                    customActions =
+                        listOf(
+                            CustomAccessibilityAction(expandLabel) {
+                                onToggle()
+                                true
+                            },
+                            CustomAccessibilityAction(editLabel) {
+                                onEdit()
+                                true
+                            },
+                        )
+                }.testTag("chatlist_folder_${folder.folder.id}")
+                .padding(horizontal = 20.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        FolderIcon(
+            FolderIconRef(folder.folder.iconKind, folder.folder.iconKey),
+            contentDescription = null,
+            modifier = Modifier.size(28.dp),
+            tint = tint,
+        )
+        Column(modifier = Modifier.weight(1f).padding(horizontal = 14.dp)) {
+            Row {
+                Text(folder.folder.displayName, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+                Text(folder.summary.visibleCount.toString(), style = MaterialTheme.typography.labelMedium)
+            }
+            if (!folder.expanded) {
+                val emphasized = folder.summary.unreadCount > 0 || folder.summary.mentionCount > 0
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    folder.summary.previewSender?.let { sender ->
+                        SenderLabel(
+                            sender = sender,
+                            color = LocalNickColors.current.nick(sender, MaterialTheme.colorScheme.onSurfaceVariant),
+                            unread = emphasized,
+                            modifier = Modifier.testTag("chatlist_folder_preview_sender"),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    Text(
+                        folder.summary.previewText.orEmpty(),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f),
+                    )
+                    folder.summary.previewTime?.let { Text(relativeChatTime(it), style = MaterialTheme.typography.labelSmall) }
+                }
+            }
+        }
+        if (!folder.expanded) {
+            val badge = if (folder.summary.mentionCount > 0) folder.summary.mentionCount else folder.summary.unreadCount
+            when {
+                badge > 0 -> Badge { Text(if (badge > 999) "999+" else badge.toString()) }
+                folder.summary.unreadIncomplete || folder.summary.mentionIncomplete -> Badge { Text("?") }
+                folder.summary.advertisedActivity -> Text("•", color = tint)
+            }
+        }
+        Icon(if (folder.expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.ExpandMore, contentDescription = null)
     }
 }
 

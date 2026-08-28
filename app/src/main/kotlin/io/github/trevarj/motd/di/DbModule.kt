@@ -11,6 +11,7 @@ import io.github.trevarj.motd.avatar.AvatarDao
 import io.github.trevarj.motd.avatar.AvatarDatabase
 import io.github.trevarj.motd.data.db.ALL_MIGRATIONS
 import io.github.trevarj.motd.data.db.BufferDao
+import io.github.trevarj.motd.data.db.ChatFolderDao
 import io.github.trevarj.motd.data.db.DccTransferDao
 import io.github.trevarj.motd.data.db.HistoryCursorDao
 import io.github.trevarj.motd.data.db.HistoryGapDao
@@ -58,6 +59,8 @@ internal object DbModule {
     @Provides fun provideNetworkIdentityDao(db: MotdDatabase): NetworkIdentityDao = db.networkIdentityDao()
 
     @Provides fun provideNetworkIgnoreDao(db: MotdDatabase): NetworkIgnoreDao = db.networkIgnoreDao()
+
+    @Provides fun provideChatFolderDao(db: MotdDatabase): ChatFolderDao = db.chatFolderDao()
 
     @Provides fun provideBufferDao(db: MotdDatabase): BufferDao = db.bufferDao()
 

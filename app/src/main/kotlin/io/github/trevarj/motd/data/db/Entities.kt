@@ -22,6 +22,11 @@ enum class NetworkRole { DIRECT, BOUNCER_ROOT, BOUNCER_CHILD }
 enum class ObfsMode { NONE, SOCKS5, TOR, EMBEDDED_REALITY }
 
 enum class BufferType { CHANNEL, QUERY, SERVER }
+
+enum class FolderIconKind { GENERIC, DEVICON, MATERIAL }
+
+enum class FolderIdentityKind { CHANNEL, ACCOUNT, NICK }
+
 typealias RoomId = Long
 typealias TimelineEventId = Long
 
@@ -199,10 +204,69 @@ data class NetworkIgnoreEntity(
 )
 
 @Entity(
+    tableName = "chat_folders",
+    indices = [Index(value = ["normalizedName"], unique = true)],
+)
+data class ChatFolderEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val displayName: String,
+    val normalizedName: String,
+    val iconKind: FolderIconKind = FolderIconKind.GENERIC,
+    val iconKey: String = "folder",
+    val ordering: Int = 0,
+    val expanded: Boolean = true,
+)
+
+@Entity(
+    tableName = "ignored_auto_group_patterns",
+    primaryKeys = ["networkId", "normalizedPrefix"],
+    foreignKeys = [
+        ForeignKey(
+            entity = NetworkEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["networkId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+)
+data class IgnoredAutoGroupPatternEntity(
+    val networkId: Long,
+    val normalizedPrefix: String,
+)
+
+@Entity(
+    tableName = "pending_folder_assignments",
+    primaryKeys = ["networkId", "chatType", "identityKind", "identityValue"],
+    indices = [Index(value = ["folderId"])],
+    foreignKeys = [
+        ForeignKey(
+            entity = NetworkEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["networkId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+        ForeignKey(
+            entity = ChatFolderEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["folderId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+)
+data class PendingFolderAssignmentEntity(
+    val networkId: Long,
+    val chatType: BufferType,
+    val identityKind: FolderIdentityKind,
+    val identityValue: String,
+    val folderId: Long,
+)
+
+@Entity(
     tableName = "buffers",
     indices = [
         Index(value = ["networkId", "name"], unique = true),
         Index(value = ["redirectToRoomId"]),
+        Index(value = ["folderId"]),
     ],
     foreignKeys = [
         ForeignKey(
@@ -210,6 +274,12 @@ data class NetworkIgnoreEntity(
             parentColumns = ["id"],
             childColumns = ["networkId"],
             onDelete = ForeignKey.CASCADE,
+        ),
+        ForeignKey(
+            entity = ChatFolderEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["folderId"],
+            onDelete = ForeignKey.SET_NULL,
         ),
     ],
 )
@@ -250,6 +320,8 @@ data class RoomEntity(
     val presenceModeOverride: PresenceMode? = null,
     /** User-selected HTTPS URL or app-owned file URI. SERVER rooms always leave this null. */
     val avatarOverrideModel: String? = null,
+    /** Local-only flat folder assignment. Pinned rows temporarily escape presentation only. */
+    val folderId: Long? = null,
     /** Latest locally retained non-presence event for QUERY-only MONITOR ranking. */
     val monitorActivityTime: Long? = null,
     /**

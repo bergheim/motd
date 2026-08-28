@@ -278,7 +278,7 @@ internal fun IrcChannelBadge(
     }
 }
 
-private fun DrawScope.drawChannelDevicon(
+internal fun DrawScope.drawChannelDevicon(
     glyph: ChannelMark,
     color: Color,
 ) {

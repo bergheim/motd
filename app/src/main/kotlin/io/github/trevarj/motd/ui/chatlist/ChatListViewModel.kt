@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import io.github.trevarj.motd.data.db.BufferType
+import io.github.trevarj.motd.data.db.ChatFolderEntity
 import io.github.trevarj.motd.data.db.ChatListRow
 import io.github.trevarj.motd.data.db.InvitationEventRow
 import io.github.trevarj.motd.data.db.InviteState
@@ -15,6 +16,8 @@ import io.github.trevarj.motd.data.prefs.GlobalFeedPrefs
 import io.github.trevarj.motd.data.prefs.OnboardingPrefs
 import io.github.trevarj.motd.data.prefs.SettingsRepository
 import io.github.trevarj.motd.data.repo.BufferRepository
+import io.github.trevarj.motd.data.repo.ChatFolderRepository
+import io.github.trevarj.motd.data.repo.FolderIconRef
 import io.github.trevarj.motd.data.repo.NetworkRepository
 import io.github.trevarj.motd.data.sync.InvitePayloadV1
 import io.github.trevarj.motd.irc.event.IrcClientState
@@ -99,6 +102,7 @@ data class ChatListState(
     /** Scoped archived rows; all global badges and drawer rollups deliberately exclude these. */
     val archivedRows: List<ChatListRow> = emptyList(),
     val invitations: List<ChatListInvitation> = emptyList(),
+    val folders: List<ChatFolderEntity> = emptyList(),
     val connection: Map<Long, IrcClientState> = emptyMap(),
     val queryPresence: Map<Long, PresenceState> = emptyMap(),
     val networks: List<NetworkEntity> = emptyList(),
@@ -153,6 +157,7 @@ class ChatListViewModel
     @Inject
     constructor(
         private val bufferRepository: BufferRepository,
+        private val chatFolders: ChatFolderRepository? = null,
         private val networkRepository: NetworkRepository,
         private val connectionManager: ConnectionManager,
         private val historyResync: HistoryResyncController,
@@ -229,7 +234,10 @@ class ChatListViewModel
                     val settledIds = settledArchiveOverrideIds(rows, archiveOverrides.value)
                     if (settledIds.isNotEmpty()) archiveOverrides.value = archiveOverrides.value - settledIds
                 }.combine(archiveOverrides, ::applyArchiveOverrides)
-        private val chatListData = chatListRows.combine(bufferRepository.observeInvitations(), ::Pair)
+        private val chatListData =
+            combine(chatListRows, bufferRepository.observeInvitations(), chatFolders?.observeFolders() ?: kotlinx.coroutines.flow.flowOf(emptyList())) { rows, invitations, folders ->
+                Triple(rows, invitations, folders)
+            }
         private val settingsAndOnboarding =
             combine(
                 settingsRepository.settings,
@@ -248,7 +256,7 @@ class ChatListViewModel
                 settingsAndOnboarding,
                 selectionAndOrder,
             ) { listData, networks, connectionAndPresence, settingsAndOnboarding, selectionAndOrder ->
-                val (rows, invitationEvents) = listData
+                val (rows, invitationEvents, folders) = listData
                 val (connection, presence) = connectionAndPresence
                 val (settings, onboardingComplete, globalFeedEnabled) = settingsAndOnboarding
                 val (selected, pending) = selectionAndOrder
@@ -276,6 +284,7 @@ class ChatListViewModel
                         invitationEvents
                             .filter { it.bufferId in scopedBufferIds }
                             .mapNotNull(::toChatListInvitation),
+                    folders = folders,
                     connection = connection,
                     queryPresence =
                         scopedRows
@@ -328,6 +337,36 @@ class ChatListViewModel
                 appVisibility.onScreen.collectLatest { onScreen -> if (onScreen) state.collect {} }
             }
         }
+
+        fun assignFolder(
+            bufferIds: Collection<Long>,
+            folderId: Long?,
+            onResult: (Boolean) -> Unit = {},
+        ) {
+            viewModelScope.launch {
+                runCatching { chatFolders?.assign(bufferIds, folderId) ?: error("Folder storage unavailable.") }
+                    .onSuccess { onResult(true) }
+                    .onFailure { onResult(false) }
+            }
+        }
+
+        fun createFolderAndAssign(
+            name: String,
+            icon: FolderIconRef,
+            bufferIds: Collection<Long>,
+            onResult: (Boolean) -> Unit = {},
+        ) {
+            viewModelScope.launch {
+                runCatching { chatFolders?.createAndAssign(name, icon, bufferIds) ?: error("Folder storage unavailable.") }
+                    .onSuccess { onResult(true) }
+                    .onFailure { onResult(false) }
+            }
+        }
+
+        fun setFolderExpanded(
+            folderId: Long,
+            expanded: Boolean,
+        ) = viewModelScope.launch { chatFolders?.setExpanded(folderId, expanded) }
 
         fun setPinned(
             bufferId: Long,

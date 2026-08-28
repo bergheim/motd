@@ -14,6 +14,7 @@ import io.github.trevarj.motd.data.db.RoomAliasEntity
 import io.github.trevarj.motd.data.db.RoomAliasNamespace
 import io.github.trevarj.motd.data.db.RoomId
 import io.github.trevarj.motd.data.db.TimelineAnchor
+import io.github.trevarj.motd.data.repo.ChatFolderRepository
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -25,6 +26,7 @@ class BufferStore
         private val db: MotdDatabase,
         private val notifier: MessageNotifier = MessageNotifier.Noop,
         private val canonicalTimeline: CanonicalTimelineStore = CanonicalTimelineStore(db),
+        private val chatFolders: ChatFolderRepository = ChatFolderRepository(db),
     ) {
         suspend fun getOrCreate(
             networkId: Long,
@@ -100,6 +102,7 @@ class BufferStore
                                 verified = true,
                             ),
                         )
+                        chatFolders.claimPending(promoted.id, normalizedChannel = normalizedName)
                         return@withTransaction promoted
                     }
                 }
@@ -135,6 +138,9 @@ class BufferStore
                         verified = effectiveType == BufferType.CHANNEL,
                     ),
                 )
+                if (effectiveType == BufferType.CHANNEL) {
+                    chatFolders.claimPending(room.id, normalizedChannel = normalizedName)
+                }
                 room
             }
 
@@ -244,7 +250,8 @@ class BufferStore
                         db.bufferDao().update(room)
                     }
                 }
-                room
+                chatFolders.claimPending(room.id, account = account, normalizedNick = normalizedNick)
+                checkNotNull(db.bufferDao().observeById(room.id))
             }
 
         /** Resolve a PM by strong account, then the active verified nick, then provisional nick. */
@@ -336,6 +343,7 @@ class BufferStore
                             layoutDensityOverride = winner.layoutDensityOverride ?: loser.layoutDensityOverride,
                             presenceModeOverride = winner.presenceModeOverride ?: loser.presenceModeOverride,
                             avatarOverrideModel = winner.avatarOverrideModel ?: loser.avatarOverrideModel,
+                            folderId = winner.folderId ?: loser.folderId,
                         )
                     val mergedHistoryGaps = historyGapsForRoomMerge(winner.id, loser.id)
                     bufferDao.update(result)

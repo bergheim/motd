@@ -8,6 +8,10 @@ import io.github.trevarj.motd.audio.VoiceConfig
 import io.github.trevarj.motd.audio.VoicePrefs
 import io.github.trevarj.motd.avatar.AvatarPrefs
 import io.github.trevarj.motd.avatar.SelfAvatarSetting
+import io.github.trevarj.motd.data.db.BufferType
+import io.github.trevarj.motd.data.db.FolderIconKind
+import io.github.trevarj.motd.data.db.FolderIdentityKind
+import io.github.trevarj.motd.data.db.IgnoredAutoGroupPatternEntity
 import io.github.trevarj.motd.data.db.MotdDatabase
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
@@ -22,6 +26,10 @@ import io.github.trevarj.motd.data.prefs.ReplyConfig
 import io.github.trevarj.motd.data.prefs.ReplyPrefs
 import io.github.trevarj.motd.data.prefs.Settings
 import io.github.trevarj.motd.data.prefs.SettingsRepository
+import io.github.trevarj.motd.data.repo.ChatFolderRepository
+import io.github.trevarj.motd.data.repo.FolderIconRef
+import io.github.trevarj.motd.data.repo.FolderPortableAssignment
+import io.github.trevarj.motd.data.repo.FolderPortableDefinition
 import io.github.trevarj.motd.data.repo.networkIdentityKey
 import io.github.trevarj.motd.gesture.GestureMenuConfig
 import io.github.trevarj.motd.gesture.GesturePrefs
@@ -43,6 +51,11 @@ private const val FORMAT_VERSION = 1
 private const val MAX_DOCUMENT_BYTES = 4 * 1024 * 1024
 private const val MAX_DECRYPTED_BYTES = 2 * 1024 * 1024
 private const val MAX_NETWORKS = 512
+private const val MAX_FOLDERS = 512
+private const val MAX_FOLDER_ASSIGNMENTS = 100_000
+private const val MAX_IGNORED_AUTO_GROUP_PATTERNS = 10_000
+private const val MAX_PORTABLE_IDENTITY_LENGTH = 512
+private const val MAX_ICON_REFERENCE_LENGTH = 128
 private const val PBKDF2_ITERATIONS = 600_000
 private const val AES_KEY_BITS = 256
 private const val GCM_TAG_BITS = 128
@@ -62,6 +75,8 @@ data class ConfigurationImportPreview(
     val retainedLocalCredentials: Int,
     val missingCredentialNetworks: Int,
     val settingGroups: List<String>,
+    val folderCount: Int = 0,
+    val folderAssignmentCount: Int = 0,
 )
 
 data class ConfigurationImportResult(
@@ -107,6 +122,7 @@ class ConfigurationBackupRepositoryImpl
         private val avatarPrefs: AvatarPrefs,
         private val bouncerKindPrefs: BouncerKindPrefs,
         private val gesturePrefs: GesturePrefs,
+        private val chatFolders: ChatFolderRepository = ChatFolderRepository(db),
     ) : ConfigurationBackupRepository {
         private val json =
             Json {
@@ -179,6 +195,8 @@ class ConfigurationBackupRepositoryImpl
                 retainedLocalCredentials = plan.retainedLocalCredentials,
                 missingCredentialNetworks = plan.missingCredentialNetworks,
                 settingGroups = decoded.payload.settings.groupNames(),
+                folderCount = decoded.payload.folders.size,
+                folderAssignmentCount = decoded.payload.folderAssignments.size,
             )
         }
 
@@ -240,6 +258,19 @@ class ConfigurationBackupRepositoryImpl
                         .forEach { db.networkDao().deleteLocalTree(it.id) }
                 }
             }
+            chatFolders.restore(
+                folders = decoded.payload.folders.map(PortableFolder::toRepository),
+                assignments =
+                    decoded.payload.folderAssignments.mapNotNull { assignment ->
+                        val networkId = idMap[assignment.networkExportId] ?: return@mapNotNull null
+                        assignment.toRepository(networkId)
+                    },
+                ignored =
+                    decoded.payload.ignoredAutoGroupPatterns.mapNotNull { ignored ->
+                        idMap[ignored.networkExportId]?.let { IgnoredAutoGroupPatternEntity(it, ignored.normalizedPrefix) }
+                    },
+                replace = importMode == BackupImportMode.REPLACE,
+            )
             applyRemappedNetworkPrefs(decoded.payload, idMap, importMode)
             return ConfigurationImportResult(
                 addedNetworks = plan.added,
@@ -253,6 +284,7 @@ class ConfigurationBackupRepositoryImpl
             val networks = db.networkDao().allNow().sortedWith(compareBy<NetworkEntity> { it.parentId ?: 0L }.thenBy { it.ordering })
             val exportIds = networks.associate { it.id to "network-${it.id}" }
             val zncIds = bouncerKindPrefs.zncNetworkIds.first()
+            val folderSnapshot = chatFolders.backupSnapshot()
             val selfAvatars =
                 networks.mapNotNull { network ->
                     val setting = avatarPrefs.selfSetting(network.id).first()
@@ -267,6 +299,15 @@ class ConfigurationBackupRepositoryImpl
                 }
             return BackupPayload(
                 networks = networks.map { it.toPortable(exportIds, includeSecrets, zncIds) },
+                folders = folderSnapshot.folders.map(PortableFolder::fromRepository),
+                folderAssignments =
+                    folderSnapshot.assignments.mapNotNull { assignment ->
+                        exportIds[assignment.networkId]?.let { assignment.toPortable(it) }
+                    },
+                ignoredAutoGroupPatterns =
+                    folderSnapshot.ignored.mapNotNull { ignored ->
+                        exportIds[ignored.networkId]?.let { PortableIgnoredAutoGroupPattern(it, ignored.normalizedPrefix) }
+                    },
                 settings =
                     PortableSettings(
                         general = settingsRepository.settings.first(),
@@ -336,6 +377,30 @@ class ConfigurationBackupRepositoryImpl
                 }
                 network.wsUrl?.let { require(it.startsWith("wss://")) { "Backup contains an invalid WebSocket URL." } }
                 network.proxyPort?.let { require(it in 1..65535) { "Backup contains an invalid proxy port." } }
+            }
+            require(payload.folders.size <= MAX_FOLDERS) { "Too many folders in backup." }
+            require(payload.folderAssignments.size <= MAX_FOLDER_ASSIGNMENTS) { "Too many folder assignments in backup." }
+            require(payload.ignoredAutoGroupPatterns.size <= MAX_IGNORED_AUTO_GROUP_PATTERNS) { "Too many ignored Auto-group patterns in backup." }
+            val folderIds = payload.folders.map(PortableFolder::exportId)
+            require(folderIds.size == folderIds.distinct().size) { "Backup contains duplicate folder ids." }
+            val normalizedFolderNames = mutableSetOf<String>()
+            payload.folders.forEach { folder ->
+                val name = folder.name.trim()
+                require(name.length in 1..64 && name.none(Char::isISOControl)) { "Backup contains an invalid folder name." }
+                require(normalizedFolderNames.add(name.lowercase())) { "Backup contains duplicate folder names." }
+                require(folder.iconKey.isNotBlank() && folder.iconKey.length <= MAX_ICON_REFERENCE_LENGTH) { "Backup contains an invalid folder icon." }
+            }
+            val folderIdSet = folderIds.toSet()
+            payload.folderAssignments.forEach { assignment ->
+                require(assignment.networkExportId in idSet && assignment.folderExportId in folderIdSet) { "Backup contains an invalid folder assignment reference." }
+                require(assignment.identityValue.isNotBlank() && assignment.identityValue.length <= MAX_PORTABLE_IDENTITY_LENGTH && assignment.identityValue.none(Char::isISOControl)) {
+                    "Backup contains an invalid folder assignment identity."
+                }
+            }
+            payload.ignoredAutoGroupPatterns.forEach { ignored ->
+                require(ignored.networkExportId in idSet && ignored.normalizedPrefix.isNotBlank() && ignored.normalizedPrefix.length <= MAX_PORTABLE_IDENTITY_LENGTH && ignored.normalizedPrefix.none(Char::isISOControl)) {
+                    "Backup contains an invalid ignored Auto-group pattern."
+                }
             }
         }
 
@@ -570,6 +635,42 @@ private data class BackupPayload(
     val version: Int = FORMAT_VERSION,
     val networks: List<PortableNetwork>,
     val settings: PortableSettings,
+    val folders: List<PortableFolder> = emptyList(),
+    val folderAssignments: List<PortableFolderAssignment> = emptyList(),
+    val ignoredAutoGroupPatterns: List<PortableIgnoredAutoGroupPattern> = emptyList(),
+)
+
+@Serializable
+private data class PortableFolder(
+    val exportId: String,
+    val name: String,
+    val iconKind: FolderIconKind = FolderIconKind.GENERIC,
+    val iconKey: String = "folder",
+    val ordering: Int = 0,
+    val expanded: Boolean = true,
+) {
+    fun toRepository() = FolderPortableDefinition(exportId, name, FolderIconRef(iconKind, iconKey), ordering, expanded)
+
+    companion object {
+        fun fromRepository(folder: FolderPortableDefinition) = PortableFolder(folder.exportId, folder.name, folder.icon.kind, folder.icon.key, folder.ordering, folder.expanded)
+    }
+}
+
+@Serializable
+private data class PortableFolderAssignment(
+    val networkExportId: String,
+    val folderExportId: String,
+    val chatType: BufferType,
+    val identityKind: FolderIdentityKind,
+    val identityValue: String,
+) {
+    fun toRepository(networkId: Long) = FolderPortableAssignment(networkId, folderExportId, chatType, identityKind, identityValue)
+}
+
+@Serializable
+private data class PortableIgnoredAutoGroupPattern(
+    val networkExportId: String,
+    val normalizedPrefix: String,
 )
 
 @Serializable
@@ -663,6 +764,15 @@ private data class ImportPlan(
     val retainedLocalCredentials: Int,
     val missingCredentialNetworks: Int,
 )
+
+private fun FolderPortableAssignment.toPortable(networkExportId: String) =
+    PortableFolderAssignment(
+        networkExportId = networkExportId,
+        folderExportId = folderExportId,
+        chatType = chatType,
+        identityKind = identityKind,
+        identityValue = identityValue,
+    )
 
 private fun NetworkEntity.toPortable(
     exportIds: Map<Long, String>,

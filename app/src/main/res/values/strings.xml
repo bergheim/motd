@@ -1210,6 +1210,35 @@
     <string name="chatlist_archive">Archive</string>
     <string name="chatlist_unarchive">Unarchive</string>
 
+    <!-- Local flat chat folders and reviewed Auto-group. -->
+    <string name="folders_manage">Manage Folders</string>
+    <string name="folders_create">Create folder</string>
+    <string name="folders_edit">Edit folder</string>
+    <string name="folders_delete">Delete folder</string>
+    <string name="folders_delete_confirm">Delete this folder? Chats return to their ungrouped list.</string>
+    <string name="folders_name">Folder name</string>
+    <string name="folders_choose_icon">Choose icon</string>
+    <string name="folders_search_chats">Search chats</string>
+    <plurals name="folders_assigned_count">
+        <item quantity="one">%1$d chat assigned</item>
+        <item quantity="other">%1$d chats assigned</item>
+    </plurals>
+    <string name="folders_move_up">Move up</string>
+    <string name="folders_move_down">Move down</string>
+    <string name="folders_reset_ignored">Reset ignored suggestions</string>
+    <string name="folders_add_to">Add to Folder</string>
+    <string name="folders_none">No folder</string>
+    <string name="folders_expand">Expand folder</string>
+    <string name="folders_collapse">Collapse folder</string>
+    <string name="folders_auto_group">Auto-group</string>
+    <string name="folders_auto_group_empty">No suggestions</string>
+    <string name="folders_matched_prefix">Matched prefix: %1$s</string>
+    <string name="folders_new_destination">New folder</string>
+    <string name="folders_approve">Approve</string>
+    <string name="folders_reject">Reject</string>
+    <string name="folders_operation_failed">Could not save folder.</string>
+    <string name="action_search">Search</string>
+
     <!-- Shown wherever a chat can be unmuted: unmuting marks the muted backlog read, so say so and
          offer a way back. -->
     <string name="mute_backlog_dismissed">Older messages marked read</string>

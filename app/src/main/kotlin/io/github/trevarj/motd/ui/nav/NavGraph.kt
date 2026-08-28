@@ -25,7 +25,10 @@ import io.github.trevarj.motd.ui.about.AboutScreen
 import io.github.trevarj.motd.ui.channelinfo.ChannelInfoScreen
 import io.github.trevarj.motd.ui.channellist.ChannelListScreen
 import io.github.trevarj.motd.ui.chat.ChatScreen
+import io.github.trevarj.motd.ui.chatlist.AutoGroupScreen
 import io.github.trevarj.motd.ui.chatlist.ChatListScreen
+import io.github.trevarj.motd.ui.chatlist.FolderEditorScreen
+import io.github.trevarj.motd.ui.chatlist.ManageFoldersScreen
 import io.github.trevarj.motd.ui.feed.GlobalFeedScreen
 import io.github.trevarj.motd.ui.imageviewer.ImageViewerScreen
 import io.github.trevarj.motd.ui.invite.AccountSetupScreen
@@ -306,6 +309,24 @@ fun MotdNavGraph(
         composable<BackupRestoreRoute> {
             BackupRestoreScreen(onBack = { navController.popBackStack() })
         }
+        composable<ManageFoldersRoute> {
+            ManageFoldersScreen(
+                onBack = { navController.popBackStack() },
+                onEdit = { navController.navigate(FolderEditorRoute(it)) },
+            )
+        }
+        composable<FolderEditorRoute> { entry ->
+            FolderEditorScreen(
+                folderId = entry.toRoute<FolderEditorRoute>().folderId,
+                onBack = { navController.popBackStack() },
+            )
+        }
+        composable<AutoGroupRoute> { entry ->
+            AutoGroupScreen(
+                networkId = entry.toRoute<AutoGroupRoute>().networkId,
+                onBack = { navController.popBackStack() },
+            )
+        }
         composable<LabsRoute> {
             LabsScreen(
                 onBack = { navController.popBackStack() },
@@ -462,6 +483,9 @@ private fun ChatListPane(
         onOpenSettings = { navController.navigate(SettingsRoute) },
         onOpenSearch = { navController.navigate(SearchRoute()) },
         onOpenFeed = { navController.navigate(GlobalFeedRoute) },
+        onOpenManageFolders = { navController.navigate(ManageFoldersRoute) },
+        onOpenFolderEditor = { navController.navigate(FolderEditorRoute(it)) },
+        onOpenAutoGroup = { navController.navigate(AutoGroupRoute(it)) },
         onOpenOnboarding = { navController.navigate(OnboardingRoute) },
         onOpenNetworkSettings = { navController.navigate(NetworkSettingsRoute(it)) },
         onOpenAddNetwork = { navController.navigate(AddNetworkRoute) },

@@ -670,7 +670,7 @@ private fun PresenceBadge(
  * the label reads as part of the preview line rather than a louder element.
  */
 @Composable
-private fun SenderLabel(
+internal fun SenderLabel(
     sender: String,
     color: Color,
     unread: Boolean,

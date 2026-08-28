@@ -4,6 +4,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
 import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.db.ChatListRow
 import io.github.trevarj.motd.data.db.NetworkEntity
@@ -39,15 +40,16 @@ class GlobalFeedEntryPointsTest {
         compose.onNodeWithTag("drawer_open_feed").assertIsDisplayed()
     }
 
-    @Test fun toolbarIcon_hidesWhileTheLabIsOff() {
+    @Test fun moreMenu_hidesFeedWhileTheLabIsOff() {
         setChatList(globalFeedEnabled = false)
+        compose.onNodeWithTag("chatlist_more").performClick()
         assertEquals(0, compose.onAllNodesWithTag("chatlist_open_feed").fetchSemanticsNodes().size)
-        // The neighbouring actions are untouched, so this is a gate and not a missing top bar.
         compose.onNodeWithTag("chatlist_open_settings").assertIsDisplayed()
     }
 
-    @Test fun toolbarIcon_showsWhileTheLabIsOn() {
+    @Test fun moreMenu_showsFeedWhileTheLabIsOn() {
         setChatList(globalFeedEnabled = true)
+        compose.onNodeWithTag("chatlist_more").performClick()
         compose.onNodeWithTag("chatlist_open_feed").assertIsDisplayed()
     }
 

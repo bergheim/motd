@@ -282,6 +282,7 @@ private fun ImportPreview(preview: ConfigurationImportPreview) {
         Text("Preview", fontWeight = FontWeight.Medium)
         Text("${preview.networkCount} networks from motd ${preview.appVersion}")
         Text("Add ${preview.addedNetworks}, update ${preview.updatedNetworks}, remove ${preview.removedNetworks}")
+        Text("${preview.folderCount} folders, ${preview.folderAssignmentCount} chat assignments")
         Text("Settings: ${preview.settingGroups.joinToString().ifBlank { "none" }}")
         if (preview.containsSecrets) Text("Credentials are included in this encrypted backup.")
         if (preview.retainedLocalCredentials > 0) Text("${preview.retainedLocalCredentials} networks will retain local credentials.")

@@ -446,6 +446,8 @@ internal fun chatListTopItemKey(
     invitations: List<ChatListInvitation>,
     actionableInvitationCount: Int,
     sections: ChatListSections,
+    folders: List<PresentedChatFolder> = emptyList(),
+    pinned: List<ChatListRow> = sections.pinned,
 ): Any? =
     when {
         invitationMode -> {
@@ -456,8 +458,12 @@ internal fun chatListTopItemKey(
             "invitations-folder"
         }
 
-        sections.pinned.isNotEmpty() -> {
-            sections.pinned.first().bufferId
+        pinned.isNotEmpty() -> {
+            pinned.first().bufferId
+        }
+
+        folders.isNotEmpty() -> {
+            "folder-${folders.first().folder.id}"
         }
 
         sections.friends.isNotEmpty() -> {
