@@ -439,9 +439,7 @@ private fun AgentwireScreen(
                                         }
                                     }
 
-                                    else -> {
-                                        Unit
-                                    }
+                                    else -> {}
                                 }
                                 if (!state.connected && state.timeline.isEmpty()) {
                                     item {
@@ -563,9 +561,7 @@ private fun AgentwireScreen(
             AgentwireLogSheet(viewModel) { sheet = null }
         }
 
-        null -> {
-            Unit
-        }
+        null -> {}
     }
 }
 

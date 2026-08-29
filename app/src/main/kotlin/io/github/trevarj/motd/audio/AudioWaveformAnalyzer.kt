@@ -74,9 +74,7 @@ class AudioWaveformAnalyzer
                                 }
                         }
 
-                        MediaCodec.INFO_TRY_AGAIN_LATER -> {
-                            Unit
-                        }
+                        MediaCodec.INFO_TRY_AGAIN_LATER -> {}
 
                         else -> {
                             if (outputIndex >= 0) {

@@ -899,9 +899,7 @@ class IrcClient(
                 )
             }
 
-            "NAK" -> {
-                Unit
-            }
+            "NAK" -> {}
         }
         if (sub == "ACK" || sub == "NAK" || sub == "DEL") {
             _pendingFeatureCaps.value -= caps

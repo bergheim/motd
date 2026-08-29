@@ -164,9 +164,7 @@ class BouncerServClientImpl
 
                                 is SendAcceptance.Accepted -> {
                                     when (acceptance.immediateWireAcceptance) {
-                                        ImmediateWireAcceptance.ACCEPTED -> {
-                                            Unit
-                                        }
+                                        ImmediateWireAcceptance.ACCEPTED -> {}
 
                                         ImmediateWireAcceptance.DISCONNECTED -> {
                                             return@coroutineScope BouncerServResult.Disconnected(command.display)

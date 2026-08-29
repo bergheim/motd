@@ -553,9 +553,7 @@ class EventProcessor
                     if (origin.mutatesSessionState) onWhoxRow(networkId, event)
                 }
 
-                is IrcEvent.WhoxComplete -> {
-                    Unit
-                }
+                is IrcEvent.WhoxComplete -> {}
 
                 is IrcEvent.MonitorOnline -> {
                     if (origin.mutatesSessionState) onMonitorOnline(networkId, event)
@@ -564,9 +562,7 @@ class EventProcessor
                 is IrcEvent.MonitorOffline,
                 is IrcEvent.MonitorList,
                 is IrcEvent.MonitorListEnd,
-                -> {
-                    Unit
-                }
+                -> {}
 
                 is IrcEvent.MonitorLimitExceeded -> {
                     if (origin.mutatesSessionState) onMonitorLimitExceeded(networkId, event)
@@ -608,9 +604,7 @@ class EventProcessor
                     if (origin != EventOrigin.PUSH) onStandardReply(networkId, event, origin)
                 }
 
-                is IrcEvent.MultilineRejected -> {
-                    Unit
-                }
+                is IrcEvent.MultilineRejected -> {}
 
                 is IrcEvent.ServerError -> {
                     if (origin.mutatesSessionState) onServerError(networkId, event)
@@ -621,9 +615,7 @@ class EventProcessor
                 }
 
                 is IrcEvent.CapsChanged,
-                -> {
-                    Unit
-                } // not persisted
+                -> {} // not persisted
             }
         }
 

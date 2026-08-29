@@ -59,9 +59,7 @@ internal fun agentwireDisplayRows(timeline: List<AgentwireTimelineItem>): List<A
     }
     timeline.forEach { item ->
         when {
-            item.kind == "request.opened" -> {
-                Unit
-            }
+            item.kind == "request.opened" -> {}
 
             item.kind.startsWith("tool.") && !item.running -> {
                 pending.add(item)

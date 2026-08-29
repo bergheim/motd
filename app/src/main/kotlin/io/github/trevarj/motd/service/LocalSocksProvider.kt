@@ -318,6 +318,7 @@ private class AndroidPlatform(
         destinationPort: Int,
     ): io.nekohasekai.libbox.ConnectionOwner = io.nekohasekai.libbox.ConnectionOwner()
 
+    @Suppress("DEPRECATION")
     override fun getInterfaces(): io.nekohasekai.libbox.NetworkInterfaceIterator {
         val interfaces =
             runCatching {

@@ -596,9 +596,7 @@ private fun SyncStatusBadgeContent(indicator: ChatListSyncIndicator) {
             )
         }
 
-        ChatListSyncIndicator.NONE -> {
-            Unit
-        }
+        ChatListSyncIndicator.NONE -> {}
     }
 }
 

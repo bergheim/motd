@@ -261,10 +261,10 @@ class HistoryResyncCoordinatorTest {
 
         override fun isChannelTarget(target: String): Boolean = channelClassifier(target)
 
-        override suspend fun chathistory(request: ChatHistoryRequest): ChatHistoryResponse {
-            requests += request
-            val response = responder(request)
-            return if (request.subcommand == ChatHistoryRequest.Subcommand.TARGETS) {
+        override suspend fun chathistory(req: ChatHistoryRequest): ChatHistoryResponse {
+            requests += req
+            val response = responder(req)
+            return if (req.subcommand == ChatHistoryRequest.Subcommand.TARGETS) {
                 ChatHistoryResponse.Targets(
                     response.targets.map { (name, time) -> ChatHistoryTarget(name, time) },
                     response.endOfHistory,

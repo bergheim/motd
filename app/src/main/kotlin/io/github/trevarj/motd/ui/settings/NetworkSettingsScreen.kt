@@ -721,9 +721,7 @@ private fun ObfuscationSection(
                             }
                         }
 
-                        ObfsMode.NONE -> {
-                            Unit
-                        }
+                        ObfsMode.NONE -> {}
                     }
                 }
             }

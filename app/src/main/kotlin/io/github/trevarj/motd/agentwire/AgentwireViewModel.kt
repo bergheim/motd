@@ -196,9 +196,7 @@ class AgentwireViewModel
                                 _state.update { it.copy(sync = AgentwireSyncState.NotJoined) }
                             }
 
-                            nextClient == null -> {
-                                Unit
-                            }
+                            nextClient == null -> {}
 
                             // A new client instance or a new agent identity always re-arms a full
                             // budget; anything else leaves a terminal failure sticky.
@@ -206,9 +204,7 @@ class AgentwireViewModel
                                 startSession(nextClient, syncTrigger(identityChanged))
                             }
 
-                            else -> {
-                                Unit
-                            }
+                            else -> {}
                         }
                     }
             }

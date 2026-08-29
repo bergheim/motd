@@ -252,7 +252,7 @@ class HistoryResyncCoordinator
         internal interface HistorySource : HistoryPageLoader.HistorySource {
             override suspend fun availability(): HistoryAvailability
 
-            override suspend fun chathistory(request: ChatHistoryRequest): ChatHistoryResponse
+            override suspend fun chathistory(req: ChatHistoryRequest): ChatHistoryResponse
 
             fun flightIdentity(): Any = this
 
@@ -1940,7 +1940,7 @@ class HistoryResyncCoordinator
                 // will: the room is settled Idle, no later page can reach that timestamp, and the
                 // discovery-first cue would otherwise sit on this row as an unread dot the reader
                 // cannot clear (mark-read anchors on the newest LOCAL row, which is below it).
-                advertisedLatest?.let { processor.clampAdvertisedActivity(networkId, canonicalRoomId, it) }
+                processor.clampAdvertisedActivity(networkId, canonicalRoomId, advertisedLatest)
                 session?.settle(canonicalRoomId, HistorySyncStatus.Idle)
                 return TargetOutcome(highWater = targetResult.highWater)
             }
@@ -1956,7 +1956,7 @@ class HistoryResyncCoordinator
             // visible row is an event this device is never going to show (a JOIN, a filtered or
             // rerouted event), so the cue that stands in for its rows has nothing left to describe.
             if (reachedAdvertisedLatest == true) {
-                advertisedLatest?.let { processor.clampAdvertisedActivity(networkId, canonicalRoomId, it) }
+                processor.clampAdvertisedActivity(networkId, canonicalRoomId, advertisedLatest)
             }
             session?.settle(
                 canonicalRoomId,
@@ -2416,7 +2416,7 @@ class HistoryResyncCoordinator
 
             override fun isChannelTarget(target: String): Boolean = client.isupport.identityRules.isChannel(target)
 
-            override suspend fun chathistory(request: ChatHistoryRequest): ChatHistoryResponse = client.chathistory(request)
+            override suspend fun chathistory(req: ChatHistoryRequest): ChatHistoryResponse = client.chathistory(req)
         }
 
         private class StaleConnectionException : Exception()

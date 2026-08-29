@@ -205,9 +205,7 @@ class MotdNotifications
                             onDccTransferOffer(buffer.networkId, buffer.id, event.id)
                         }
 
-                        else -> {
-                            Unit
-                        }
+                        else -> {}
                     }
                     dao.completeNotification(event.id)
                 } catch (cancelled: CancellationException) {

@@ -1177,9 +1177,7 @@ class ConnectionManagerImpl
                                     put("error_fp", diagnostics.fingerprint(state.reason))
                                 }
 
-                                else -> {
-                                    Unit
-                                }
+                                else -> {}
                             }
                         }
                     }
@@ -1373,9 +1371,7 @@ class ConnectionManagerImpl
                     }
                 }
 
-                else -> {
-                    Unit
-                }
+                else -> {}
             }
         }
 
@@ -1929,9 +1925,7 @@ class ConnectionManagerImpl
                     }
                     pushHealthStore.waitingForServer(row.id)
                     when {
-                        client.hasCap(WEBPUSH_CAP) -> {
-                            Unit
-                        }
+                        client.hasCap(WEBPUSH_CAP) -> {}
 
                         row.role == NetworkRole.BOUNCER_CHILD -> {
                             awaitCapabilityAvailable(client, WEBPUSH_CAP)

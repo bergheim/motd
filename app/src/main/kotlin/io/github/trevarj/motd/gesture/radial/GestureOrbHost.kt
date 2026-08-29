@@ -294,9 +294,7 @@ private fun HapticFeedback.perform(update: RadialUpdate) {
             performHapticFeedback(HapticFeedbackType.SegmentTick)
         }
 
-        RadialEffect.NONE -> {
-            Unit
-        }
+        RadialEffect.NONE -> {}
     }
 }
 

@@ -121,9 +121,7 @@ fun ChatListSyncHeader(
         label = "chatlist_sync_header",
     ) { current ->
         when (current) {
-            SyncHeaderKind.HIDDEN -> {
-                Unit
-            }
+            SyncHeaderKind.HIDDEN -> {}
 
             SyncHeaderKind.WAITING -> {
                 SyncHeaderSurface {

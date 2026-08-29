@@ -63,7 +63,12 @@ fun systemEmojiSearchEntries(): List<EmojiSearchEntry> {
                     .map { letter ->
                         String(Character.toChars(0x1F1E6 + (letter - 'A')))
                     }.joinToString("")
-            flag to Locale("", country).displayCountry
+            flag to
+                Locale
+                    .Builder()
+                    .setRegion(country)
+                    .build()
+                    .displayCountry
         }
     return pages.flatMap { it.emojis }.distinct().mapNotNull { emoji ->
         val name =

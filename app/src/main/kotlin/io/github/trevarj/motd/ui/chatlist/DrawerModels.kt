@@ -97,9 +97,7 @@ fun buildDrawerRows(
     val out = ArrayList<DrawerRow>()
     for (net in networks) {
         when (net.role) {
-            NetworkRole.BOUNCER_CHILD -> {
-                Unit
-            }
+            NetworkRole.BOUNCER_CHILD -> {}
 
             // emitted under its parent below
             NetworkRole.BOUNCER_ROOT -> {

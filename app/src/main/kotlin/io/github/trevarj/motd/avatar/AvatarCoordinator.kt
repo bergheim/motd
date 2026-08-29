@@ -122,9 +122,7 @@ class AvatarCoordinator
                 client.send(unsubscribeAvatarMessage())
             }
             when (val self = prefs.selfSetting(networkId).first()) {
-                SelfAvatarSetting.Unmanaged -> {
-                    Unit
-                }
+                SelfAvatarSetting.Unmanaged -> {}
 
                 SelfAvatarSetting.ExplicitlyCleared -> {
                     if (supportsAvatarMutation(client.caps)) {
@@ -173,9 +171,7 @@ class AvatarCoordinator
                     }
                 }
 
-                else -> {
-                    Unit
-                }
+                else -> {}
             }
         }
 
@@ -199,9 +195,7 @@ class AvatarCoordinator
                     scheduleDelayedSync(networkId, metadata)
                 }
 
-                null -> {
-                    Unit
-                }
+                null -> {}
             }
         }
 

@@ -473,9 +473,7 @@ fun AdminPanel(
             )
         }
 
-        null -> {
-            Unit
-        }
+        null -> {}
     }
     if (debugEnableWarning) {
         ConfirmDialog(

@@ -58,9 +58,7 @@ class ReplyReceiver : BroadcastReceiver() {
                 }
             }
 
-            else -> {
-                Unit
-            }
+            else -> {}
         }
     }
 

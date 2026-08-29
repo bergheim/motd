@@ -1232,7 +1232,7 @@ class ChatViewModel
             // Leaving the chat acknowledges a settled history error: the user has had the in-chat
             // detail (stale chip / retry pill) on screen, so the chat-list badge must not keep
             // nagging. Transient Queued/Syncing states are left untouched.
-            val bufferId = operationalBufferId.value ?: return
+            val bufferId = operationalBufferId.value
             val status = historyResyncCoordinator.syncStatuses.value[bufferId]
             if (status is HistorySyncStatus.Partial || status is HistorySyncStatus.Failed) {
                 historyResyncCoordinator.dismissSyncStatus(bufferId)
@@ -1462,9 +1462,7 @@ class ChatViewModel
                 return@launch
             }
             when (val cmd = parseCommand(raw)) {
-                is ChatCommand.None -> {
-                    Unit
-                }
+                is ChatCommand.None -> {}
 
                 is ChatCommand.Message -> {
                     // Sending parks the author at the live bottom: the screen scrolls there as part of

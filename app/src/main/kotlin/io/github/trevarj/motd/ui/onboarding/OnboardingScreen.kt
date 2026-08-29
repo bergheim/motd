@@ -743,9 +743,7 @@ private fun BouncerNetworksSection(
             ) { Text(stringResource(R.string.onboarding_bouncer_discovery_refresh)) }
         }
 
-        null -> {
-            Unit
-        }
+        null -> {}
     }
     if (state.bouncerNetworks.isNotEmpty()) {
         val allSelected = state.bouncerNetworks.all { it.selected }

@@ -2202,9 +2202,7 @@ fun ChatContent(
                                             )
                                         }
 
-                                        null -> {
-                                            Unit
-                                        }
+                                        null -> {}
                                     }
                                 }
                             }
@@ -3953,9 +3951,7 @@ internal fun VoiceComposerPanel(
 
                         is VoiceSendProgress.Complete,
                         null,
-                        -> {
-                            Unit
-                        }
+                        -> {}
                     }
                     Button(onClick = onSend, enabled = progress == null, modifier = Modifier.fillMaxWidth().testTag("voice_send")) {
                         Icon(Icons.Outlined.CloudUpload, null)

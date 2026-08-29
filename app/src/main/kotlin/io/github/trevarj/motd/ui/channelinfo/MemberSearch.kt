@@ -37,9 +37,7 @@ fun rankMembersFuzzy(
         var firstOffset = 0
         var span = needle.length
         when {
-            hay == needle -> {
-                Unit
-            }
+            hay == needle -> {}
 
             hay.startsWith(needle) -> {
                 tier = 1

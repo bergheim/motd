@@ -289,9 +289,7 @@ class ConnectionActor(
                     return
                 }
 
-                Outcome.RetryImmediately -> {
-                    Unit
-                }
+                Outcome.RetryImmediately -> {}
 
                 Outcome.Retry -> {
                     // A disconnected/non-fatal Failed snapshot describes the socket that just

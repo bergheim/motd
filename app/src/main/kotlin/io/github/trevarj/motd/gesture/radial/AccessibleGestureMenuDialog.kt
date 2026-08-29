@@ -92,9 +92,7 @@ internal fun AccessibleGestureMenuDialog(
                                         }
 
                                         // An empty provider ring: nothing to open and nothing to run.
-                                        else -> {
-                                            Unit
-                                        }
+                                        else -> {}
                                     }
                                 }.testTag(gestureMenuSliceTag(entry.id)),
                     )

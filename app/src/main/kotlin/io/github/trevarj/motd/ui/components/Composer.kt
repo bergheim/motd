@@ -1407,9 +1407,7 @@ private fun VoiceRecordButton(
                                             break
                                         }
 
-                                        VoiceGestureTarget.NONE -> {
-                                            Unit
-                                        }
+                                        VoiceGestureTarget.NONE -> {}
                                     }
                                 }
                                 if (!change.pressed) break
