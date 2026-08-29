@@ -1,6 +1,7 @@
-- Organize chats into local folders with custom icons, backup and restore.
-- Review Auto-group suggestions before applying folder assignments.
+- Organize chats into local folders, review Auto-group suggestions, and back them up.
 - Try the optional Global Feed for one stream across conversations.
-- Find chats faster with smarter search results and highlighting.
-- Send channel invites and redact supported messages.
-- Improved network setup, account registration, uploads and link previews.
+- Find chats faster with smarter search and highlighting.
+- Send channel invites, scan QR friend invites, and redact supported messages.
+- Take and upload photos directly from chat, with clearer expiry details.
+- Control whether motd reconnects after device restarts.
+- Improved network setup, registration, uploads, and link previews.
