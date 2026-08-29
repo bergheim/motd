@@ -52,10 +52,14 @@ class LinkPreviewVisibilityTest {
     }
 
     @Test
-    fun completionStates_routeToAvailableAndUnavailable() {
+    fun completionStates_routeToAvailableFailedAndUnavailable() {
         assertEquals(
             LinkPreviewRenderState.Available(preview(imageUrl = null)),
             resolveLinkPreviewRenderState(preview = preview(imageUrl = null), loading = false),
+        )
+        assertSame(
+            LinkPreviewRenderState.Failed,
+            resolveLinkPreviewRenderState(preview = null, loading = false, failed = true),
         )
         assertSame(
             LinkPreviewRenderState.Unavailable,
@@ -80,6 +84,10 @@ class LinkPreviewVisibilityTest {
         assertEquals(
             LinkPreviewTransitionKey.AVAILABLE,
             LinkPreviewRenderState.Available(preview(imageUrl = "https://example.test/image.png")).transitionKey,
+        )
+        assertEquals(
+            LinkPreviewTransitionKey.FAILED,
+            LinkPreviewRenderState.Failed.transitionKey,
         )
         assertEquals(
             LinkPreviewTransitionKey.UNAVAILABLE,

@@ -52,6 +52,7 @@ import io.github.trevarj.motd.ui.theme.MotdMotion
 import io.github.trevarj.motd.ui.theme.MotdTheme
 
 internal val LocalLinkPreviewAwaiting = staticCompositionLocalOf { false }
+internal val LocalLinkPreviewFailed = staticCompositionLocalOf { false }
 
 internal fun shouldShowLinkPreview(
     preview: LinkPreview?,
@@ -69,6 +70,8 @@ internal sealed interface LinkPreviewRenderState {
         val preview: LinkPreview,
     ) : LinkPreviewRenderState
 
+    data object Failed : LinkPreviewRenderState
+
     data object Unavailable : LinkPreviewRenderState
 }
 
@@ -76,6 +79,7 @@ internal enum class LinkPreviewTransitionKey {
     AWAITING,
     LOADING,
     AVAILABLE,
+    FAILED,
     UNAVAILABLE,
 }
 
@@ -83,10 +87,12 @@ internal fun resolveLinkPreviewRenderState(
     preview: LinkPreview?,
     loading: Boolean,
     awaiting: Boolean = false,
+    failed: Boolean = false,
 ): LinkPreviewRenderState =
     when {
         loading -> LinkPreviewRenderState.Loading
         preview != null -> LinkPreviewRenderState.Available(preview)
+        failed -> LinkPreviewRenderState.Failed
         awaiting -> LinkPreviewRenderState.Awaiting
         else -> LinkPreviewRenderState.Unavailable
     }
@@ -97,11 +103,12 @@ internal val LinkPreviewRenderState.transitionKey: LinkPreviewTransitionKey
             LinkPreviewRenderState.Awaiting -> LinkPreviewTransitionKey.AWAITING
             LinkPreviewRenderState.Loading -> LinkPreviewTransitionKey.LOADING
             is LinkPreviewRenderState.Available -> LinkPreviewTransitionKey.AVAILABLE
+            LinkPreviewRenderState.Failed -> LinkPreviewTransitionKey.FAILED
             LinkPreviewRenderState.Unavailable -> LinkPreviewTransitionKey.UNAVAILABLE
         }
 
 /**
- * OG-tag link preview card. Each state retains a shared 72 dp minimum footprint; completed
+ * Metadata link preview card. Each state retains a shared 72 dp minimum footprint; completed
  * metadata may be taller and grows through the card-local content-size transition.
  */
 @Composable
@@ -111,8 +118,15 @@ fun LinkPreviewCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     awaiting: Boolean = false,
+    failed: Boolean = false,
 ) {
-    val renderState = resolveLinkPreviewRenderState(preview, loading, awaiting || LocalLinkPreviewAwaiting.current)
+    val renderState =
+        resolveLinkPreviewRenderState(
+            preview,
+            loading,
+            awaiting || LocalLinkPreviewAwaiting.current,
+            failed || LocalLinkPreviewFailed.current,
+        )
     AnimatedContent(
         targetState = renderState,
         modifier = modifier.fillMaxWidth(),
@@ -133,6 +147,7 @@ fun LinkPreviewCard(
             LinkPreviewRenderState.Awaiting -> LinkPreviewAwaiting(onClick)
             LinkPreviewRenderState.Loading -> LinkPreviewSkeleton()
             is LinkPreviewRenderState.Available -> LinkPreviewContent(state.preview, onClick)
+            LinkPreviewRenderState.Failed -> LinkPreviewFailed(onClick)
             LinkPreviewRenderState.Unavailable -> LinkPreviewUnavailable(onClick)
         }
     }
@@ -309,6 +324,27 @@ private fun LinkPreviewSkeleton() {
             Spacer(Modifier.height(6.dp))
             SkeletonBar(width = 90.dp, color = block)
         }
+    }
+}
+
+@Composable
+private fun LinkPreviewFailed(onClick: () -> Unit) {
+    val description = stringResource(R.string.chat_link_preview_failed)
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = LINK_PREVIEW_MIN_HEIGHT)
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                .clickable(onClickLabel = description, onClick = onClick)
+                .semantics { contentDescription = description }
+                .testTag("link_preview_failed")
+                .padding(8.dp),
+    ) {
+        Icon(Icons.Outlined.Link, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+        Spacer(Modifier.width(10.dp))
+        Text(description, color = MaterialTheme.colorScheme.error)
     }
 }
 

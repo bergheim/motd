@@ -6,7 +6,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-// Plain JVM fixture tests for the OG-tag extractor (no Android deps: parseOgTags uses only Regex).
+// Plain JVM fixture tests for bounded HTML metadata extraction.
 class OgParserTest {
     private val url = "https://example.com/page"
 
@@ -72,9 +72,10 @@ class OgParserTest {
     }
 
     @Test
-    fun noExtractableTags_returnsNull() {
-        val html = "<html><body>no metadata at all</body></html>"
-        assertNull(LinkPreviewRepositoryImpl.parseOgTags(url, html))
+    fun emptyHtml_usesSafePathFallback() {
+        val preview = LinkPreviewRepositoryImpl.parseOgTags(url, "<html><body>no metadata</body></html>")!!
+        assertEquals("page", preview.title)
+        assertEquals("example.com", preview.siteName)
     }
 
     @Test
@@ -212,7 +213,7 @@ class OgParserTest {
         val spoofedTitle = "paypal.com\u202Emoc.live\u0000"
         val html =
             "<meta property=\"og:title\" content=\"$spoofedTitle\">" +
-                // Kept inside the 64 KB head-scan window; oversized fields are covered separately.
+                // Kept inside the bounded head; oversized fields are covered separately.
                 "<meta property=\"og:description\" content=\"" + "a".repeat(10_000) + "\">"
         val preview = LinkPreviewRepositoryImpl.parseOgTags(url, html)!!
 
@@ -241,35 +242,141 @@ class OgParserTest {
     }
 
     @Test
-    fun metadata_outside_the_head_region_is_ignored() {
-        // OG tags after </head> are body content and must not be scanned.
-        assertNull(
+    fun scanner_coversFullBoundedHead_andStopsBeforeBody() {
+        val injected =
             LinkPreviewRepositoryImpl.parseOgTags(
                 url,
                 """<html><head></head><body><meta property="og:title" content="Injected"></body></html>""",
-            ),
-        )
-        // Metadata beyond the 64 KB scan cap is likewise out of reach for the regexes.
-        assertNull(
+            )!!
+        assertEquals("page", injected.title)
+
+        val late =
             LinkPreviewRepositoryImpl.parseOgTags(
                 url,
-                "<html><head>" + " ".repeat(70 * 1024) + """<meta property="og:title" content="Late">""",
-            ),
-        )
+                "<html><head>" + " ".repeat(80 * 1024) + """<meta property="og:title" content="Late">""",
+            )!!
+        assertEquals("Late", late.title)
+
+        val beyondCap =
+            LinkPreviewRepositoryImpl.parseOgTags(
+                url,
+                "<html><head>" + " ".repeat(513 * 1024) + """<meta property="og:title" content="Too late">""",
+            )!!
+        assertEquals("page", beyondCap.title)
     }
 
     @Test
     fun title_extraction_is_linear_and_stops_at_markup() {
         // An unterminated <title> over a large body must fail fast instead of backtracking.
         val started = System.nanoTime()
-        assertNull(LinkPreviewRepositoryImpl.parseOgTags(url, "<title>" + "a ".repeat(30_000)))
+        assertEquals("page", LinkPreviewRepositoryImpl.parseOgTags(url, "<title>" + "a ".repeat(30_000))?.title)
         assertTrue((System.nanoTime() - started) < 2_000_000_000L)
 
-        // The strict pattern captures plain text only; a title containing markup is no preview
-        // rather than a backtracking hazard.
+        // Title markup is ignored safely and falls back to the URL-derived title.
         assertEquals("safe", LinkPreviewRepositoryImpl.parseOgTags(url, "<title>safe</title>")?.title)
-        assertNull(LinkPreviewRepositoryImpl.parseOgTags(url, "<title>safe <b>rest</b></title>"))
+        assertEquals("page", LinkPreviewRepositoryImpl.parseOgTags(url, "<title>safe <b>rest</b></title>")?.title)
     }
+
+    @Test
+    fun fixtures_coverMetadataPrecedence_andFlexibleAttributes() {
+        val github = LinkPreviewRepositoryImpl.parseOgTags(url, fixture("github-head.html"))!!
+        assertEquals("owner/project", github.title)
+        assertEquals("GitHub repository", github.description)
+        assertEquals("https://example.com/owner/project/social.png", github.imageUrl)
+
+        val twitter = LinkPreviewRepositoryImpl.parseOgTags(url, fixture("twitter-only.html"))!!
+        assertEquals("Twitter title", twitter.title)
+        assertEquals("Twitter description", twitter.description)
+        assertEquals("https://cdn.example.test/card.png", twitter.imageUrl)
+        assertEquals(LinkPreviewKind.VIDEO, twitter.kind)
+
+        val standard = LinkPreviewRepositoryImpl.parseOgTags(url, fixture("standard-only.html"))!!
+        assertEquals("Standard title", standard.title)
+        assertEquals("Standard description", standard.description)
+    }
+
+    @Test
+    fun imageSelectionSkipsUnsafePreferredAndRepeatedCandidates() {
+        val preview =
+            LinkPreviewRepositoryImpl.parseOgTags(
+                url,
+                """
+                <meta property=og:image:secure_url content=javascript:alert(1)>
+                <meta property=og:image content=//127.0.0.1/private.png>
+                <meta property=og:image content=/safe.png>
+                <meta name=twitter:image content=https://cdn.example.test/lower-priority.png>
+                """.trimIndent(),
+            )!!
+
+        assertEquals("https://example.com/safe.png", preview.imageUrl)
+    }
+
+    @Test
+    fun metadataImagesRejectLocalhostNames() {
+        for (host in listOf("localhost", "assets.localhost")) {
+            val preview =
+                LinkPreviewRepositoryImpl.parseOgTags(
+                    url,
+                    """<meta property=og:image content=https://$host/private.png>""",
+                )!!
+            assertNull(preview.imageUrl)
+        }
+    }
+
+    @Test
+    fun scannerIgnoresCommentAndScriptMarkup_andRespectsQuotedTagEnds() {
+        val preview =
+            LinkPreviewRepositoryImpl.parseOgTags(
+                url,
+                """
+                <!-- <meta property=og:title content=Comment> -->
+                <script>const fake = '<meta property=og:title content=Script>';</script>
+                <meta content='Real > title' property='og:title'>
+                """.trimIndent(),
+            )!!
+        assertEquals("Real > title", preview.title)
+    }
+
+    @Test
+    fun metadataPrecedence_prefersOgThenTwitterThenStandard() {
+        val preview =
+            LinkPreviewRepositoryImpl.parseOgTags(
+                url,
+                """
+                <title>Standard</title>
+                <meta name=description content=standard-description>
+                <meta name=twitter:title content=Twitter>
+                <meta content='Twitter description' name='twitter:description'>
+                <meta NAME=og:title CONTENT=OpenGraph>
+                <meta property=og:description content='OG description'>
+                <meta property=og:image:secure_url content='/safe image.png'>
+                """.trimIndent(),
+            )!!
+        assertEquals("OpenGraph", preview.title)
+        assertEquals("OG description", preview.description)
+        assertEquals("https://example.com/safe image.png", preview.imageUrl)
+    }
+
+    @Test
+    fun relativeImagesResolveAgainstFinalUrl_andRestrictedLiteralsAreRejected() {
+        assertEquals(
+            "https://example.com/a/image.png",
+            LinkPreviewRepositoryImpl
+                .parseOgTags(
+                    "https://example.com/a/page",
+                    """<meta property=og:image content=image.png>""",
+                )?.imageUrl,
+        )
+        assertNull(
+            LinkPreviewRepositoryImpl
+                .parseOgTags(
+                    url,
+                    """<meta property=og:image content=//127.0.0.1/private.png>""",
+                )?.imageUrl,
+        )
+    }
+
+    private fun fixture(name: String): String = checkNotNull(javaClass.getResource("/link-preview/$name")).readText()
 
     @Test
     fun wikipediaSummary_fallsBackToShortDescriptionWhenExtractIsMissing() {

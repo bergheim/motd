@@ -17,6 +17,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -91,6 +93,44 @@ class DirectMediaPolicyTest {
 
             prefs.state.value = ContentPreviewConfig(directMediaOnProxiedNetworks = true)
             assertTrue(provider.directMediaAllowed(child))
+        }
+
+    @Test
+    fun previewRouteUsesDirectConnectionOnlyAfterOptIn() =
+        runTest {
+            val reality = insert(obfsMode = ObfsMode.EMBEDDED_REALITY)
+
+            provider.routeForPreview(reality).use { routed ->
+                assertNotNull(routed)
+                assertNotNull(routed?.proxyError)
+            }
+
+            prefs.state.value = ContentPreviewConfig(directMediaOnProxiedNetworks = true)
+            provider.routeForPreview(reality).use { direct ->
+                assertNotNull(direct)
+                assertNull(direct?.proxy)
+                assertNull(direct?.proxyError)
+            }
+
+            // Uploads and other network-bound operations keep the owning transport despite preview opt-in.
+            provider.routeForNetwork(reality).use { routed ->
+                assertNotNull(routed)
+                assertNotNull(routed?.proxyError)
+            }
+        }
+
+    @Test
+    fun optedInBouncerChildPreviewUsesDirectConnection() =
+        runTest {
+            val realityParent = insert(obfsMode = ObfsMode.EMBEDDED_REALITY)
+            val child = insert(obfsMode = null, role = NetworkRole.BOUNCER_CHILD, parentId = realityParent)
+            prefs.state.value = ContentPreviewConfig(directMediaOnProxiedNetworks = true)
+
+            provider.routeForPreview(child).use { route ->
+                assertNotNull(route)
+                assertNull(route?.proxy)
+                assertNull(route?.proxyError)
+            }
         }
 
     @Test

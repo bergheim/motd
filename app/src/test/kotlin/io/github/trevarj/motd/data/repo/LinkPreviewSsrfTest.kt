@@ -57,6 +57,8 @@ class LinkPreviewSsrfTest {
         val blocked =
             listOf(
                 "https://127.0.0.1/",
+                "https://2130706433/",
+                "https://0x7f000001/",
                 "https://0.0.0.0/",
                 "https://10.1.2.3/",
                 "https://172.16.0.1/",

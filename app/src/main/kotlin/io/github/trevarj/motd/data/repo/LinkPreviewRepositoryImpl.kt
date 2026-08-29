@@ -6,6 +6,7 @@ import io.github.trevarj.motd.audio.NetworkMediaRoute
 import io.github.trevarj.motd.data.prefs.ContentPreviewPrefs
 import io.github.trevarj.motd.di.ApplicationScope
 import io.github.trevarj.motd.di.IoDispatcher
+import io.github.trevarj.motd.diagnostics.DiagnosticLogger
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -25,6 +26,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
+import java.io.IOException
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.Inet6Address
@@ -55,10 +57,16 @@ data class LinkPreviewFetchPolicy(
     val maxRedirects: Int = 4,
 )
 
+/** Internal signal for failures that must remain uncached and user-retryable. */
+internal class RetryableLinkPreviewException(
+    val classification: String,
+    val status: Int? = null,
+) : IOException(classification)
+
 // Declared web/text/media link preview. HttpURLConnection GET, 5s connect/read timeouts, HTML body
 // capped at 512 KB, text body capped at 16 KB, and Wikipedia summaries capped at 128 KB.
-// Completed negative results live in a bounded process cache, while concurrent callers for the
-// same network+URL await one shared request. The OG parser remains dependency-free; Wikipedia
+// Definitive negative results live in a bounded process cache; retryable failures do not. Concurrent
+// callers for the same network+URL await one shared request. HTML scanning remains dependency-free; Wikipedia
 // summaries use the already-pinned kotlinx.serialization JSON parser.
 //
 // Every request is opened through the owning network's media route (never authenticated), so a
@@ -73,6 +81,7 @@ class LinkPreviewRepositoryImpl
         private val fetchPolicy: LinkPreviewFetchPolicy,
         @ApplicationScope private val applicationScope: CoroutineScope,
         @IoDispatcher private val ioDispatcher: CoroutineDispatcher,
+        private val diagnostics: DiagnosticLogger = DiagnosticLogger.Noop,
     ) : LinkPreviewRepository {
         // LruCache does not permit null values, so wrap results in an Optional-ish holder.
         private val cache = LruCache<String, Holder>(CACHE_SIZE)
@@ -94,7 +103,9 @@ class LinkPreviewRepositoryImpl
             // Gate before even consulting cached metadata: disabled means neither network nor render.
             if (!contentPreviewPrefs.config.first().showLinkPreviews) return null
             cachedPreview(url, networkId)?.let { return it.preview }
-            return sharedFetch(url, networkId).await().value
+            val result = sharedFetch(url, networkId).await()
+            result.failure?.let { throw it }
+            return result.value
         }
 
         /**
@@ -109,26 +120,35 @@ class LinkPreviewRepositoryImpl
             val key = cacheKey(url, networkId)
             val created =
                 applicationScope.async(ioDispatcher, start = CoroutineStart.LAZY) {
-                    val result =
+                    val holder =
                         try {
-                            // The permit bounds concurrent in-flight fetches; the deadline bounds each whole
-                            // fetch including redirects and body reads.
-                            fetchPermits.withPermit {
-                                withTimeout(fetchPolicy.fetchDeadlineMs) { fetchRouted(url, networkId) }
-                            }
+                            // Permit bounds concurrent work; deadline covers routing, redirects, and body reads.
+                            Holder(
+                                fetchPermits.withPermit {
+                                    withTimeout(fetchPolicy.fetchDeadlineMs) { fetchRouted(url, networkId) }
+                                },
+                            )
                         } catch (_: TimeoutCancellationException) {
-                            // The deadline is a completed negative result, not a caller cancellation.
-                            null
+                            Holder(failure = RetryableLinkPreviewException("deadline"))
                         } catch (cancelled: CancellationException) {
                             throw cancelled
+                        } catch (retryable: RetryableLinkPreviewException) {
+                            Holder(failure = retryable)
+                        } catch (_: IOException) {
+                            Holder(failure = RetryableLinkPreviewException("network"))
                         } catch (_: Exception) {
-                            null
+                            Holder(failure = RetryableLinkPreviewException("unexpected"))
                         }
-                    Holder(result).also { holder ->
-                        synchronized(cache) {
-                            cache.put(key, holder)
+                    holder.failure?.let { retryable ->
+                        diagnostics.record("link_preview", "fetch_failed") {
+                            mapOf(
+                                "failure_class" to retryable.classification,
+                                "http_status" to retryable.status,
+                                "url_fingerprint" to diagnostics.fingerprint(url),
+                            )
                         }
-                    }
+                    } ?: synchronized(cache) { cache.put(key, holder) }
+                    holder
                 }
             val existing = inFlight.putIfAbsent(key, created)
             if (existing != null) {
@@ -144,15 +164,13 @@ class LinkPreviewRepositoryImpl
             url: String,
             networkId: Long?,
         ): LinkPreview? {
-            // Fail closed: without a network identity there is no way to know whether this content
-            // belongs to a proxied network, so no request is made at all. The null-keyed negative
-            // result cannot shadow a later fetch made once the identity is known.
-            if (networkId == null) return null
-            val route = routeResolver.routeForNetwork(networkId) ?: return null
+            // Fail closed and retry later: route identity/readiness can recover without process restart.
+            if (networkId == null) throw RetryableLinkPreviewException("route_missing")
+            val route = routeResolver.routeForPreview(networkId) ?: throw RetryableLinkPreviewException("route_missing")
             return try {
-                // Fail closed: a proxied network whose proxy cannot be established must not fall back
-                // to a direct fetch that would reveal the client address.
-                if (route.proxyError != null) null else fetch(url, route)
+                // Never fall back direct when the owning network's proxy is unavailable.
+                if (route.proxyError != null) throw RetryableLinkPreviewException("proxy_unavailable")
+                fetch(url, route)
             } finally {
                 route.close()
             }
@@ -214,13 +232,13 @@ class LinkPreviewRepositoryImpl
         ): LinkPreview? =
             request(summaryUrl, WIKIPEDIA_ACCEPT, route, connection) { conn ->
                 val contentType = conn.getHeaderField("Content-Type")
-                if (contentType?.substringBefore(';')?.trim()?.equals("application/json", ignoreCase = true) != true) {
+                if (contentType?.substringBefore(';')?.trim()?.equals("application/json", ignoreCase = true) != true ||
+                    !hasSupportedContentEncoding(conn)
+                ) {
                     return@request null
                 }
-                parseWikipediaSummary(
-                    articleUrl,
-                    conn.inputStream.readCapped(WIKIPEDIA_MAX_BYTES, charsetFromContentType(contentType)),
-                )
+                val bytes = conn.inputStream.readCappedBytes(WIKIPEDIA_MAX_BYTES)
+                parseWikipediaSummary(articleUrl, decodeBody(bytes, contentType))
             }
 
         private fun fetchGenericPreview(
@@ -229,31 +247,38 @@ class LinkPreviewRepositoryImpl
             connection: AtomicReference<HttpURLConnection?>,
         ): LinkPreview? =
             request(url, GENERIC_ACCEPT, route, connection) { conn ->
+                if (!hasSupportedContentEncoding(conn)) return@request null
                 val contentType = conn.getHeaderField("Content-Type")
-                when (val kind = responseKind(contentType)) {
+                val finalUrl = conn.url.toString()
+                val declared = responseKind(contentType)
+                val generic = isGenericContentType(contentType)
+                if (!generic && (declared == LinkPreviewKind.VIDEO || declared == LinkPreviewKind.FILE)) {
+                    return@request filePreview(finalUrl, contentType, declared)
+                }
+                if (!generic && declared == null) return@request null
+                val textByExtension = hasTextExtension(finalUrl)
+                val maxBytes =
+                    if (declared == LinkPreviewKind.WEB || (generic && !textByExtension)) {
+                        HTML_MAX_BYTES
+                    } else {
+                        TEXT_MAX_BYTES
+                    }
+                val bytes = conn.inputStream.readCappedBytes(maxBytes)
+                val decoded = decodeBody(bytes, contentType)
+                when (val kind = responseKind(contentType, finalUrl, decoded)) {
                     LinkPreviewKind.WEB -> {
-                        parseOgTags(
-                            conn.url.toString(),
-                            conn.inputStream.readCapped(HTML_MAX_BYTES, Charsets.UTF_8),
-                        )
+                        parseOgTags(finalUrl, decoded)
                     }
 
                     LinkPreviewKind.TEXT -> {
                         parseTextPreview(
-                            conn.url.toString(),
-                            conn.inputStream.readCapped(
-                                TEXT_MAX_BYTES,
-                                charsetFromContentType(conn.getHeaderField("Content-Type")),
-                            ),
+                            finalUrl,
+                            decodeBody(bytes.copyOf(minOf(bytes.size, TEXT_MAX_BYTES)), contentType),
                         )
                     }
 
                     LinkPreviewKind.VIDEO, LinkPreviewKind.FILE -> {
-                        filePreview(
-                            url = conn.url.toString(),
-                            contentType = contentType,
-                            kind = kind,
-                        )
+                        filePreview(finalUrl, contentType, kind)
                     }
 
                     LinkPreviewKind.WIKIPEDIA, null -> {
@@ -273,12 +298,9 @@ class LinkPreviewRepositoryImpl
             var redirects = 0
             while (true) {
                 val parsed = runCatching { URL(current) }.getOrNull() ?: return null
-                // Validate every hop, not only the first URL — redirect targets are equally
-                // attacker-controlled. DNS-based checks stay off when a proxy is in use: a local
-                // lookup would leak exactly what the proxy exists to hide, and the proxy end resolves
-                // remotely. Literal-address and scheme checks always apply.
+                // Validate every hop. Proxy routes never resolve target hostnames locally.
                 if (fetchPolicy.enforceDestinationPolicy &&
-                    !isAllowedDestination(parsed, resolveDns = route.proxy == null)
+                    !validateDestination(parsed, resolveDns = route.proxy == null)
                 ) {
                     return null
                 }
@@ -291,6 +313,7 @@ class LinkPreviewRepositoryImpl
                         readTimeout = TIMEOUT_MS
                         instanceFollowRedirects = false
                         setRequestProperty("Accept", accept)
+                        setRequestProperty("Accept-Encoding", "identity")
                         setRequestProperty("User-Agent", USER_AGENT)
                     }
                 connection.set(conn)
@@ -308,8 +331,12 @@ class LinkPreviewRepositoryImpl
                             next = runCatching { URL(parsed, location).toString() }.getOrNull() ?: return null
                         }
 
-                        else -> {
+                        code == 404 || code == 410 || code in PERMANENT_HTTP_CODES -> {
                             return null
+                        }
+
+                        else -> {
+                            throw RetryableLinkPreviewException("http_status", code)
                         }
                     }
                 } finally {
@@ -321,10 +348,7 @@ class LinkPreviewRepositoryImpl
             }
         }
 
-        private fun InputStream.readCapped(
-            max: Int,
-            charset: Charset,
-        ): String {
+        private fun InputStream.readCappedBytes(max: Int): ByteArray {
             val buf = ByteArray(8 * 1024)
             val out = ByteArray(max)
             var total = 0
@@ -334,8 +358,12 @@ class LinkPreviewRepositoryImpl
                 System.arraycopy(buf, 0, out, total, read)
                 total += read
             }
-            return String(out, 0, total, charset)
+            return out.copyOf(total)
         }
+
+        private fun hasSupportedContentEncoding(connection: HttpURLConnection): Boolean =
+            connection.getHeaderField("Content-Encoding").isNullOrBlank() ||
+                connection.getHeaderField("Content-Encoding").equals("identity", ignoreCase = true)
 
         companion object {
             private const val CACHE_SIZE = 256
@@ -345,10 +373,8 @@ class LinkPreviewRepositoryImpl
             private const val WIKIPEDIA_MAX_BYTES = 128 * 1024
             private const val TEXT_MAX_CODE_POINTS = 2_048
 
-            // OG/title metadata lives in <head>; bounding the scanned region keeps the tag regexes
-            // linear on attacker-sized documents.
-            private const val HEAD_SCAN_MAX_CHARS = 64 * 1024
-            private const val GENERIC_ACCEPT = "text/html, text/*, application/json, application/xml, video/*, application/*;q=0.1"
+            private const val HTML_SNIFF_MAX_BYTES = 4 * 1024
+            private const val GENERIC_ACCEPT = "text/html, application/xhtml+xml, text/*, application/json, application/xml, video/*, application/*;q=0.1"
             private const val WIKIPEDIA_ACCEPT = "application/json"
             private const val USER_AGENT = "motd-Android (https://github.com/trevarj/motd)"
             private const val WIKIPEDIA_SITE_NAME = "Wikipedia"
@@ -356,7 +382,103 @@ class LinkPreviewRepositoryImpl
             private val WIKIPEDIA_HOST = Regex("""(?:^|[.])wikipedia[.]org$""", RegexOption.IGNORE_CASE)
             private val WIKIPEDIA_WHITESPACE = Regex("""\s+""")
             private val REDIRECT_CODES = setOf(301, 302, 303, 307, 308)
+            private val PERMANENT_HTTP_CODES = setOf(400, 401, 405, 406, 411, 413, 414, 415, 422)
             private val IPV4_LITERAL = Regex("""\d{1,3}(?:\.\d{1,3}){3}""")
+            private val GENERIC_MEDIA_TYPES =
+                setOf("", "application/octet-stream", "binary/octet-stream", "application/download")
+            private val TEXT_APPLICATION_TYPES =
+                setOf(
+                    "application/javascript",
+                    "application/x-javascript",
+                    "application/ecmascript",
+                    "application/x-ecmascript",
+                    "application/yaml",
+                    "application/x-yaml",
+                    "application/toml",
+                    "application/x-toml",
+                    "application/sql",
+                    "application/x-sql",
+                    "application/ndjson",
+                    "application/x-ndjson",
+                    "application/json-seq",
+                    "application/x-sh",
+                    "application/x-shellscript",
+                    "application/x-bash",
+                    "application/x-zsh",
+                    "application/x-httpd-php",
+                    "application/x-httpd-php-source",
+                    "application/x-php",
+                    "application/x-ruby",
+                    "application/x-perl",
+                    "application/graphql",
+                )
+            private val TEXT_EXTENSIONS =
+                setOf(
+                    "txt",
+                    "md",
+                    "rst",
+                    "log",
+                    "csv",
+                    "tsv",
+                    "json",
+                    "jsonl",
+                    "ndjson",
+                    "xml",
+                    "yaml",
+                    "yml",
+                    "toml",
+                    "ini",
+                    "conf",
+                    "config",
+                    "env",
+                    "properties",
+                    "kt",
+                    "kts",
+                    "java",
+                    "py",
+                    "js",
+                    "ts",
+                    "tsx",
+                    "jsx",
+                    "c",
+                    "cpp",
+                    "h",
+                    "hpp",
+                    "rs",
+                    "go",
+                    "rb",
+                    "php",
+                    "sh",
+                    "bash",
+                    "zsh",
+                    "fish",
+                    "sql",
+                    "swift",
+                    "scala",
+                    "clj",
+                    "ex",
+                    "exs",
+                    "erl",
+                    "hs",
+                    "lua",
+                    "r",
+                    "pl",
+                    "pm",
+                    "groovy",
+                    "gradle",
+                    "nix",
+                    "scm",
+                    "proto",
+                    "graphql",
+                    "gql",
+                    "vue",
+                    "svelte",
+                    "dart",
+                    "css",
+                    "scss",
+                    "sass",
+                    "less",
+                )
 
             private fun cacheKey(
                 url: String,
@@ -371,6 +493,16 @@ class LinkPreviewRepositoryImpl
             internal fun isAllowedDestination(
                 url: URL,
                 resolveDns: Boolean,
+            ): Boolean =
+                try {
+                    validateDestination(url, resolveDns)
+                } catch (_: RetryableLinkPreviewException) {
+                    false
+                }
+
+            private fun validateDestination(
+                url: URL,
+                resolveDns: Boolean,
             ): Boolean {
                 if (!url.protocol.equals("https", ignoreCase = true)) return false
                 val host =
@@ -380,21 +512,34 @@ class LinkPreviewRepositoryImpl
                         .removeSuffix("]")
                         .trimEnd('.')
                 if (host.isEmpty()) return false
-                ipLiteralOrNull(host)?.let { return !isDisallowedAddress(it) }
-                if (!resolveDns) return true
-                return try {
-                    InetAddress.getAllByName(host).none(::isDisallowedAddress)
-                } catch (_: Exception) {
-                    // Unresolvable hosts cannot be classified, so they are not connected to either.
-                    false
+                if (looksLikeIpLiteral(host)) {
+                    return ipLiteralOrNull(host)?.let { !isDisallowedAddress(it) } ?: false
                 }
+                if (!resolveDns) return true
+                val addresses =
+                    try {
+                        InetAddress.getAllByName(host)
+                    } catch (_: Exception) {
+                        throw RetryableLinkPreviewException("dns")
+                    }
+                return addresses.none(::isDisallowedAddress)
             }
 
-            /** Literal-only parse — [InetAddress.getByName] never queries DNS for address literals. */
-            private fun ipLiteralOrNull(host: String): InetAddress? {
-                val looksLikeLiteral = host.contains(':') || IPV4_LITERAL.matches(host)
-                if (!looksLikeLiteral) return null
-                return runCatching { InetAddress.getByName(host) }.getOrNull()
+            /** Literal-only parse — [InetAddress.getByName] never queries DNS for detected address syntax. */
+            private fun ipLiteralOrNull(host: String): InetAddress? = if (looksLikeIpLiteral(host)) runCatching { InetAddress.getByName(host) }.getOrNull() else null
+
+            private fun looksLikeIpLiteral(host: String): Boolean {
+                if (host.contains(':') || IPV4_LITERAL.matches(host) || host.all(Char::isDigit)) return true
+                val parts = host.split('.')
+                return parts.size <= 4 &&
+                    parts.all { part ->
+                        part.isNotEmpty() &&
+                            (
+                                part.all(Char::isDigit) ||
+                                    part.startsWith("0x", ignoreCase = true) && part.drop(2).isNotEmpty() &&
+                                    part.drop(2).all { it.isDigit() || it.lowercaseChar() in 'a'..'f' }
+                            )
+                    }
             }
 
             internal fun isDisallowedAddress(address: InetAddress): Boolean =
@@ -404,18 +549,14 @@ class LinkPreviewRepositoryImpl
                     (address is Inet6Address && (address.address[0].toInt() and 0xFE) == 0xFC)
 
             internal fun responseKind(contentType: String?): LinkPreviewKind? {
-                val mediaType =
-                    contentType
-                        ?.substringBefore(';')
-                        ?.trim()
-                        ?.lowercase()
-                        .orEmpty()
+                val mediaType = mediaType(contentType)
                 return when {
-                    mediaType == "text/html" -> LinkPreviewKind.WEB
+                    mediaType == "text/html" || mediaType == "application/xhtml+xml" -> LinkPreviewKind.WEB
 
                     mediaType.startsWith("text/") -> LinkPreviewKind.TEXT
 
                     mediaType == "application/json" || mediaType == "application/xml" ||
+                        mediaType in TEXT_APPLICATION_TYPES ||
                         (mediaType.startsWith("application/") && (mediaType.endsWith("+json") || mediaType.endsWith("+xml"))) -> LinkPreviewKind.TEXT
 
                     mediaType.startsWith("video/") -> LinkPreviewKind.VIDEO
@@ -426,6 +567,60 @@ class LinkPreviewRepositoryImpl
                 }
             }
 
+            private fun responseKind(
+                contentType: String?,
+                url: String,
+                decoded: String,
+            ): LinkPreviewKind? {
+                val mediaType = mediaType(contentType)
+                val generic = mediaType in GENERIC_MEDIA_TYPES
+                if (!generic) return responseKind(contentType)
+                if (looksLikeHtml(decoded.take(HTML_SNIFF_MAX_BYTES))) return LinkPreviewKind.WEB
+                if (hasTextExtension(url) || isProbablyText(decoded.take(TEXT_MAX_BYTES))) return LinkPreviewKind.TEXT
+                return if (mediaType.isBlank()) null else LinkPreviewKind.FILE
+            }
+
+            private fun mediaType(contentType: String?): String =
+                contentType
+                    ?.substringBefore(';')
+                    ?.trim()
+                    ?.lowercase()
+                    .orEmpty()
+
+            private fun isGenericContentType(contentType: String?): Boolean = mediaType(contentType) in GENERIC_MEDIA_TYPES
+
+            internal fun hasTextExtension(url: String): Boolean =
+                runCatching {
+                    val name = URL(url).path.substringAfterLast('/').lowercase()
+                    name.removePrefix(".") in TEXT_EXTENSIONS || name.substringAfterLast('.', "") in TEXT_EXTENSIONS
+                }.getOrDefault(false)
+
+            private fun looksLikeHtml(prefix: String): Boolean {
+                val normalized = prefix.trimStart('\uFEFF', ' ', '\t', '\r', '\n').lowercase()
+                return normalized.startsWith("<!doctype html") || normalized.startsWith("<html") ||
+                    normalized.startsWith("<?xml") && "<html" in normalized ||
+                    normalized.startsWith("<head") || normalized.startsWith("<meta") || normalized.startsWith("<title")
+            }
+
+            internal fun isProbablyText(text: String): Boolean {
+                if (text.isEmpty() || '\u0000' in text || '\uFFFD' in text) return false
+                var printable = 0
+                var total = 0
+                var index = 0
+                while (index < text.length && total < 4_096) {
+                    val codePoint = text.codePointAt(index)
+                    index += Character.charCount(codePoint)
+                    total++
+                    val type = Character.getType(codePoint)
+                    if (codePoint == '\n'.code || codePoint == '\r'.code || codePoint == '\t'.code ||
+                        (type != Character.CONTROL.toInt() && type != Character.FORMAT.toInt())
+                    ) {
+                        printable++
+                    }
+                }
+                return total > 0 && printable * 5 >= total * 4
+            }
+
             internal fun charsetFromContentType(contentType: String?): Charset {
                 val value =
                     Regex("(?:^|;)\\s*charset\\s*=\\s*(?:\\\"([^\\\"]*)\\\"|([^;\\s]*))", RegexOption.IGNORE_CASE)
@@ -434,6 +629,54 @@ class LinkPreviewRepositoryImpl
                 return runCatching { value?.takeIf(String::isNotBlank)?.let(Charset::forName) ?: Charsets.UTF_8 }
                     .getOrDefault(Charsets.UTF_8)
             }
+
+            internal fun decodeBody(
+                bytes: ByteArray,
+                contentType: String?,
+            ): String {
+                val (charset, offset) =
+                    when {
+                        bytes.size >= 3 && bytes[0] == 0xEF.toByte() && bytes[1] == 0xBB.toByte() && bytes[2] == 0xBF.toByte() -> {
+                            Charsets.UTF_8 to 3
+                        }
+
+                        bytes.size >= 2 && bytes[0] == 0xFE.toByte() && bytes[1] == 0xFF.toByte() -> {
+                            Charsets.UTF_16BE to 2
+                        }
+
+                        bytes.size >= 2 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xFE.toByte() -> {
+                            Charsets.UTF_16LE to 2
+                        }
+
+                        else -> {
+                            val prefix = bytes.take(HTML_SNIFF_MAX_BYTES).toByteArray().toString(Charsets.ISO_8859_1)
+                            val declared = charsetNameFromContentType(contentType)
+                            val xml = charsetNameFromXmlDeclaration(prefix)
+                            val meta = LinkPreviewHtmlScanner.scan(prefix).charset
+                            sequenceOf(declared, xml, meta)
+                                .filterNotNull()
+                                .mapNotNull { runCatching { Charset.forName(it) }.getOrNull() }
+                                .firstOrNull()
+                                .orEmptyCharset() to 0
+                        }
+                    }
+                return String(bytes, offset, bytes.size - offset, charset)
+            }
+
+            private fun Charset?.orEmptyCharset(): Charset = this ?: Charsets.UTF_8
+
+            private fun charsetNameFromContentType(contentType: String?): String? =
+                Regex("(?:^|;)\\s*charset\\s*=\\s*(?:\\\"([^\\\"]*)\\\"|([^;\\s]*))", RegexOption.IGNORE_CASE)
+                    .find(contentType.orEmpty())
+                    ?.let { it.groupValues[1].ifEmpty { it.groupValues[2] } }
+                    ?.takeIf(String::isNotBlank)
+
+            private fun charsetNameFromXmlDeclaration(prefix: String): String? =
+                Regex("""<\?xml\s+[^>]*?encoding\s*=\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+                    .find(prefix)
+                    ?.groupValues
+                    ?.getOrNull(1)
+                    ?.takeIf(String::isNotBlank)
 
             internal fun sanitizeText(text: String): String? {
                 val normalized = text.replace("\r\n", "\n").replace('\r', '\n')
@@ -461,13 +704,19 @@ class LinkPreviewRepositoryImpl
                         .split('/')
                         .lastOrNull { it.isNotBlank() }
                         ?.let { runCatching { URLDecoder.decode(it.replace("+", "%2B"), "UTF-8") }.getOrDefault(it) }
-                return segment?.takeIf(String::isNotBlank) ?: parsed.host
+                return segment
+                    ?.let(::sanitizeText)
+                    ?.replace(WIKIPEDIA_WHITESPACE, " ")
+                    ?.trim()
+                    ?.takeIf(String::isNotEmpty)
+                    ?: parsed.host
             }
 
             internal fun parseTextPreview(
                 url: String,
                 text: String,
             ): LinkPreview? {
+                if (!isProbablyText(text)) return null
                 val body = sanitizeText(text) ?: return null
                 val host = URL(url).host
                 return LinkPreview(url, textTitle(url), body, null, host, LinkPreviewKind.TEXT)
@@ -549,17 +798,15 @@ class LinkPreviewRepositoryImpl
 
             private fun isHttpUrl(value: String): Boolean =
                 runCatching {
-                    val protocol = URL(value).protocol
-                    protocol == "http" || protocol == "https"
+                    val parsed = URL(value)
+                    val host =
+                        parsed.host
+                            .removePrefix("[")
+                            .removeSuffix("]")
+                            .trimEnd('.')
+                    (parsed.protocol == "http" || parsed.protocol == "https") && !isRestrictedMetadataHost(host)
                 }.getOrDefault(false)
 
-            // <meta property="og:*" content="..."> in either attribute order, single or double quotes.
-            private val OG_TITLE = ogRegex("og:title")
-            private val OG_DESCRIPTION = ogRegex("og:description")
-            private val OG_IMAGE = ogRegex("og:image")
-            private val OG_SITE_NAME = ogRegex("og:site_name")
-            private val OG_TYPE = ogRegex("og:type")
-            private val OG_VIDEO = ogRegex("og:video")
             private val POPULAR_VIDEO_HOSTS =
                 setOf(
                     "youtube.com",
@@ -571,34 +818,7 @@ class LinkPreviewRepositoryImpl
                     "tiktok.com",
                 )
 
-            // [^<]* instead of a DOT_MATCHES_ALL lazy span: the old form backtracked quadratically on
-            // attacker HTML; a title's visible text cannot contain '<' anyway.
-            private val TITLE_TAG = Regex("<title[^>]*>([^<]*)</title>", RegexOption.IGNORE_CASE)
-
-            private fun ogRegex(property: String): Regex {
-                val p = Regex.escape(property)
-                // content-before-property and property-before-content variants.
-                val pattern =
-                    "<meta[^>]*?property\\s*=\\s*[\"']$p[\"'][^>]*?content\\s*=\\s*[\"'](.*?)[\"'][^>]*?>" +
-                        "|<meta[^>]*?content\\s*=\\s*[\"'](.*?)[\"'][^>]*?property\\s*=\\s*[\"']$p[\"'][^>]*?>"
-                return Regex(pattern, RegexOption.IGNORE_CASE)
-            }
-
-            private fun Regex.firstGroup(html: String): String? {
-                val m = find(html) ?: return null
-                return (
-                    m.groupValues.getOrNull(1)?.takeIf { it.isNotEmpty() }
-                        ?: m.groupValues.getOrNull(2)?.takeIf { it.isNotEmpty() }
-                )
-                    // Same sanitizer as the TEXT and Wikipedia paths: strips CONTROL/FORMAT code
-                    // points (e.g. U+202E spoofing) and caps the retained length.
-                    ?.let(::decodeEntities)
-                    ?.let(::sanitizeText)
-                    ?.trim()
-                    ?.takeIf { it.isNotEmpty() }
-            }
-
-            private val HTML_ENTITY = Regex("&(?:#(?:[xX][0-9a-fA-F]+|[0-9]+)|[a-z]+);")
+            private val HTML_ENTITY = Regex("&(?:#(?:[xX][0-9a-fA-F]+|[0-9]+)|[a-zA-Z]+);")
             private val NAMED_ENTITIES =
                 mapOf(
                     "amp" to "&",
@@ -620,7 +840,7 @@ class LinkPreviewRepositoryImpl
                 HTML_ENTITY.replace(s) { match ->
                     val ref = match.value.substring(1, match.value.lastIndex)
                     if (!ref.startsWith('#')) {
-                        NAMED_ENTITIES[ref] ?: match.value
+                        NAMED_ENTITIES[ref.lowercase()] ?: match.value
                     } else {
                         val number = ref.drop(1)
                         val codePoint =
@@ -642,56 +862,84 @@ class LinkPreviewRepositoryImpl
                     POPULAR_VIDEO_HOSTS.any { root -> host == root || host.endsWith(".$root") }
                 }.getOrDefault(false)
 
-            /** The region OG metadata may live in: up to the first `</head>` capped at 64 KB. */
-            internal fun headRegion(html: String): String {
-                val headEnd = html.indexOf("</head", ignoreCase = true).let { if (it < 0) html.length else it }
-                return html.take(minOf(headEnd, HEAD_SCAN_MAX_CHARS))
-            }
+            private fun cleanMetadata(value: String?): String? =
+                value
+                    ?.let(::decodeEntities)
+                    ?.let(::sanitizeText)
+                    ?.replace(WIKIPEDIA_WHITESPACE, " ")
+                    ?.trim()
+                    ?.takeIf(String::isNotEmpty)
 
-            /** Pure OG/title extractor — unit-tested directly against fixture HTML. */
+            private fun safeMetadataImageUrl(
+                baseUrl: String,
+                value: String?,
+            ): String? =
+                runCatching {
+                    val resolved = URL(URL(baseUrl), value ?: return null)
+                    if (resolved.protocol != "http" && resolved.protocol != "https") return null
+                    val host =
+                        resolved.host
+                            .removePrefix("[")
+                            .removeSuffix("]")
+                            .trimEnd('.')
+                    if (isRestrictedMetadataHost(host)) {
+                        return null
+                    }
+                    resolved.toString()
+                }.getOrNull()
+
+            private fun isRestrictedMetadataHost(host: String): Boolean =
+                host.isEmpty() || host.equals("localhost", ignoreCase = true) || host.endsWith(".localhost", ignoreCase = true) ||
+                    looksLikeIpLiteral(host) && ipLiteralOrNull(host)?.let(::isDisallowedAddress) != false
+
+            /** Bounded, linear head metadata extraction. Successful HTML always gets a safe fallback card. */
             fun parseOgTags(
                 url: String,
                 html: String,
             ): LinkPreview? {
-                val head = headRegion(html)
+                val fetched = runCatching { URL(url) }.getOrNull() ?: return null
+                val metadata = LinkPreviewHtmlScanner.scan(html.take(HTML_MAX_BYTES))
+
+                fun metas(name: String): Sequence<String> =
+                    metadata.values[name]
+                        .orEmpty()
+                        .asSequence()
+                        .mapNotNull(::cleanMetadata)
+
+                fun meta(name: String): String? = metas(name).firstOrNull()
                 val title =
-                    OG_TITLE.firstGroup(head)
-                        ?: TITLE_TAG
-                            .find(head)
-                            ?.groupValues
-                            ?.getOrNull(1)
-                            ?.let(::decodeEntities)
-                            ?.let(::sanitizeText)
-                            ?.trim()
-                            ?.takeIf { it.isNotEmpty() }
-                val description = OG_DESCRIPTION.firstGroup(head)
-                // Same scheme guard as the Wikipedia thumbnail: the OG image reaches the image
-                // stack, so file://, content:// and javascript: sources must never be serviced.
-                val image = OG_IMAGE.firstGroup(head)?.takeIf(::isHttpUrl)
-                val declaredSiteName = OG_SITE_NAME.firstGroup(head)
+                    meta("og:title")
+                        ?: meta("twitter:title")
+                        ?: cleanMetadata(metadata.title)
+                        ?: textTitle(url)
+                val description =
+                    meta("og:description")
+                        ?: meta("twitter:description")
+                        ?: meta("description")
+                val image =
+                    sequenceOf("og:image:secure_url", "og:image", "twitter:image", "twitter:image:src")
+                        .flatMap(::metas)
+                        .mapNotNull { candidate -> safeMetadataImageUrl(url, candidate) }
+                        .firstOrNull()
                 val video =
                     isPopularVideoUrl(url) ||
-                        OG_TYPE.firstGroup(head)?.startsWith("video", ignoreCase = true) == true ||
-                        OG_VIDEO.firstGroup(head) != null
-                // Nothing extractable → treat as no preview (negative-cacheable).
-                if (title == null && description == null && image == null && declaredSiteName == null && !video) {
-                    return null
-                }
-                // og:site_name is self-declared, so a hostile page could brand itself as any trusted
-                // site. Provenance is the host the transport actually fetched from (post-redirect).
-                val host = runCatching { URL(url).host }.getOrNull()
+                        meta("og:type")?.startsWith("video", ignoreCase = true) == true ||
+                        meta("og:video") != null ||
+                        meta("twitter:player") != null ||
+                        meta("twitter:card")?.startsWith("player", ignoreCase = true) == true
                 return LinkPreview(
                     url = url,
-                    title = title ?: host.takeIf { video },
+                    title = title,
                     description = description,
                     imageUrl = image,
-                    siteName = host,
+                    siteName = fetched.host,
                     kind = if (video) LinkPreviewKind.VIDEO else LinkPreviewKind.WEB,
                 )
             }
         }
 
         private class Holder(
-            val value: LinkPreview?,
+            val value: LinkPreview? = null,
+            val failure: RetryableLinkPreviewException? = null,
         )
     }

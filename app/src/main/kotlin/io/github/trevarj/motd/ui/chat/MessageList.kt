@@ -48,6 +48,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -113,6 +114,7 @@ import io.github.trevarj.motd.ui.components.LocalAutomaticRemoteMedia
 import io.github.trevarj.motd.ui.components.LocalInlineMediaConsent
 import io.github.trevarj.motd.ui.components.LocalLinkMediaConsent
 import io.github.trevarj.motd.ui.components.LocalLinkPreviewAwaiting
+import io.github.trevarj.motd.ui.components.LocalLinkPreviewFailed
 import io.github.trevarj.motd.ui.components.MessageBubble
 import io.github.trevarj.motd.ui.components.NewMessagesDivider
 import io.github.trevarj.motd.ui.components.ReactionChip
@@ -1327,11 +1329,13 @@ internal fun summarizeSystemRun(run: List<MessageEntity>): String {
     return counts.entries.joinToString(" · ") { (label, n) -> "$n $label" }
 }
 
-/** Completion-tracked link-preview state so a failed/null fetch stops the loading skeleton. */
+/** Completion-tracked link-preview state; transient failures remain explicitly retryable. */
 private sealed interface PreviewState {
     data object Awaiting : PreviewState
 
     data object Loading : PreviewState
+
+    data object Failed : PreviewState
 
     data class Done(
         val preview: LinkPreview?,
@@ -1532,16 +1536,17 @@ private fun MessageRow(
             messageText.isBlank() && reply == null
 
     // A cached completion is rendered synchronously even while scrolling. A cache miss waits for
-    // idle, then joins the repository's process-owned single-flight fetch. Null is a completed
-    // negative result, not a loading state, so recycling does not restart a skeleton indefinitely.
+    // idle, then joins the repository's process-owned single-flight fetch. Null is a definitive
+    // negative result, while transient failures render an explicit tap-to-retry state.
     // Keyed on networkId like the audio HEAD effect: the network identity selects the proxy route,
-    // and a fetch made before it is known resolves negatively (fail closed) until it appears.
+    // and a fetch made before it is known fails closed without poisoning a later retry.
     val initialCachedPreview = linkUrl?.let { cachedPreview(it, networkId) }
     var previewState by remember(msg.id, linkUrl, networkId) {
         mutableStateOf<PreviewState>(initialCachedPreview?.let { PreviewState.Done(it.preview) } ?: PreviewState.Awaiting)
     }
+    var previewRetryToken by remember(msg.id, linkUrl, networkId) { mutableIntStateOf(0) }
     val latestCachedPreview by rememberUpdatedState(cachedPreview)
-    LaunchedEffect(msg.id, linkUrl, networkId, linkMediaAllowed) {
+    LaunchedEffect(msg.id, linkUrl, networkId, linkMediaAllowed, previewRetryToken) {
         val url = linkUrl ?: return@LaunchedEffect
         if (previewState !is PreviewState.Awaiting || !linkMediaAllowed) return@LaunchedEffect
         latestCachedPreview(url, networkId)?.let {
@@ -1562,14 +1567,16 @@ private fun MessageRow(
                 previewState = PreviewState.Awaiting
                 throw cancelled
             } catch (_: Exception) {
-                null
+                previewState = PreviewState.Failed
+                return@LaunchedEffect
             }
         previewState = PreviewState.Done(preview)
     }
     val preview = (previewState as? PreviewState.Done)?.preview?.withImageGate(showImages)
     val previewLoading = linkUrl != null && previewState is PreviewState.Loading
     val previewAwaiting = linkUrl != null && previewState is PreviewState.Awaiting
-    val previewResolved = linkUrl != null && previewState is PreviewState.Done
+    val previewFailed = linkUrl != null && previewState is PreviewState.Failed
+    val previewResolved = linkUrl != null && (previewState is PreviewState.Done || previewFailed)
     val formattedTime = remember(msg.serverTime, formatTime) { formatTime(msg.serverTime) }
     // Ordinary rows stay on the hot scrolling path without even resolving the accessibility
     // string; mention state is immutable for a stored row and only the sparse highlighted rows
@@ -1605,6 +1612,7 @@ private fun MessageRow(
                     LocalInlineMediaConsent provides inlineMediaConsent,
                     LocalLinkMediaConsent provides linkMediaConsent,
                     LocalLinkPreviewAwaiting provides previewAwaiting,
+                    LocalLinkPreviewFailed provides previewFailed,
                 ) {
                     MessageBubble(
                         // Per-message handle for long-press/react/reply/deep-jump. Prefer the stable
@@ -1644,10 +1652,19 @@ private fun MessageRow(
                         onReact = { emoji -> onReact(msg, emoji) },
                         onImageClick = onImageClick,
                         onLinkPreviewClick = {
-                            if (previewState is PreviewState.Awaiting) {
-                                grantLinkMediaConsent()
-                            } else {
-                                linkUrl?.let(onOpenLink)
+                            when (previewState) {
+                                PreviewState.Awaiting -> {
+                                    grantLinkMediaConsent()
+                                }
+
+                                PreviewState.Failed -> {
+                                    previewState = PreviewState.Awaiting
+                                    previewRetryToken++
+                                }
+
+                                else -> {
+                                    linkUrl?.let(onOpenLink)
+                                }
                             }
                         },
                         // Only non-self senders open the nick sheet.

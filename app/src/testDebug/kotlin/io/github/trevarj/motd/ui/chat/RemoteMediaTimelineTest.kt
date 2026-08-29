@@ -15,6 +15,7 @@ import io.github.trevarj.motd.data.db.MessageEntity
 import io.github.trevarj.motd.data.db.MessageKind
 import io.github.trevarj.motd.data.repo.CachedLinkPreview
 import io.github.trevarj.motd.data.repo.LinkPreview
+import io.github.trevarj.motd.data.repo.RetryableLinkPreviewException
 import io.github.trevarj.motd.ui.components.LocalAutomaticRemoteMedia
 import io.github.trevarj.motd.ui.theme.MotdTheme
 import kotlinx.coroutines.CompletableDeferred
@@ -106,6 +107,25 @@ class RemoteMediaTimelineTest {
         assertEquals(0, loads)
         compose.onNodeWithTag("link_preview_unavailable", useUnmergedTree = true).performClick()
         compose.runOnIdle { assertEquals(1, opens) }
+    }
+
+    @Test
+    fun failedPreviewTapRetriesAndThenRendersSuccess() {
+        var loads = 0
+        render(
+            automatic = true,
+            loadPreview = { _, _ ->
+                loads++
+                if (loads == 1) throw RetryableLinkPreviewException("http_status", 503)
+                PREVIEW
+            },
+        )
+
+        awaitTag("link_preview_failed")
+        assertEquals(1, loads)
+        compose.onNodeWithTag("link_preview_failed", useUnmergedTree = true).performClick()
+        compose.waitUntil(10_000) { loads == 2 }
+        compose.onNodeWithText("Example preview").assertIsDisplayed()
     }
 
     @Test

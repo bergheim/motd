@@ -6,6 +6,7 @@ import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
 import io.github.trevarj.motd.data.prefs.ContentPreviewConfig
 import io.github.trevarj.motd.data.prefs.ContentPreviewPrefs
+import io.github.trevarj.motd.diagnostics.RecordingDiagnostics
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
@@ -56,9 +57,10 @@ class LinkPreviewRoutingTest {
     }
 
     @Test
-    fun proxy_error_fails_closed_without_a_direct_fallback() =
+    fun proxy_error_fails_closed_then_recovers_without_a_cached_failure() =
         runTest {
-            val resolver = MediaRouteResolver { id -> route(id, proxyError = "local SOCKS unavailable") }
+            var proxyDown = true
+            val resolver = MediaRouteResolver { id -> route(id, proxyError = "local SOCKS unavailable".takeIf { proxyDown }) }
             val repository =
                 LinkPreviewRepositoryImpl(
                     prefs,
@@ -67,10 +69,15 @@ class LinkPreviewRoutingTest {
                     this,
                     StandardTestDispatcher(testScheduler),
                 )
-            server.enqueue(htmlResponse("Leak"))
+            val url = server.url("/page").toString()
+            server.enqueue(htmlResponse("Recovered"))
 
-            assertNull(repository.preview(server.url("/page").toString(), NETWORK_ID))
+            assertRetryable { repository.preview(url, NETWORK_ID) }
+            assertNull(repository.cachedPreview(url, NETWORK_ID))
             assertEquals(0, server.requestCount)
+            proxyDown = false
+            assertEquals("Recovered", repository.preview(url, NETWORK_ID)?.title)
+            assertEquals(1, server.requestCount)
         }
 
     @Test
@@ -86,7 +93,7 @@ class LinkPreviewRoutingTest {
                 )
             server.enqueue(htmlResponse("Leak"))
 
-            assertNull(repository.preview(server.url("/page").toString(), null))
+            assertRetryable { repository.preview(server.url("/page").toString(), null) }
             assertEquals(0, server.requestCount)
         }
 
@@ -103,7 +110,7 @@ class LinkPreviewRoutingTest {
                 )
             server.enqueue(htmlResponse("Leak"))
 
-            assertNull(repository.preview(server.url("/page").toString(), NETWORK_ID))
+            assertRetryable { repository.preview(server.url("/page").toString(), NETWORK_ID) }
             assertEquals(0, server.requestCount)
         }
 
@@ -164,7 +171,7 @@ class LinkPreviewRoutingTest {
             val url = server.url("/page").toString()
             server.enqueue(htmlResponse("Healthy"))
 
-            assertNull(repository.preview(url, 1L))
+            assertRetryable { repository.preview(url, 1L) }
             assertEquals(0, server.requestCount)
             assertEquals("Healthy", repository.preview(url, 2L)?.title)
             assertEquals(1, server.requestCount)
@@ -184,10 +191,9 @@ class LinkPreviewRoutingTest {
             )
 
             val startedAt = System.nanoTime()
-            val preview = repository.preview(server.url("/slow").toString(), NETWORK_ID)
+            assertRetryable { repository.preview(server.url("/slow").toString(), NETWORK_ID) }
             val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000
 
-            assertNull(preview)
             assertTrue("deadline did not bound the fetch (took ${elapsedMs}ms)", elapsedMs < 10_000)
         }
 
@@ -212,6 +218,40 @@ class LinkPreviewRoutingTest {
             assertEquals("Two", second.await()?.title)
             assertNotNull(server.takeRequest(2, TimeUnit.SECONDS))
         }
+
+    @Test
+    fun diagnosticsContainOnlyClassificationStatusAndFingerprint() =
+        runTest {
+            val diagnostics = RecordingDiagnostics()
+            val repository =
+                LinkPreviewRepositoryImpl(
+                    prefs,
+                    { id -> route(id) },
+                    relaxed,
+                    this,
+                    StandardTestDispatcher(testScheduler),
+                    diagnostics,
+                )
+            val url = server.url("/private/path?token=secret").toString()
+            server.enqueue(MockResponse().setResponseCode(503))
+
+            assertRetryable { repository.preview(url, NETWORK_ID) }
+            val event = diagnostics.events.single()
+            assertEquals("http_status", event.fields["failure_class"])
+            assertEquals(503, event.fields["http_status"])
+            assertEquals(diagnostics.fingerprint(url), event.fields["url_fingerprint"])
+            assertTrue(event.fields.values.none { it?.toString()?.contains("private") == true })
+            assertTrue(event.fields.values.none { it?.toString()?.contains("secret") == true })
+        }
+
+    private suspend fun assertRetryable(block: suspend () -> Unit) {
+        try {
+            block()
+            throw AssertionError("expected RetryableLinkPreviewException")
+        } catch (_: RetryableLinkPreviewException) {
+            // Expected.
+        }
+    }
 
     private fun htmlResponse(title: String): MockResponse =
         MockResponse()

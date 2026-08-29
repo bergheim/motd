@@ -57,6 +57,18 @@ class LinkPreviewCardUiTest {
         compose.onNodeWithTag("link_preview_loading").assertIsDisplayed().assertHasNoClickAction()
     }
 
+    @Test fun failedPreviewExposesStableRetryAction() {
+        var retries = 0
+        compose.setContent {
+            MotdTheme(dynamicColor = false) {
+                LinkPreviewCard(preview = null, loading = false, failed = true, onClick = { retries++ })
+            }
+        }
+
+        compose.onNodeWithTag("link_preview_failed").assertIsDisplayed().performClick()
+        assertEquals(1, retries)
+    }
+
     @Test fun wikipedia_preview_exposes_its_article_extract() {
         compose.setContent {
             MotdTheme(dynamicColor = false) {

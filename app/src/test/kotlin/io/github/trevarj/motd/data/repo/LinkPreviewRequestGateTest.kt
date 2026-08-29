@@ -89,7 +89,7 @@ class LinkPreviewRequestGateTest {
         }
 
     @Test
-    fun completed_file_result_is_distinct_from_a_cache_miss() =
+    fun completedGenericTextResultIsDistinctFromCacheMiss() =
         runTest {
             val repository = repository(this, StandardTestDispatcher(testScheduler))
             val url = server.url("/binary").toString()
@@ -100,9 +100,9 @@ class LinkPreviewRequestGateTest {
             )
 
             assertNull(repository.cachedPreview(url, NETWORK_ID))
-            assertEquals(LinkPreviewKind.FILE, repository.preview(url, NETWORK_ID)?.kind)
+            assertEquals(LinkPreviewKind.TEXT, repository.preview(url, NETWORK_ID)?.kind)
             assertNotNull(repository.cachedPreview(url, NETWORK_ID))
-            assertEquals(LinkPreviewKind.FILE, repository.cachedPreview(url, NETWORK_ID)?.preview?.kind)
+            assertEquals(LinkPreviewKind.TEXT, repository.cachedPreview(url, NETWORK_ID)?.preview?.kind)
             assertEquals(1, server.requestCount)
         }
 
@@ -152,6 +152,206 @@ class LinkPreviewRequestGateTest {
             assertEquals(2_048, repository.preview(server.url("/large").toString(), NETWORK_ID)?.description?.length)
             assertNull(repository.preview(server.url("/beyond-cap").toString(), NETWORK_ID))
         }
+
+    @Test
+    fun retryableHttpFailureIsNotCached_andNextRequestSucceeds() =
+        runTest {
+            val repository = repository(this, StandardTestDispatcher(testScheduler))
+            val url = server.url("/retry").toString()
+            server.enqueue(MockResponse().setResponseCode(503))
+            server.enqueue(htmlResponse("Recovered"))
+
+            assertRetryable { repository.preview(url, NETWORK_ID) }
+            assertNull(repository.cachedPreview(url, NETWORK_ID))
+            assertEquals("Recovered", repository.preview(url, NETWORK_ID)?.title)
+            assertEquals(2, server.requestCount)
+        }
+
+    @Test
+    fun temporaryForbiddenIsNotCached_andCanRecover() =
+        runTest {
+            val repository = repository(this, StandardTestDispatcher(testScheduler))
+            val url = server.url("/forbidden").toString()
+            server.enqueue(MockResponse().setResponseCode(403))
+            server.enqueue(htmlResponse("Allowed later"))
+
+            assertRetryable { repository.preview(url, NETWORK_ID) }
+            assertNull(repository.cachedPreview(url, NETWORK_ID))
+            assertEquals("Allowed later", repository.preview(url, NETWORK_ID)?.title)
+            assertEquals(2, server.requestCount)
+        }
+
+    @Test
+    fun permanentNotFoundIsNegativeCached() =
+        runTest {
+            val repository = repository(this, StandardTestDispatcher(testScheduler))
+            val url = server.url("/missing").toString()
+            server.enqueue(MockResponse().setResponseCode(404))
+
+            assertNull(repository.preview(url, NETWORK_ID))
+            assertNotNull(repository.cachedPreview(url, NETWORK_ID))
+            assertNull(repository.preview(url, NETWORK_ID))
+            assertEquals(1, server.requestCount)
+        }
+
+    @Test
+    fun htmlMimeSniffing_xhtmlAndFullHeadScanWork() =
+        runTest {
+            val repository = repository(this, StandardTestDispatcher(testScheduler))
+            server.enqueue(
+                MockResponse()
+                    .setHeader("Content-Type", "application/xhtml+xml")
+                    .setBody("<html><head><title>XHTML</title></head><body/></html>"),
+            )
+            server.enqueue(
+                MockResponse()
+                    .setHeader("Content-Type", "application/octet-stream")
+                    .setBody("<html><head>" + " ".repeat(80 * 1024) + "<meta property=og:title content=Late></head></html>"),
+            )
+            server.enqueue(
+                MockResponse()
+                    .setBody("<!doctype html><html><head><title>Sniffed</title></head></html>"),
+            )
+            server.enqueue(
+                MockResponse()
+                    .setHeader("Content-Type", "text/html")
+                    .setBody("<html><head>" + " ".repeat(513 * 1024) + "<title>Beyond cap</title></head></html>"),
+            )
+
+            assertEquals("XHTML", repository.preview(server.url("/xhtml").toString(), NETWORK_ID)?.title)
+            assertEquals("Late", repository.preview(server.url("/generic").toString(), NETWORK_ID)?.title)
+            assertEquals("Sniffed", repository.preview(server.url("/absent").toString(), NETWORK_ID)?.title)
+            assertEquals("beyond", repository.preview(server.url("/beyond").toString(), NETWORK_ID)?.title)
+        }
+
+    @Test
+    fun githubStyleResponseProducesRepositoryPreview() =
+        runTest {
+            val repository = repository(this, StandardTestDispatcher(testScheduler))
+            server.enqueue(
+                MockResponse()
+                    .setHeader("Content-Type", "text/html; charset=utf-8")
+                    .setBody(fixture("github-head.html")),
+            )
+
+            val preview = repository.preview(server.url("/owner/project").toString(), NETWORK_ID)
+
+            assertEquals("owner/project", preview?.title)
+            assertEquals("GitHub repository", preview?.description)
+            assertEquals(LinkPreviewKind.WEB, preview?.kind)
+        }
+
+    @Test
+    fun bodyDecodingHonorsBomHeaderAndEarlyMetaCharset() =
+        runTest {
+            val repository = repository(this, StandardTestDispatcher(testScheduler))
+            val utf16 = "<html><head><title>Snowman ☃</title></head></html>".toByteArray(Charsets.UTF_16LE)
+            server.enqueue(
+                MockResponse()
+                    .setHeader("Content-Type", "text/html")
+                    .setBody(Buffer().write(byteArrayOf(0xFF.toByte(), 0xFE.toByte())).write(utf16)),
+            )
+            server.enqueue(
+                MockResponse()
+                    .setHeader("Content-Type", "text/html")
+                    .setBody(
+                        Buffer().write(
+                            "<meta charset=ISO-8859-1><title>café</title>"
+                                .toByteArray(Charsets.ISO_8859_1),
+                        ),
+                    ),
+            )
+            server.enqueue(
+                MockResponse()
+                    .setHeader("Content-Type", "application/xhtml+xml")
+                    .setBody(
+                        Buffer().write(
+                            "<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><html><head><title>café XHTML</title></head></html>"
+                                .toByteArray(Charsets.ISO_8859_1),
+                        ),
+                    ),
+            )
+
+            assertEquals("Snowman ☃", repository.preview(server.url("/bom").toString(), NETWORK_ID)?.title)
+            assertEquals("café", repository.preview(server.url("/meta-charset").toString(), NETWORK_ID)?.title)
+            assertEquals("café XHTML", repository.preview(server.url("/xml-charset").toString(), NETWORK_ID)?.title)
+        }
+
+    @Test
+    fun unsupportedContentEncodingIsDefinitive_andIdentityIsRequested() =
+        runTest {
+            val repository = repository(this, StandardTestDispatcher(testScheduler))
+            val url = server.url("/encoded").toString()
+            server.enqueue(
+                MockResponse()
+                    .setHeader("Content-Type", "text/html")
+                    .setHeader("Content-Encoding", "gzip")
+                    .setBody("not-decompressed"),
+            )
+
+            assertNull(repository.preview(url, NETWORK_ID))
+            assertNotNull(repository.cachedPreview(url, NETWORK_ID))
+            assertEquals("identity", server.takeRequest().getHeader("Accept-Encoding"))
+        }
+
+    @Test
+    fun txtJsonAndProgrammingExtensionsRenderBoundedTextPreviews() =
+        runTest {
+            val repository = repository(this, StandardTestDispatcher(testScheduler))
+            server.enqueue(MockResponse().setBody("plain notes"))
+            server.enqueue(MockResponse().setHeader("Content-Type", "application/octet-stream").setBody("{\"ok\":true}"))
+            server.enqueue(MockResponse().setHeader("Content-Type", "application/octet-stream").setBody("fun main() = println(1)"))
+
+            val text = repository.preview(server.url("/notes.txt").toString(), NETWORK_ID)
+            val json = repository.preview(server.url("/data.json").toString(), NETWORK_ID)
+            val kotlin = repository.preview(server.url("/Main.kt").toString(), NETWORK_ID)
+
+            assertEquals(LinkPreviewKind.TEXT, text?.kind)
+            assertEquals("plain notes", text?.description)
+            assertEquals(LinkPreviewKind.TEXT, json?.kind)
+            assertEquals("{\"ok\":true}", json?.description)
+            assertEquals(LinkPreviewKind.TEXT, kotlin?.kind)
+        }
+
+    @Test
+    fun codeMimeAndExtensionRenderText_butBinaryDoesNot() =
+        runTest {
+            val repository = repository(this, StandardTestDispatcher(testScheduler))
+            server.enqueue(MockResponse().setHeader("Content-Type", "application/javascript").setBody("const ok = true;"))
+            server.enqueue(MockResponse().setHeader("Content-Type", "application/octet-stream").setBody("fun main() = println(1)"))
+            server.enqueue(
+                MockResponse()
+                    .setHeader("Content-Type", "application/octet-stream")
+                    .setBody(Buffer().write(byteArrayOf(0, 1, 2, 3))),
+            )
+            server.enqueue(
+                MockResponse()
+                    .setHeader("Content-Type", "text/plain")
+                    .setBody(Buffer().write(byteArrayOf(0xC3.toByte(), 0x28))),
+            )
+
+            assertEquals(LinkPreviewKind.TEXT, repository.preview(server.url("/app.js").toString(), NETWORK_ID)?.kind)
+            assertEquals(LinkPreviewKind.TEXT, repository.preview(server.url("/Main.kt").toString(), NETWORK_ID)?.kind)
+            assertEquals(LinkPreviewKind.FILE, repository.preview(server.url("/blob.bin").toString(), NETWORK_ID)?.kind)
+            assertNull(repository.preview(server.url("/invalid.txt").toString(), NETWORK_ID))
+            assertEquals("identity", server.takeRequest().getHeader("Accept-Encoding"))
+        }
+
+    private suspend fun assertRetryable(block: suspend () -> Unit) {
+        try {
+            block()
+            throw AssertionError("expected RetryableLinkPreviewException")
+        } catch (_: RetryableLinkPreviewException) {
+            // Expected.
+        }
+    }
+
+    private fun fixture(name: String): String = checkNotNull(javaClass.getResource("/link-preview/$name")).readText()
+
+    private fun htmlResponse(title: String): MockResponse =
+        MockResponse()
+            .setHeader("Content-Type", "text/html")
+            .setBody("<meta property=\"og:title\" content=\"$title\">")
 
     // A resolver whose routes are direct (no proxy, no proxy error) for any requested network.
     private val directResolver =

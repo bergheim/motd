@@ -67,6 +67,9 @@ data class NetworkMediaRoute(
 /** Narrow seam over [NetworkMediaRouteProvider] so HTTP repositories are testable without Room. */
 fun interface MediaRouteResolver {
     suspend fun routeForNetwork(networkId: Long): NetworkMediaRoute?
+
+    /** Preview traffic may use the direct device route only after the user's explicit privacy opt-in. */
+    suspend fun routeForPreview(networkId: Long): NetworkMediaRoute? = routeForNetwork(networkId)
 }
 
 /**
@@ -89,7 +92,14 @@ class NetworkMediaRouteProvider
         private val contentPreviewPrefs: ContentPreviewPrefs,
     ) : MediaRouteResolver,
         DirectMediaPolicy {
-        override suspend fun routeForNetwork(networkId: Long): NetworkMediaRoute? {
+        override suspend fun routeForNetwork(networkId: Long): NetworkMediaRoute? = resolveRoute(networkId, directWhenOptedIn = false)
+
+        override suspend fun routeForPreview(networkId: Long): NetworkMediaRoute? = resolveRoute(networkId, directWhenOptedIn = true)
+
+        private suspend fun resolveRoute(
+            networkId: Long,
+            directWhenOptedIn: Boolean,
+        ): NetworkMediaRoute? {
             val row = db.networkDao().byId(networkId) ?: return null
             val endpoint =
                 if (row.role == NetworkRole.BOUNCER_CHILD) {
@@ -97,17 +107,30 @@ class NetworkMediaRouteProvider
                 } else {
                     row
                 }
+            val authorizationHeader =
+                endpoint.basicAuthorizationHeader(
+                    childNetworkSelector = row.bouncerNetId.takeIf { row.role == NetworkRole.BOUNCER_CHILD },
+                )
+            val endpointPinnedSha256 = certTrustStore.pinnedFor(endpoint.host, endpoint.port)
+            val obfuscated = endpoint.obfsMode != null && endpoint.obfsMode != ObfsMode.NONE
+            if (directWhenOptedIn && obfuscated && contentPreviewPrefs.config.first().directMediaOnProxiedNetworks) {
+                return NetworkMediaRoute(
+                    networkId = networkId,
+                    endpoint = endpoint,
+                    proxy = null,
+                    proxyError = null,
+                    authorizationHeader = authorizationHeader,
+                    endpointPinnedSha256 = endpointPinnedSha256,
+                )
+            }
             val resolved = resolveTransportProxy(endpoint, localSocksProvider, ownerKey = "media-$networkId")
             return NetworkMediaRoute(
                 networkId = networkId,
                 endpoint = endpoint,
                 proxy = resolved.proxy,
                 proxyError = resolved.error,
-                authorizationHeader =
-                    endpoint.basicAuthorizationHeader(
-                        childNetworkSelector = row.bouncerNetId.takeIf { row.role == NetworkRole.BOUNCER_CHILD },
-                    ),
-                endpointPinnedSha256 = certTrustStore.pinnedFor(endpoint.host, endpoint.port),
+                authorizationHeader = authorizationHeader,
+                endpointPinnedSha256 = endpointPinnedSha256,
                 release = resolved.release,
             )
         }

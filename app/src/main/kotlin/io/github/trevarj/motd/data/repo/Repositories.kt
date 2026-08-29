@@ -328,7 +328,7 @@ data class CachedLinkPreview(
 /**
  * Declared web or text link preview; in-memory LRU + shared fetch on miss. [networkId] identifies
  * the network the link was seen on so the fetch traverses that network's proxy route; an unknown
- * (null) identity fails closed and fetches nothing.
+ * (null) identity fails closed with a retryable internal failure and fetches nothing.
  */
 interface LinkPreviewRepository {
     /** Returns a completed positive or negative result without starting work. */
