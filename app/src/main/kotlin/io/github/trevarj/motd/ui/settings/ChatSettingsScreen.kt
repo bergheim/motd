@@ -96,6 +96,8 @@ fun ChatSettingsScreen(
         onVisibleReplyPrefix = viewModel::setVisibleReplyPrefix,
         onShowImages = viewModel::setShowImages,
         onShowLinkPreviews = viewModel::setShowLinkPreviews,
+        onAutoLoadOnUnmetered = viewModel::setAutoLoadOnUnmetered,
+        onAutoLoadOnMetered = viewModel::setAutoLoadOnMetered,
         onDirectMediaOnProxiedNetworks = viewModel::setDirectMediaOnProxiedNetworks,
         onShowSharedAvatars = viewModel::setShowSharedAvatars,
         onVoiceEncryptionDefault = viewModel::setVoiceEncryptionDefault,
@@ -128,6 +130,8 @@ fun ChatSettingsContent(
     onVisibleReplyPrefix: (Boolean) -> Unit,
     onShowImages: (Boolean) -> Unit,
     onShowLinkPreviews: (Boolean) -> Unit,
+    onAutoLoadOnUnmetered: (Boolean) -> Unit,
+    onAutoLoadOnMetered: (Boolean) -> Unit,
     onDirectMediaOnProxiedNetworks: (Boolean) -> Unit,
     onShowSharedAvatars: (Boolean) -> Unit,
     onVoiceEncryptionDefault: (Boolean) -> Unit,
@@ -157,6 +161,22 @@ fun ChatSettingsContent(
                 checked = contentPreviews.showImages,
                 onCheckedChange = onShowImages,
                 switchTag = "settings_switch_show_images",
+            )
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            SwitchRow(
+                title = stringResource(R.string.settings_auto_media_unmetered),
+                subtitle = stringResource(R.string.settings_auto_media_unmetered_desc),
+                checked = contentPreviews.autoLoadOnUnmetered,
+                onCheckedChange = onAutoLoadOnUnmetered,
+                switchTag = "settings_switch_auto_media_unmetered",
+            )
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            SwitchRow(
+                title = stringResource(R.string.settings_auto_media_metered),
+                subtitle = stringResource(R.string.settings_auto_media_metered_desc),
+                checked = contentPreviews.autoLoadOnMetered,
+                onCheckedChange = onAutoLoadOnMetered,
+                switchTag = "settings_switch_auto_media_metered",
             )
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             SwitchRow(
@@ -502,6 +522,8 @@ private fun ChatSettingsPreview() {
             onVisibleReplyPrefix = {},
             onShowImages = {},
             onShowLinkPreviews = {},
+            onAutoLoadOnUnmetered = {},
+            onAutoLoadOnMetered = {},
             onDirectMediaOnProxiedNetworks = {},
             onShowSharedAvatars = {},
             onVoiceEncryptionDefault = {},

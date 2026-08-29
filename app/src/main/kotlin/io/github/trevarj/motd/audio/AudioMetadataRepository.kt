@@ -33,7 +33,7 @@ interface AudioMetadataRepository {
 class AudioMetadataRepositoryImpl
     @Inject
     constructor(
-        private val routeProvider: NetworkMediaRouteProvider,
+        private val routeProvider: MediaRouteResolver,
         @ApplicationScope private val applicationScope: CoroutineScope,
         @IoDispatcher private val ioDispatcher: CoroutineDispatcher,
     ) : AudioMetadataRepository {
@@ -84,14 +84,11 @@ class AudioMetadataRepositoryImpl
         ): AudioMetadata? =
             withContext(ioDispatcher) {
                 if (!isExtensionlessHttpsAudioCandidate(url)) return@withContext null
-                val route = networkId?.let { routeProvider.routeForNetwork(it) }
-                route?.proxyError?.let { return@withContext null }
-                route.useOrNull { mediaRoute ->
+                val route = networkId?.let { routeProvider.routeForNetwork(it) } ?: return@withContext null
+                route.useAndClose { mediaRoute ->
+                    if (mediaRoute.proxyError != null) return@useAndClose null
                     val connection =
-                        (
-                            mediaRoute?.open(url)
-                                ?: java.net.URL(url).openConnection() as HttpURLConnection
-                        ).apply {
+                        mediaRoute.open(url).apply {
                             requestMethod = "HEAD"
                             instanceFollowRedirects = true
                             useCaches = false
@@ -103,14 +100,14 @@ class AudioMetadataRepositoryImpl
                     try {
                         currentCoroutineContext().ensureActive()
                         val code = connection.responseCode
-                        if (code !in 200..299) return@useOrNull null
+                        if (code !in 200..299) return@useAndClose null
                         val mime =
                             connection
                                 .getHeaderField("Content-Type")
                                 ?.substringBefore(';')
                                 ?.trim()
                                 ?.lowercase()
-                        if (mime?.startsWith("audio/") != true) return@useOrNull null
+                        if (mime?.startsWith("audio/") != true) return@useAndClose null
                         AudioMetadata(
                             url = connection.url.toString(),
                             mimeType = mime,
@@ -125,11 +122,11 @@ class AudioMetadataRepositoryImpl
                 }
             }
 
-        private inline fun <T> NetworkMediaRoute?.useOrNull(block: (NetworkMediaRoute?) -> T): T =
+        private inline fun <T> NetworkMediaRoute.useAndClose(block: (NetworkMediaRoute) -> T): T =
             try {
                 block(this)
             } finally {
-                this?.close()
+                close()
             }
 
         private class Holder(

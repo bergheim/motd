@@ -131,6 +131,25 @@ class NetworkMediaRouteProvider
         }
     }
 
+/** Known IRC networks whose app-global media requests may use the device connection directly. */
+internal fun directMediaAllowedNetworkIds(
+    networks: List<NetworkEntity>,
+    directMediaOnProxiedNetworks: Boolean,
+): Set<Long> {
+    val byId = networks.associateBy(NetworkEntity::id)
+    return networks
+        .asSequence()
+        .filter { row ->
+            val endpoint =
+                if (row.role == NetworkRole.BOUNCER_CHILD) {
+                    row.parentId?.let(byId::get) ?: row
+                } else {
+                    row
+                }
+            endpoint.obfsMode == null || endpoint.obfsMode == ObfsMode.NONE || directMediaOnProxiedNetworks
+        }.mapTo(mutableSetOf(), NetworkEntity::id)
+}
+
 internal fun NetworkEntity.basicAuthorizationHeader(childNetworkSelector: String? = null): String? {
     if (!saslMechanism.equals("PLAIN", ignoreCase = true)) return null
     val baseUser =

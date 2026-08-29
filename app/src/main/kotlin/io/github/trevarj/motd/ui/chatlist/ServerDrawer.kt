@@ -59,6 +59,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -72,14 +73,18 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import io.github.trevarj.motd.R
 import io.github.trevarj.motd.avatar.expandAvatarUrl
 import io.github.trevarj.motd.data.db.NetworkRole
 import io.github.trevarj.motd.data.prefs.AvatarStyle
 import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.ui.components.IrcNetworkBadge
+import io.github.trevarj.motd.ui.components.LocalAutomaticRemoteMedia
+import io.github.trevarj.motd.ui.components.LocalDirectRemoteMediaAllowed
 import io.github.trevarj.motd.ui.components.MentionBadge
 import io.github.trevarj.motd.ui.components.UnreadBadge
+import io.github.trevarj.motd.ui.components.remoteMediaData
 import io.github.trevarj.motd.ui.theme.LocalAvatarStyle
 import io.github.trevarj.motd.ui.theme.LocalMotdSemanticColors
 import io.github.trevarj.motd.ui.theme.MotdMotion
@@ -466,6 +471,16 @@ private fun DrawerNetworkItem(
                             },
                         )
                     val iconUrl = expandAvatarUrl(row.iconUrl.orEmpty(), 64)
+                    val context = LocalContext.current
+                    val automaticRemoteMedia = LocalAutomaticRemoteMedia.current
+                    val directRemoteMediaAllowed = LocalDirectRemoteMediaAllowed.current(row.networkId)
+                    val iconRequest =
+                        remember(context, iconUrl, automaticRemoteMedia, directRemoteMediaAllowed) {
+                            ImageRequest
+                                .Builder(context)
+                                .remoteMediaData(iconUrl, automaticRemoteMedia && directRemoteMediaAllowed)
+                                .build()
+                        }
                     var iconLoaded by remember(iconUrl) { mutableStateOf(false) }
                     Box(
                         modifier =
@@ -490,7 +505,7 @@ private fun DrawerNetworkItem(
                         }
                         iconUrl?.let { url ->
                             AsyncImage(
-                                model = url,
+                                model = iconRequest,
                                 contentDescription = null,
                                 contentScale = ContentScale.Crop,
                                 onLoading = { iconLoaded = false },

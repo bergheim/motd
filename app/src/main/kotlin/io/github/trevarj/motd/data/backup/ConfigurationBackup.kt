@@ -528,6 +528,8 @@ class ConfigurationBackupRepositoryImpl
             settings.contentPreviews?.let {
                 contentPreviewPrefs.setShowImages(it.showImages)
                 contentPreviewPrefs.setShowLinkPreviews(it.showLinkPreviews)
+                contentPreviewPrefs.setAutoLoadOnUnmetered(it.autoLoadOnUnmetered)
+                contentPreviewPrefs.setAutoLoadOnMetered(it.autoLoadOnMetered)
                 contentPreviewPrefs.setDirectMediaOnProxiedNetworks(it.directMediaOnProxiedNetworks)
             }
             settings.replies?.let { replyPrefs.setVisibleChannelPrefix(it.visibleChannelPrefix) }

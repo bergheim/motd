@@ -27,29 +27,42 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import io.github.trevarj.motd.R
 import io.github.trevarj.motd.data.repo.LinkPreview
 import io.github.trevarj.motd.data.repo.LinkPreviewKind
 import io.github.trevarj.motd.ui.theme.MotdMotion
 import io.github.trevarj.motd.ui.theme.MotdTheme
 
+internal val LocalLinkPreviewAwaiting = staticCompositionLocalOf { false }
+
 internal fun shouldShowLinkPreview(
     preview: LinkPreview?,
     loading: Boolean,
     resolved: Boolean,
-): Boolean = preview != null || loading || resolved
+    awaiting: Boolean = false,
+): Boolean = preview != null || loading || resolved || awaiting
 
 internal sealed interface LinkPreviewRenderState {
+    data object Awaiting : LinkPreviewRenderState
+
     data object Loading : LinkPreviewRenderState
 
     data class Available(
@@ -60,6 +73,7 @@ internal sealed interface LinkPreviewRenderState {
 }
 
 internal enum class LinkPreviewTransitionKey {
+    AWAITING,
     LOADING,
     AVAILABLE,
     UNAVAILABLE,
@@ -68,16 +82,19 @@ internal enum class LinkPreviewTransitionKey {
 internal fun resolveLinkPreviewRenderState(
     preview: LinkPreview?,
     loading: Boolean,
+    awaiting: Boolean = false,
 ): LinkPreviewRenderState =
     when {
         loading -> LinkPreviewRenderState.Loading
         preview != null -> LinkPreviewRenderState.Available(preview)
+        awaiting -> LinkPreviewRenderState.Awaiting
         else -> LinkPreviewRenderState.Unavailable
     }
 
 internal val LinkPreviewRenderState.transitionKey: LinkPreviewTransitionKey
     get() =
         when (this) {
+            LinkPreviewRenderState.Awaiting -> LinkPreviewTransitionKey.AWAITING
             LinkPreviewRenderState.Loading -> LinkPreviewTransitionKey.LOADING
             is LinkPreviewRenderState.Available -> LinkPreviewTransitionKey.AVAILABLE
             LinkPreviewRenderState.Unavailable -> LinkPreviewTransitionKey.UNAVAILABLE
@@ -93,8 +110,9 @@ fun LinkPreviewCard(
     loading: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    awaiting: Boolean = false,
 ) {
-    val renderState = resolveLinkPreviewRenderState(preview, loading)
+    val renderState = resolveLinkPreviewRenderState(preview, loading, awaiting || LocalLinkPreviewAwaiting.current)
     AnimatedContent(
         targetState = renderState,
         modifier = modifier.fillMaxWidth(),
@@ -112,6 +130,7 @@ fun LinkPreviewCard(
         label = "link_preview_content",
     ) { state ->
         when (state) {
+            LinkPreviewRenderState.Awaiting -> LinkPreviewAwaiting(onClick)
             LinkPreviewRenderState.Loading -> LinkPreviewSkeleton()
             is LinkPreviewRenderState.Available -> LinkPreviewContent(state.preview, onClick)
             LinkPreviewRenderState.Unavailable -> LinkPreviewUnavailable(onClick)
@@ -192,6 +211,16 @@ private fun LinkPreviewLeading(preview: LinkPreview) {
         }
 
         preview.imageUrl != null -> {
+            val context = LocalContext.current
+            val automatic = LocalAutomaticRemoteMedia.current
+            val consent = LocalLinkMediaConsent.current.granted
+            val request =
+                remember(context, preview.imageUrl, automatic, consent) {
+                    ImageRequest
+                        .Builder(context)
+                        .remoteMediaData(preview.imageUrl, automatic || consent)
+                        .build()
+                }
             Box(
                 contentAlignment = androidx.compose.ui.Alignment.Center,
                 modifier =
@@ -201,7 +230,7 @@ private fun LinkPreviewLeading(preview: LinkPreview) {
                         .testTag(if (preview.kind == LinkPreviewKind.VIDEO) "link_preview_video_thumbnail" else "link_preview_thumbnail"),
             ) {
                 AsyncImage(
-                    model = preview.imageUrl,
+                    model = request,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
@@ -231,7 +260,29 @@ private fun LinkPreviewLeading(preview: LinkPreview) {
 }
 
 @Composable
+private fun LinkPreviewAwaiting(onClick: () -> Unit) {
+    val description = stringResource(R.string.chat_link_preview_awaiting)
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = LINK_PREVIEW_MIN_HEIGHT)
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                .clickable(onClickLabel = stringResource(R.string.chat_link_preview_download), onClick = onClick)
+                .semantics { contentDescription = description }
+                .testTag("link_preview_awaiting")
+                .padding(8.dp),
+    ) {
+        Icon(Icons.Outlined.Link, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.width(10.dp))
+        Text(description, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
 private fun LinkPreviewSkeleton() {
+    val description = stringResource(R.string.chat_link_preview_loading)
     // A per-card infinite transition continuously invalidated the chat while previews were in
     // flight. A static skeleton communicates the same loading state without consuming scroll-frame
     // work; the card is replaced as soon as the preview resolves.
@@ -243,6 +294,8 @@ private fun LinkPreviewSkeleton() {
                 .heightIn(min = LINK_PREVIEW_MIN_HEIGHT)
                 .clip(RoundedCornerShape(12.dp))
                 .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                .semantics { contentDescription = description }
+                .testTag("link_preview_loading")
                 .padding(8.dp),
     ) {
         androidx.compose.foundation.layout.Box(
@@ -261,6 +314,7 @@ private fun LinkPreviewSkeleton() {
 
 @Composable
 private fun LinkPreviewUnavailable(onClick: () -> Unit) {
+    val description = stringResource(R.string.chat_link_preview_unavailable)
     Row(
         modifier =
             Modifier
@@ -268,7 +322,9 @@ private fun LinkPreviewUnavailable(onClick: () -> Unit) {
                 .heightIn(min = LINK_PREVIEW_MIN_HEIGHT)
                 .clip(RoundedCornerShape(12.dp))
                 .background(MaterialTheme.colorScheme.surfaceContainerHighest)
-                .clickable { onClick() }
+                .clickable(onClickLabel = description, onClick = onClick)
+                .semantics { contentDescription = description }
+                .testTag("link_preview_unavailable")
                 .padding(8.dp),
     ) {
         Icon(
@@ -277,6 +333,8 @@ private fun LinkPreviewUnavailable(onClick: () -> Unit) {
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(24.dp),
         )
+        Spacer(Modifier.width(10.dp))
+        Text(description, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

@@ -354,6 +354,16 @@ class SettingsViewModel
                 contentPreviewPrefs.setShowLinkPreviews(show)
             }
 
+        fun setAutoLoadOnUnmetered(enabled: Boolean) =
+            viewModelScope.launch {
+                contentPreviewPrefs.setAutoLoadOnUnmetered(enabled)
+            }
+
+        fun setAutoLoadOnMetered(enabled: Boolean) =
+            viewModelScope.launch {
+                contentPreviewPrefs.setAutoLoadOnMetered(enabled)
+            }
+
         fun setDirectMediaOnProxiedNetworks(enabled: Boolean) =
             viewModelScope.launch {
                 contentPreviewPrefs.setDirectMediaOnProxiedNetworks(enabled)

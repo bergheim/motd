@@ -161,6 +161,10 @@ class DirectMediaPolicyTest {
             state.value = state.value.copy(showLinkPreviews = show)
         }
 
+        override suspend fun setAutoLoadOnUnmetered(enabled: Boolean) = Unit
+
+        override suspend fun setAutoLoadOnMetered(enabled: Boolean) = Unit
+
         override suspend fun setDirectMediaOnProxiedNetworks(enabled: Boolean) {
             state.value = state.value.copy(directMediaOnProxiedNetworks = enabled)
         }

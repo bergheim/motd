@@ -43,6 +43,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -50,6 +51,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameMillis
@@ -107,9 +109,14 @@ import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 import io.github.trevarj.motd.ui.components.AudioAttachmentPlayers
 import io.github.trevarj.motd.ui.components.DaySeparator
 import io.github.trevarj.motd.ui.components.HistoryGapDivider
+import io.github.trevarj.motd.ui.components.LocalAutomaticRemoteMedia
+import io.github.trevarj.motd.ui.components.LocalInlineMediaConsent
+import io.github.trevarj.motd.ui.components.LocalLinkMediaConsent
+import io.github.trevarj.motd.ui.components.LocalLinkPreviewAwaiting
 import io.github.trevarj.motd.ui.components.MessageBubble
 import io.github.trevarj.motd.ui.components.NewMessagesDivider
 import io.github.trevarj.motd.ui.components.ReactionChip
+import io.github.trevarj.motd.ui.components.RemoteMediaConsent
 import io.github.trevarj.motd.ui.components.ReplyPreviewData
 import io.github.trevarj.motd.ui.components.SwipeToReplyContainer
 import io.github.trevarj.motd.ui.components.SystemEventPill
@@ -1322,7 +1329,7 @@ internal fun summarizeSystemRun(run: List<MessageEntity>): String {
 
 /** Completion-tracked link-preview state so a failed/null fetch stops the loading skeleton. */
 private sealed interface PreviewState {
-    data object Idle : PreviewState
+    data object Awaiting : PreviewState
 
     data object Loading : PreviewState
 
@@ -1463,6 +1470,20 @@ private fun MessageRow(
     val imageUrl = visibleUrls?.imageUrl
     val linkUrl = visibleUrls?.linkUrl
     val immediateAudio = visibleUrls?.audio.orEmpty()
+    val automaticRemoteMedia = LocalAutomaticRemoteMedia.current
+    var manualInlineMediaConsent by rememberSaveable(msg.id, imageUrl) { mutableStateOf(false) }
+    var manualLinkMediaConsent by rememberSaveable(msg.id, linkUrl) { mutableStateOf(false) }
+    val linkMediaAllowed = automaticRemoteMedia || manualLinkMediaConsent
+    val grantInlineMediaConsent = { manualInlineMediaConsent = true }
+    val grantLinkMediaConsent = { manualLinkMediaConsent = true }
+    val inlineMediaConsent =
+        remember(manualInlineMediaConsent) {
+            RemoteMediaConsent(manualInlineMediaConsent, grantInlineMediaConsent)
+        }
+    val linkMediaConsent =
+        remember(manualLinkMediaConsent) {
+            RemoteMediaConsent(manualLinkMediaConsent, grantLinkMediaConsent)
+        }
     val headCandidates =
         remember(msg.id, msg.text, showLinkPreviews) {
             if (showLinkPreviews) extensionlessAudioCandidates(msg.text) else emptyList()
@@ -1474,21 +1495,25 @@ private fun MessageRow(
     }
     val latestCachedAudioMetadata by rememberUpdatedState(cachedAudioMetadata)
     val latestLoadAudioMetadata by rememberUpdatedState(loadAudioMetadata)
-    LaunchedEffect(msg.id, headCandidates, networkId) {
-        if (headCandidates.isEmpty()) return@LaunchedEffect
+    LaunchedEffect(msg.id, headCandidates, networkId, linkMediaAllowed) {
+        if (headCandidates.isEmpty() || !linkMediaAllowed) return@LaunchedEffect
         snapshotFlow { latestCanStartNewRichContentWork }.first { it }
         val resolved =
             headCandidates
                 .take(8)
                 .mapNotNull { url ->
-                    latestCachedAudioMetadata(url)?.metadata
-                        ?: try {
+                    val cached = latestCachedAudioMetadata(url)
+                    if (cached != null) {
+                        cached.metadata
+                    } else {
+                        try {
                             latestLoadAudioMetadata(url, networkId)
                         } catch (cancelled: CancellationException) {
                             throw cancelled
                         } catch (_: Exception) {
                             null
                         }
+                    }
                 }.map { it.toAttachment() }
         headAudio = resolved
     }
@@ -1513,18 +1538,18 @@ private fun MessageRow(
     // and a fetch made before it is known resolves negatively (fail closed) until it appears.
     val initialCachedPreview = linkUrl?.let { cachedPreview(it, networkId) }
     var previewState by remember(msg.id, linkUrl, networkId) {
-        mutableStateOf<PreviewState>(initialCachedPreview?.let { PreviewState.Done(it.preview) } ?: PreviewState.Idle)
+        mutableStateOf<PreviewState>(initialCachedPreview?.let { PreviewState.Done(it.preview) } ?: PreviewState.Awaiting)
     }
     val latestCachedPreview by rememberUpdatedState(cachedPreview)
-    LaunchedEffect(msg.id, linkUrl, networkId) {
+    LaunchedEffect(msg.id, linkUrl, networkId, linkMediaAllowed) {
         val url = linkUrl ?: return@LaunchedEffect
-        if (previewState !is PreviewState.Idle) return@LaunchedEffect
+        if (previewState !is PreviewState.Awaiting || !linkMediaAllowed) return@LaunchedEffect
         latestCachedPreview(url, networkId)?.let {
             previewState = PreviewState.Done(it.preview)
             return@LaunchedEffect
         }
         snapshotFlow { latestCanStartNewRichContentWork }.first { it }
-        if (previewState !is PreviewState.Idle) return@LaunchedEffect
+        if (previewState !is PreviewState.Awaiting) return@LaunchedEffect
         latestCachedPreview(url, networkId)?.let {
             previewState = PreviewState.Done(it.preview)
             return@LaunchedEffect
@@ -1534,6 +1559,7 @@ private fun MessageRow(
             try {
                 loadPreview(url, networkId)
             } catch (cancelled: CancellationException) {
+                previewState = PreviewState.Awaiting
                 throw cancelled
             } catch (_: Exception) {
                 null
@@ -1542,6 +1568,7 @@ private fun MessageRow(
     }
     val preview = (previewState as? PreviewState.Done)?.preview?.withImageGate(showImages)
     val previewLoading = linkUrl != null && previewState is PreviewState.Loading
+    val previewAwaiting = linkUrl != null && previewState is PreviewState.Awaiting
     val previewResolved = linkUrl != null && previewState is PreviewState.Done
     val formattedTime = remember(msg.serverTime, formatTime) { formatTime(msg.serverTime) }
     // Ordinary rows stay on the hot scrolling path without even resolving the accessibility
@@ -1574,47 +1601,59 @@ private fun MessageRow(
     ) { rowModifier ->
         Column(modifier = rowModifier.fillMaxWidth()) {
             val messageBubble: @Composable () -> Unit = {
-                MessageBubble(
-                    // Per-message handle for long-press/react/reply/deep-jump. Prefer the stable
-                    // server msgid; pending rows fall back to the local id for E2E selection.
-                    modifier = Modifier,
-                    sender = displaySender,
-                    networkId = networkId,
-                    senderAccount = msg.senderAccount,
-                    text = renderedMessageText,
-                    timeMs = msg.serverTime,
-                    formattedTime = formattedTime,
-                    isSelf = msg.isSelf,
-                    isBot = msg.isBot,
-                    kind = msg.kind,
-                    showSender = showSender,
-                    hasMention = msg.hasMention,
-                    senderIsFriend = senderIsFriend,
-                    failed = msg.failed,
-                    // Subtle "sending…" state before the 30s failure flip.
-                    pending = msg.pendingLabel != null,
-                    reply = reply,
-                    onReplyClick =
-                        if (resolvedReply != null) {
-                            msg.replyToMsgid?.let { parentMsgid -> { onReplyPreviewClick(parentMsgid) } }
-                        } else {
-                            null
+                CompositionLocalProvider(
+                    LocalInlineMediaConsent provides inlineMediaConsent,
+                    LocalLinkMediaConsent provides linkMediaConsent,
+                    LocalLinkPreviewAwaiting provides previewAwaiting,
+                ) {
+                    MessageBubble(
+                        // Per-message handle for long-press/react/reply/deep-jump. Prefer the stable
+                        // server msgid; pending rows fall back to the local id for E2E selection.
+                        modifier = Modifier,
+                        sender = displaySender,
+                        networkId = networkId,
+                        senderAccount = msg.senderAccount,
+                        text = renderedMessageText,
+                        timeMs = msg.serverTime,
+                        formattedTime = formattedTime,
+                        isSelf = msg.isSelf,
+                        isBot = msg.isBot,
+                        kind = msg.kind,
+                        showSender = showSender,
+                        hasMention = msg.hasMention,
+                        senderIsFriend = senderIsFriend,
+                        failed = msg.failed,
+                        // Subtle "sending…" state before the 30s failure flip.
+                        pending = msg.pendingLabel != null,
+                        reply = reply,
+                        onReplyClick =
+                            if (resolvedReply != null) {
+                                msg.replyToMsgid?.let { parentMsgid -> { onReplyPreviewClick(parentMsgid) } }
+                            } else {
+                                null
+                            },
+                        imageUrl = imageUrl,
+                        linkPreview = preview,
+                        linkPreviewLoading = previewLoading,
+                        linkPreviewResolved = previewResolved || previewAwaiting,
+                        reactions = reactions,
+                        knownNicks = knownNicks,
+                        identityRules = identityRules,
+                        onLongPress = { onLongPress(msg) },
+                        // Pass the entity, not just msgid: the VM handles pending reactions uniformly.
+                        onReact = { emoji -> onReact(msg, emoji) },
+                        onImageClick = onImageClick,
+                        onLinkPreviewClick = {
+                            if (previewState is PreviewState.Awaiting) {
+                                grantLinkMediaConsent()
+                            } else {
+                                linkUrl?.let(onOpenLink)
+                            }
                         },
-                    imageUrl = imageUrl,
-                    linkPreview = preview,
-                    linkPreviewLoading = previewLoading,
-                    linkPreviewResolved = previewResolved,
-                    reactions = reactions,
-                    knownNicks = knownNicks,
-                    identityRules = identityRules,
-                    onLongPress = { onLongPress(msg) },
-                    // Pass the entity, not just msgid: the VM handles pending reactions uniformly.
-                    onReact = { emoji -> onReact(msg, emoji) },
-                    onImageClick = onImageClick,
-                    onLinkPreviewClick = { linkUrl?.let(onOpenLink) },
-                    // Only non-self senders open the nick sheet.
-                    onSenderClick = if (msg.isSelf) null else ({ onSenderClick(msg.sender) }),
-                )
+                        // Only non-self senders open the nick sheet.
+                        onSenderClick = if (msg.isSelf) null else ({ onSenderClick(msg.sender) }),
+                    )
+                }
             }
             if (headCandidates.isNotEmpty()) {
                 // An extensionless URL may resolve into a standalone voice message after HEAD
@@ -1856,9 +1895,7 @@ fun ChatHistoryFooter(
     onRetry: () -> Unit,
 ) {
     when (state) {
-        ChatHistoryUiState.Hidden -> {
-            Unit
-        }
+        ChatHistoryUiState.Hidden -> {}
 
         ChatHistoryUiState.Loading -> {
             androidx.compose.foundation.layout.Box(

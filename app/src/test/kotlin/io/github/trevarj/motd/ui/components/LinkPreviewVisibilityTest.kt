@@ -14,6 +14,7 @@ class LinkPreviewVisibilityTest {
         assertTrue(shouldShowLinkPreview(preview = null, loading = true, resolved = false))
         assertTrue(shouldShowLinkPreview(preview = null, loading = false, resolved = true))
         assertFalse(shouldShowLinkPreview(preview = null, loading = false, resolved = false))
+        assertTrue(shouldShowLinkPreview(preview = null, loading = false, resolved = false, awaiting = true))
     }
 
     @Test
@@ -31,6 +32,14 @@ class LinkPreviewVisibilityTest {
                 loading = false,
                 resolved = true,
             ),
+        )
+    }
+
+    @Test
+    fun awaiting_state_is_explicit() {
+        assertSame(
+            LinkPreviewRenderState.Awaiting,
+            resolveLinkPreviewRenderState(preview = null, loading = false, awaiting = true),
         )
     }
 
@@ -56,6 +65,10 @@ class LinkPreviewVisibilityTest {
 
     @Test
     fun transitionKeys_distinguishPhasesButShareAvailableUpdates() {
+        assertEquals(
+            LinkPreviewTransitionKey.AWAITING,
+            LinkPreviewRenderState.Awaiting.transitionKey,
+        )
         assertEquals(
             LinkPreviewTransitionKey.LOADING,
             LinkPreviewRenderState.Loading.transitionKey,

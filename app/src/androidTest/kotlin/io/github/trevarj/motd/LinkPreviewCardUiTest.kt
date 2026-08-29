@@ -1,12 +1,15 @@
 package io.github.trevarj.motd
 
+import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
 import io.github.trevarj.motd.data.repo.LinkPreview
 import io.github.trevarj.motd.data.repo.LinkPreviewKind
 import io.github.trevarj.motd.ui.components.LinkPreviewCard
 import io.github.trevarj.motd.ui.theme.MotdTheme
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 
@@ -24,6 +27,34 @@ class LinkPreviewCardUiTest {
             }
         }
         compose.onNodeWithTag("link_preview_text_body", useUnmergedTree = true).assertIsDisplayed()
+    }
+
+    @Test fun awaiting_preview_fetches_once_on_tap() {
+        var requests = 0
+        compose.setContent {
+            MotdTheme(dynamicColor = false) {
+                LinkPreviewCard(
+                    preview = null,
+                    loading = false,
+                    awaiting = true,
+                    onClick = { requests++ },
+                )
+            }
+        }
+
+        compose.onNodeWithTag("link_preview_awaiting").performClick()
+        assertEquals(1, requests)
+    }
+
+    @Test fun loading_preview_is_not_clickable() {
+        compose.setContent {
+            MotdTheme(dynamicColor = false) {
+                LinkPreviewCard(preview = null, loading = true, onClick = {})
+            }
+        }
+
+        compose.onNodeWithTag("link_preview_awaiting").assertDoesNotExist()
+        compose.onNodeWithTag("link_preview_loading").assertIsDisplayed().assertHasNoClickAction()
     }
 
     @Test fun wikipedia_preview_exposes_its_article_extract() {

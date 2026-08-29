@@ -27,6 +27,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.compose.rememberNavController
 import dagger.hilt.android.AndroidEntryPoint
+import io.github.trevarj.motd.audio.directMediaAllowedNetworkIds
 import io.github.trevarj.motd.avatar.AvatarConfig
 import io.github.trevarj.motd.avatar.AvatarPrefs
 import io.github.trevarj.motd.avatar.AvatarRecord
@@ -52,8 +53,13 @@ import io.github.trevarj.motd.service.startForegroundSafely
 import io.github.trevarj.motd.ui.chat.PreloadChatWallpaperTile
 import io.github.trevarj.motd.ui.components.CertPromptViewModel
 import io.github.trevarj.motd.ui.components.CertTrustDialog
+import io.github.trevarj.motd.ui.components.LocalAutomaticRemoteMedia
+import io.github.trevarj.motd.ui.components.LocalDirectRemoteMediaAllowed
 import io.github.trevarj.motd.ui.components.LocalRemoteAvatars
 import io.github.trevarj.motd.ui.components.RemoteAvatarState
+import io.github.trevarj.motd.ui.components.RemoteMediaNetwork
+import io.github.trevarj.motd.ui.components.RemoteMediaNetworkMonitor
+import io.github.trevarj.motd.ui.components.automaticRemoteMediaAllowed
 import io.github.trevarj.motd.ui.nav.MotdNavGraph
 import io.github.trevarj.motd.ui.nav.NotificationTarget
 import io.github.trevarj.motd.ui.share.PendingShare
@@ -82,6 +88,8 @@ class MainActivity :
     @Inject lateinit var avatarStore: AvatarStore
 
     @Inject lateinit var contentPreviewPrefs: ContentPreviewPrefs
+
+    @Inject lateinit var remoteMediaNetworkMonitor: RemoteMediaNetworkMonitor
 
     @Inject lateinit var customFontStore: CustomFontStore
 
@@ -112,6 +120,16 @@ class MainActivity :
     // Validated external motd://invite payload. Empty means an invite URI was present but invalid,
     // so the destination can render a safe error instead of silently dropping the user's scan.
     private var pendingJoinInvite by mutableStateOf<String?>(null)
+
+    private val directMediaNetworkIds by lazy {
+        combine(db.networkDao().observeAll(), contentPreviewPrefs.config) { networks, config ->
+            directMediaAllowedNetworkIds(networks, config.directMediaOnProxiedNetworks)
+        }.stateIn(
+            scope = lifecycleScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = emptySet(),
+        )
+    }
 
     private val rootUiState by lazy {
         combine(
@@ -149,6 +167,17 @@ class MainActivity :
             // boundary so applying a palette never resets the user to the start destination.
             val navController = rememberNavController()
             val uiState by rootUiState.collectAsStateWithLifecycle()
+            val remoteMediaNetwork by
+                remoteMediaNetworkMonitor.network.collectAsStateWithLifecycle(
+                    initialValue = RemoteMediaNetwork.UNAVAILABLE,
+                )
+            val automaticRemoteMedia =
+                automaticRemoteMediaAllowed(remoteMediaNetwork, uiState.contentPreviews)
+            val allowedDirectMediaNetworkIds by directMediaNetworkIds.collectAsStateWithLifecycle()
+            val directRemoteMediaAllowed =
+                remember(allowedDirectMediaNetworkIds) {
+                    { networkId: Long? -> networkId != null && networkId in allowedDirectMediaNetworkIds }
+                }
             val settings = uiState.settings
             val appearance = uiState.appearance
             // Re-check the on-disk font whenever the imported name changes (a fresh import or a
@@ -182,6 +211,8 @@ class MainActivity :
                 bubbleCornerStyle = appearance.bubbleCornerStyle,
             ) {
                 CompositionLocalProvider(
+                    LocalAutomaticRemoteMedia provides automaticRemoteMedia,
+                    LocalDirectRemoteMediaAllowed provides directRemoteMediaAllowed,
                     LocalRemoteAvatars provides
                         RemoteAvatarState(
                             enabled = uiState.avatarConfig.showSharedAvatars && uiState.contentPreviews.showImages,
@@ -387,7 +418,13 @@ internal data class MainActivityUiState(
     val appearance: AppearanceConfig = AppearanceConfig(),
     val avatarConfig: AvatarConfig = AvatarConfig(),
     val avatarRecords: List<AvatarRecord> = emptyList(),
-    val contentPreviews: ContentPreviewConfig = ContentPreviewConfig(),
+    val contentPreviews: ContentPreviewConfig =
+        ContentPreviewConfig(
+            showImages = false,
+            showLinkPreviews = false,
+            autoLoadOnUnmetered = false,
+            autoLoadOnMetered = false,
+        ),
 )
 
 /** Collects the ConnectionManager's cert prompts and shows the dialog for the first pending one. */

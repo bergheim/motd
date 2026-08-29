@@ -250,6 +250,34 @@ class ConfigurationBackupRepositoryTest {
         }
 
     @Test
+    fun contentPreviewAutomaticLoadingRoundTripsAndOldBackupsDefaultOn() =
+        runTest {
+            val context = ApplicationProvider.getApplicationContext<Context>()
+            val prefs = ContentPreviewPrefsImpl(context)
+            val backup = repository(inMemoryDb())
+
+            prefs.setAutoLoadOnUnmetered(false)
+            prefs.setAutoLoadOnMetered(false)
+            val raw = backup.exportToString(mode = BackupExportMode.CREDENTIALS_EXCLUDED, nowEpochMillis = 1_000L)
+
+            prefs.setAutoLoadOnUnmetered(true)
+            prefs.setAutoLoadOnMetered(true)
+            backup.import(raw, importMode = BackupImportMode.MERGE)
+            assertFalse(prefs.config.first().autoLoadOnUnmetered)
+            assertFalse(prefs.config.first().autoLoadOnMetered)
+
+            val oldRaw =
+                raw
+                    .replace(Regex("""\s*\"autoLoadOnUnmetered\": false,"""), "")
+                    .replace(Regex("""\s*\"autoLoadOnMetered\": false,"""), "")
+            prefs.setAutoLoadOnUnmetered(false)
+            prefs.setAutoLoadOnMetered(false)
+            backup.import(oldRaw, importMode = BackupImportMode.MERGE)
+            assertTrue(prefs.config.first().autoLoadOnUnmetered)
+            assertTrue(prefs.config.first().autoLoadOnMetered)
+        }
+
+    @Test
     fun uploadCredentialsOnlyRoundTripInEncryptedCredentialBackups() =
         runTest {
             val context = ApplicationProvider.getApplicationContext<Context>()

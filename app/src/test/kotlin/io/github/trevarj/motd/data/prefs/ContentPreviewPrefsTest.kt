@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -36,14 +37,50 @@ class ContentPreviewPrefsTest {
                 prefs.config.first(),
             )
 
+            prefs.setAutoLoadOnUnmetered(false)
+            assertEquals(
+                ContentPreviewConfig(showImages = true, showLinkPreviews = false, autoLoadOnUnmetered = false),
+                prefs.config.first(),
+            )
+
+            prefs.setAutoLoadOnMetered(false)
+            assertEquals(
+                ContentPreviewConfig(
+                    showImages = true,
+                    showLinkPreviews = false,
+                    autoLoadOnUnmetered = false,
+                    autoLoadOnMetered = false,
+                ),
+                prefs.config.first(),
+            )
+
             prefs.setDirectMediaOnProxiedNetworks(true)
             assertEquals(
                 ContentPreviewConfig(
                     showImages = true,
                     showLinkPreviews = false,
+                    autoLoadOnUnmetered = false,
+                    autoLoadOnMetered = false,
                     directMediaOnProxiedNetworks = true,
                 ),
                 prefs.config.first(),
             )
         }
+
+    @Test
+    fun old_serialized_config_defaults_automatic_loading_on() {
+        val restored =
+            Json.decodeFromString<ContentPreviewConfig>(
+                """{"showImages":false,"showLinkPreviews":false,"directMediaOnProxiedNetworks":true}""",
+            )
+
+        assertEquals(
+            ContentPreviewConfig(
+                showImages = false,
+                showLinkPreviews = false,
+                directMediaOnProxiedNetworks = true,
+            ),
+            restored,
+        )
+    }
 }

@@ -16,6 +16,8 @@ import javax.inject.Singleton
 data class ContentPreviewConfig(
     val showImages: Boolean = true,
     val showLinkPreviews: Boolean = true,
+    val autoLoadOnUnmetered: Boolean = true,
+    val autoLoadOnMetered: Boolean = true,
     /**
      * Opt-in: on a network that uses a proxy or an embedded REALITY tunnel, fetch media previews
      * over the device's direct connection instead of withholding them. The per-network tunnel
@@ -32,12 +34,18 @@ interface ContentPreviewPrefs {
 
     suspend fun setShowLinkPreviews(show: Boolean)
 
+    suspend fun setAutoLoadOnUnmetered(enabled: Boolean)
+
+    suspend fun setAutoLoadOnMetered(enabled: Boolean)
+
     suspend fun setDirectMediaOnProxiedNetworks(enabled: Boolean)
 }
 
 private val Context.contentPreviewDataStore by preferencesDataStore("content_previews")
 private val SHOW_IMAGES = booleanPreferencesKey("show_images")
 private val SHOW_LINK_PREVIEWS = booleanPreferencesKey("show_link_previews")
+private val AUTO_LOAD_ON_UNMETERED = booleanPreferencesKey("auto_load_on_unmetered")
+private val AUTO_LOAD_ON_METERED = booleanPreferencesKey("auto_load_on_metered")
 private val DIRECT_MEDIA_ON_PROXIED_NETWORKS = booleanPreferencesKey("direct_media_on_proxied_networks")
 
 @Singleton
@@ -53,6 +61,8 @@ class ContentPreviewPrefsImpl
                 ContentPreviewConfig(
                     showImages = prefs[SHOW_IMAGES] ?: true,
                     showLinkPreviews = prefs[SHOW_LINK_PREVIEWS] ?: true,
+                    autoLoadOnUnmetered = prefs[AUTO_LOAD_ON_UNMETERED] ?: true,
+                    autoLoadOnMetered = prefs[AUTO_LOAD_ON_METERED] ?: true,
                     directMediaOnProxiedNetworks = prefs[DIRECT_MEDIA_ON_PROXIED_NETWORKS] ?: false,
                 )
             }
@@ -63,6 +73,14 @@ class ContentPreviewPrefsImpl
 
         override suspend fun setShowLinkPreviews(show: Boolean) {
             store.edit { it[SHOW_LINK_PREVIEWS] = show }
+        }
+
+        override suspend fun setAutoLoadOnUnmetered(enabled: Boolean) {
+            store.edit { it[AUTO_LOAD_ON_UNMETERED] = enabled }
+        }
+
+        override suspend fun setAutoLoadOnMetered(enabled: Boolean) {
+            store.edit { it[AUTO_LOAD_ON_METERED] = enabled }
         }
 
         override suspend fun setDirectMediaOnProxiedNetworks(enabled: Boolean) {

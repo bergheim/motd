@@ -9,6 +9,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.ReadOnlyComposable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -20,12 +21,14 @@ import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import io.github.trevarj.motd.avatar.AvatarRecord
 import io.github.trevarj.motd.avatar.avatarIdentity
 import io.github.trevarj.motd.avatar.canonicalAvatarNick
@@ -159,8 +162,18 @@ fun Avatar(
         )?.let { url ->
             // The deterministic local avatar stays underneath, so failed/cancelled loads fall
             // back without erasing valid metadata or flashing an empty avatar.
+            val context = LocalContext.current
+            val automaticRemoteMedia = LocalAutomaticRemoteMedia.current
+            val directRemoteMediaAllowed = LocalDirectRemoteMediaAllowed.current(networkId)
+            val request =
+                remember(context, url, automaticRemoteMedia, directRemoteMediaAllowed) {
+                    ImageRequest
+                        .Builder(context)
+                        .remoteMediaData(url, automaticRemoteMedia && directRemoteMediaAllowed)
+                        .build()
+                }
             AsyncImage(
-                model = url,
+                model = request,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.size(size).clip(shape),
