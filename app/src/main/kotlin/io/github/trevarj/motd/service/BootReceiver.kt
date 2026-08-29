@@ -2,8 +2,10 @@ package io.github.trevarj.motd.service
 
 import android.app.ForegroundServiceStartNotAllowedException
 import android.content.BroadcastReceiver
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.content.ContextCompat
 import dagger.hilt.android.AndroidEntryPoint
@@ -16,6 +18,34 @@ import io.github.trevarj.motd.push.socketFallbackNetworkIds
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.first
 import javax.inject.Inject
+
+/** Whether boot delivery is enabled. An unset component state uses manifest's enabled default. */
+internal fun isBootReceiverEnabled(context: Context): Boolean =
+    when (
+        context.packageManager.getComponentEnabledSetting(
+            ComponentName(context, BootReceiver::class.java),
+        )
+    ) {
+        PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+        PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER,
+        PackageManager.COMPONENT_ENABLED_STATE_DISABLED_UNTIL_USED,
+        -> false
+
+        else -> true
+    }
+
+/** Enables or disables boot delivery without killing running app process. */
+internal fun setBootReceiverEnabled(
+    context: Context,
+    enabled: Boolean,
+) {
+    if (isBootReceiverEnabled(context) == enabled) return
+    context.packageManager.setComponentEnabledSetting(
+        ComponentName(context, BootReceiver::class.java),
+        if (enabled) PackageManager.COMPONENT_ENABLED_STATE_ENABLED else PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+        PackageManager.DONT_KILL_APP,
+    )
+}
 
 /**
  * Starts the foreground service on BOOT_COMPLETED when delivery mode is PERSISTENT_SOCKET and at

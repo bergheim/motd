@@ -196,6 +196,8 @@
     <string name="settings_delivery_push_error">Status: %1$s</string>
     <string name="settings_delivery_push_distributor_url">https://f-droid.org/packages/io.heckel.ntfy/</string>
     <string name="settings_battery">Battery optimization</string>
+    <string name="settings_start_on_boot">Start on boot</string>
+    <string name="settings_start_on_boot_desc">Reconnect after your device restarts.</string>
     <string name="settings_battery_desc">Exempt motd to keep connections reliable.</string>
     <string name="settings_battery_push_desc">Exempt your push distributor so background messages arrive promptly.</string>
     <string name="settings_battery_hybrid_desc">Some networks use push and others retain sockets; exempt both the distributor and motd.</string>

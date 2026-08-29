@@ -39,6 +39,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.trevarj.motd.R
 import io.github.trevarj.motd.service.DeliveryMode
+import io.github.trevarj.motd.service.isBootReceiverEnabled
+import io.github.trevarj.motd.service.setBootReceiverEnabled
 import io.github.trevarj.motd.ui.theme.MotdMotion
 import io.github.trevarj.motd.ui.theme.MotdTheme
 import android.provider.Settings as AndroidSettings
@@ -50,6 +52,8 @@ fun DeliverySettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    var startOnBoot by remember(context) { mutableStateOf(isBootReceiverEnabled(context)) }
     val lifecycleOwner = LocalLifecycleOwner.current
     LaunchedEffect(viewModel) { viewModel.refreshNotificationPermission() }
     DisposableEffect(lifecycleOwner, viewModel) {
@@ -67,6 +71,11 @@ fun DeliverySettingsScreen(
         pushAvailability = state.pushAvailability,
         onBack = onBack,
         onDeliveryMode = viewModel::setDeliveryMode,
+        startOnBoot = startOnBoot,
+        onStartOnBoot = { enabled ->
+            setBootReceiverEnabled(context, enabled)
+            startOnBoot = enabled
+        },
         onSelectDistributor = viewModel::selectPushDistributor,
         onRetryPush = viewModel::retryPushSetup,
     )
@@ -78,6 +87,8 @@ fun DeliverySettingsContent(
     pushAvailability: PushAvailability,
     onBack: () -> Unit,
     onDeliveryMode: (DeliveryMode) -> Unit,
+    startOnBoot: Boolean = true,
+    onStartOnBoot: (Boolean) -> Unit = {},
     onSelectDistributor: (String) -> Unit = {},
     onRetryPush: () -> Unit = {},
 ) {
@@ -112,6 +123,13 @@ fun DeliverySettingsContent(
             }
         }
         SettingsGroup(title = stringResource(R.string.settings_background_reliability)) {
+            SwitchRow(
+                title = stringResource(R.string.settings_start_on_boot),
+                subtitle = stringResource(R.string.settings_start_on_boot_desc),
+                checked = startOnBoot,
+                onCheckedChange = onStartOnBoot,
+                switchTag = "settings_start_on_boot",
+            )
             ListItem(
                 headlineContent = { Text(stringResource(R.string.settings_battery)) },
                 supportingContent = {
