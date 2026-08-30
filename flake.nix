@@ -63,7 +63,7 @@
         devShells.default = pkgs.mkShell {
           # imagemagick: test/e2e/showcase-composite.sh merges the light/dark
           # showcase captures into the tracked diagonal-split screenshots.
-          packages = [ pkgs.jdk21 pkgs.kotlin-language-server pkgs.nodejs_22 pkgs.imagemagick androidSdk ];
+          packages = [ pkgs.jdk21 pkgs.kotlin-language-server pkgs.nodejs_22 pkgs.imagemagick pkgs.actionlint androidSdk ];
           JAVA_HOME = pkgs.jdk21.home;
           ANDROID_HOME = sdkRoot;
           ANDROID_SDK_ROOT = sdkRoot;

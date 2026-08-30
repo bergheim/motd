@@ -39,10 +39,11 @@ then builds and signs the FOSS APK and publishes:
 - release-specific third-party notices; and
 - `SHA256SUMS`.
 
-The focused managed-device smoke remains available separately, and exhaustive
-E2E runs manually/nightly. Neither currently gates a release because the hosted
-managed emulator can fail in System UI before MOTD starts. The release job still
-runs the FOSS release build, tests, and lint.
+Required CI keeps four connected real-stack journeys in its stable gate;
+exhaustive host-driven E2E is manual-only. The release workflow verifies that
+the exact tagged SHA's latest `Required CI / gate` check succeeded, then builds,
+signs, verifies, and publishes the FOSS release without rerunning that SHA's
+tests, formatting, or lint.
 
 The release description starts with the same detailed, user-facing changelog
 shown on F-Droid, followed by source/license details and GitHub's generated full

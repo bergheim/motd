@@ -6,7 +6,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -113,12 +113,12 @@ class GlobalFeedScreenTest {
 
     /** The first paging emission lands after composition, so assertions wait on the branch. */
     private fun awaitText(text: String) =
-        compose.waitUntil {
+        compose.waitUntil(timeoutMillis = 10_000) {
             compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()
         }
 
     private fun awaitTag(tag: String) =
-        compose.waitUntil {
+        compose.waitUntil(timeoutMillis = 10_000) {
             compose.onAllNodesWithTag(tag, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
         }
 

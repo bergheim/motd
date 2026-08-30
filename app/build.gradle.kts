@@ -220,16 +220,6 @@ android {
     testOptions {
         unitTests { isIncludeAndroidResources = true } // Robolectric
         execution = "ANDROIDX_TEST_ORCHESTRATOR"
-        managedDevices {
-            localDevices {
-                create("headlessApi34") {
-                    device = "Pixel 6"
-                    apiLevel = 34
-                    systemImageSource = "aosp"
-                    testedAbi = "x86_64"
-                }
-            }
-        }
     }
     sourceSets {
         getByName("test").resources.directories.add("$projectDir/schemas")
@@ -348,6 +338,8 @@ dependencies {
 
 // Generated JUnit cases are deterministic only for the selected profile/seed/replay inputs.
 tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
+    // ponytail: recycle every 50 Robolectric classes; tune only if CI profiling shows a better boundary.
+    if (name == "testDebugUnitTest") forkEvery = 50
     listOf(
         "MOTD_FUZZ_PROFILE",
         "MOTD_FUZZ_SEED",

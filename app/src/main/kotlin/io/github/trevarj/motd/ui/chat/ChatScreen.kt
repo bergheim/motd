@@ -709,25 +709,27 @@ fun ChatScreen(
             avatarEditorOpen = false
         },
     )
-    AttachmentSheets(
-        open = avatarUploadOpen,
-        currentDraft = "",
-        networkId = state.buffer?.networkId,
-        sojuFileHostAvailable =
-            (state.connState as? IrcClientState.Ready)
-                ?.isupport
-                ?.let(::sojuFileHostAdvertised) == true,
-        imageOnly = true,
-        onDismiss = { avatarUploadOpen = false },
-        onInsertUrl = {
-            viewModel.setAvatarUrl(it)
-            avatarUploadOpen = false
-        },
-        onReplaceDraft = {
-            viewModel.setAvatarUrl(it)
-            avatarUploadOpen = false
-        },
-    )
+    if (avatarUploadOpen) {
+        AttachmentSheets(
+            open = avatarUploadOpen,
+            currentDraft = "",
+            networkId = state.buffer?.networkId,
+            sojuFileHostAvailable =
+                (state.connState as? IrcClientState.Ready)
+                    ?.isupport
+                    ?.let(::sojuFileHostAdvertised) == true,
+            imageOnly = true,
+            onDismiss = { avatarUploadOpen = false },
+            onInsertUrl = {
+                viewModel.setAvatarUrl(it)
+                avatarUploadOpen = false
+            },
+            onReplaceDraft = {
+                viewModel.setAvatarUrl(it)
+                avatarUploadOpen = false
+            },
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -2856,43 +2858,45 @@ fun ChatContent(
         }
     }
 
-    AttachmentSheets(
-        open = attachmentSheetOpen,
-        currentDraft = composerText.text,
-        networkId = state.buffer?.networkId,
-        // Offer-only. The upload path binds the advertised endpoint to the connected network's own
-        // host and refuses an off-host one there, where the credential is actually attached.
-        sojuFileHostAvailable =
-            (state.connState as? IrcClientState.Ready)
-                ?.isupport
-                ?.let(::sojuFileHostAdvertised) == true,
-        startWithCurrentDraft = uploadCurrentDraftDirectly,
-        sharedFile = sharedFile,
-        directFileTransferAvailable =
-            state.buffer?.type == BufferType.QUERY &&
-                state.connState is IrcClientState.Ready,
-        onDismiss = {
-            attachmentSheetOpen = false
-            uploadCurrentDraftDirectly = false
-            sharedFile = null
-        },
-        onInsertUrl = {
-            composerText =
-                io.github.trevarj.motd.ui.components
-                    .insertAtCursor(composerText, it)
-            onDraftChanged(composerText.text)
-        },
-        onReplaceDraft = {
-            composerText =
-                TextFieldValue(
-                    it,
-                    androidx.compose.ui.text
-                        .TextRange(it.length),
-                )
-            onDraftChanged(composerText.text)
-        },
-        onDirectFile = onSendDccFile,
-    )
+    if (attachmentSheetOpen) {
+        AttachmentSheets(
+            open = true,
+            currentDraft = composerText.text,
+            networkId = state.buffer?.networkId,
+            // Offer-only. The upload path binds the advertised endpoint to the connected network's own
+            // host and refuses an off-host one there, where the credential is actually attached.
+            sojuFileHostAvailable =
+                (state.connState as? IrcClientState.Ready)
+                    ?.isupport
+                    ?.let(::sojuFileHostAdvertised) == true,
+            startWithCurrentDraft = uploadCurrentDraftDirectly,
+            sharedFile = sharedFile,
+            directFileTransferAvailable =
+                state.buffer?.type == BufferType.QUERY &&
+                    state.connState is IrcClientState.Ready,
+            onDismiss = {
+                attachmentSheetOpen = false
+                uploadCurrentDraftDirectly = false
+                sharedFile = null
+            },
+            onInsertUrl = {
+                composerText =
+                    io.github.trevarj.motd.ui.components
+                        .insertAtCursor(composerText, it)
+                onDraftChanged(composerText.text)
+            },
+            onReplaceDraft = {
+                composerText =
+                    TextFieldValue(
+                        it,
+                        androidx.compose.ui.text
+                            .TextRange(it.length),
+                    )
+                onDraftChanged(composerText.text)
+            },
+            onDirectFile = onSendDccFile,
+        )
+    }
     if (longDraftPrompt) {
         androidx.compose.material3.AlertDialog(
             onDismissRequest = {

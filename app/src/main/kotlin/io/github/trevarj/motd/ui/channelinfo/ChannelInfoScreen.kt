@@ -268,22 +268,24 @@ fun ChannelInfoScreen(
             avatarEditorOpen = false
         },
     )
-    AttachmentSheets(
-        open = avatarUploadOpen,
-        currentDraft = "",
-        networkId = state.buffer?.networkId,
-        sojuFileHostAvailable = state.sojuFileHostAvailable,
-        imageOnly = true,
-        onDismiss = { avatarUploadOpen = false },
-        onInsertUrl = {
-            viewModel.setAvatarUrl(it)
-            avatarUploadOpen = false
-        },
-        onReplaceDraft = {
-            viewModel.setAvatarUrl(it)
-            avatarUploadOpen = false
-        },
-    )
+    if (avatarUploadOpen) {
+        AttachmentSheets(
+            open = avatarUploadOpen,
+            currentDraft = "",
+            networkId = state.buffer?.networkId,
+            sojuFileHostAvailable = state.sojuFileHostAvailable,
+            imageOnly = true,
+            onDismiss = { avatarUploadOpen = false },
+            onInsertUrl = {
+                viewModel.setAvatarUrl(it)
+                avatarUploadOpen = false
+            },
+            onReplaceDraft = {
+                viewModel.setAvatarUrl(it)
+                avatarUploadOpen = false
+            },
+        )
+    }
 
     // Nick sheet: shared with the chat timeline. Moderation shown only when op.
     nickSheet?.let { sheet ->
@@ -681,6 +683,12 @@ fun ChannelInfoContent(
     }
 }
 
+internal fun topicEditSaveEnabled(mutation: TopicMutationState): Boolean = mutation !is TopicMutationState.Submitting
+
+internal fun topicEditShowsError(mutation: TopicMutationState): Boolean = mutation is TopicMutationState.Failed
+
+internal fun topicEditAccepted(mutation: TopicMutationState): Boolean = mutation is TopicMutationState.Accepted
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
 @Composable
 internal fun TopicEditDialog(
@@ -691,9 +699,9 @@ internal fun TopicEditDialog(
     onSave: (String) -> Unit,
 ) {
     var text by remember { mutableStateOf(initial) }
-    val submitting = mutation is TopicMutationState.Submitting
+    val submitting = !topicEditSaveEnabled(mutation)
     LaunchedEffect(mutation) {
-        if (mutation is TopicMutationState.Accepted) onAccepted()
+        if (topicEditAccepted(mutation)) onAccepted()
     }
     AlertDialog(
         onDismissRequest = { if (!submitting) onDismiss() },
@@ -715,7 +723,7 @@ internal fun TopicEditDialog(
                     enabled = !submitting,
                     modifier = Modifier.testTag("channelinfo_topic_edit_text"),
                 )
-                if (mutation is TopicMutationState.Failed) {
+                if (topicEditShowsError(mutation)) {
                     Text(
                         text = stringResource(R.string.channelinfo_topic_edit_failed),
                         color = MaterialTheme.colorScheme.error,

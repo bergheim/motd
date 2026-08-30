@@ -17,18 +17,18 @@ setup and teardown deliberately clear application data.
 | Native local stack + USB device | Manual feature work, physical-device checks, quick iteration | `./test/e2e/local-stack.sh` |
 | Native ZNC + Ergo stack | Scheduled ZNC playback, reconnect, SASL, and capability degradation | `./test/e2e/znc-stack.sh` |
 | Host-driven runbook | Broad UI interaction and crash sweep on a device or emulator | `./test/e2e/runbook.sh` |
-| Required hosted suites | Fast real-stack and managed-device component journeys | `.github/workflows/ci.yml` |
-| Managed-device component suite | All hermetic Compose/component instrumentation tests | `./test/e2e/component-suite.sh` |
-| Hermetic emulator run | Scheduled/manual exhaustive CI diagnostics | `.github/workflows/e2e.yml` |
+| Required hosted suites | Fast real-stack journeys and Robolectric component tests | `.github/workflows/ci.yml` |
+| JVM component suite | Fixture-free Compose/UI tests | `nix develop -c ./gradlew :app:testDebugUnitTest` |
+| Hermetic emulator run | Manual exhaustive CI diagnostics | `.github/workflows/e2e.yml` |
 
 The fast headless suite is a required pull-request and main-branch CI gate. It
 runs exactly four isolated Kotlin journeys: TLS onboarding/import, one
 canonical echo/send/reconnect row, an 80-row second-client unread/history recovery,
-and bootstrapped navigation/settings/bouncer smoke. Host UIAutomator remains scheduled/manual;
+and bootstrapped navigation/settings/bouncer smoke. Host UIAutomator remains manual-only;
 the exhaustive A-H/J/R/I workflow is diagnostics, not a required fast phase.
-Release CI still runs its own unit, lint, and FOSS release build checks.
-The required workflow also runs the fixture-free component tests on a separate managed device,
-keeping UI-state coverage continuous without coupling those cases to Soju.
+Release CI requires the exact tagged SHA's green `Required CI / gate`, then builds and verifies the signed FOSS artifact without rerunning those checks.
+The required workflow also runs fixture-free component tests under Robolectric,
+keeping UI-state coverage continuous without coupling those cases to Soju or an emulator.
 
 ## Prerequisites
 
@@ -65,8 +65,8 @@ so an attached phone is never installed to, cleared, reversed, or reconfigured.
 Each method gets a fresh instrumentation process and cleared debug-app data;
 the direct launcher discovers exactly four annotated `Class#method` cases from
 the installed test package, clears the target package before each one, and does
-not retain raw instrumentation output. CI and managed-device runs use the same
-fixture configuration and enforce isolation with Android Test Orchestrator.
+not retain raw instrumentation output. Connected Gradle runs use the same fixture
+configuration and enforce isolation with Android Test Orchestrator.
 The four journeys cover:
 
 - onboarding, self-signed fixture trust, soju login, and network import;
@@ -402,7 +402,7 @@ failure log.
 | I | Delete-chat cancellation, final crash sweep, clean reset | Required |
 | J | Soju control-center panels, admin discovery, safe console command | Required with the local admin fixture |
 | K | ntfy discovery, soju WebPush ACK, background/cold/Doze delivery, exactly-once notifications and visible rows | Conditional; skipped without F-Droid ntfy |
-| R | Force-stop, retained 40-row reconnect gap, soju stop/start, newest-window and older-scroll proof | Required in the scheduled/manual hermetic sweep |
+| R | Force-stop, retained 40-row reconnect gap, soju stop/start, newest-window and older-scroll proof | Required in the manual hermetic sweep |
 | S | Deterministic public screenshot showcase | Required when selected by `headless.sh showcase` |
 
 Phase E searches for the registered `#motd-browser` fixture through the IME, joins it, waits for
@@ -425,7 +425,7 @@ The runbook also snapshots all three global Android animation scales before disa
 and restores the exact original values on every normal exit, failure, or interruption. If the
 snapshot cannot be completed, it leaves the device's animation settings unchanged.
 
-The minimal committed environment is A–C. The scheduled/manual workflow widens this to
+The minimal committed environment is A–C. The manual exhaustive workflow widens this to
 A–H/J/R/I. DM, mention, typing, member, and moderation checks need a live second
 identity; missing optional fixture state is reported as a skip rather than a
 false failure.

@@ -3,13 +3,6 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <application>
-        <!-- Test-only host for component instrumentation; see ComposeHostActivity. -->
-        <activity
-            android:name=".ComposeHostActivity"
-            android:exported="false"
-            android:theme="@style/Theme.Motd"
-            android:windowSoftInputMode="adjustResize" />
-
         <!-- E2E-only unicode text-entry bridge for test/e2e/lib.sh; see E2eClipboardReceiver.
              Exported on purpose: the adb shell uid must reach it, this build type is never
              shipped, and the worst a caller can do is set the emulator clipboard. -->

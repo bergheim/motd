@@ -704,7 +704,6 @@
     <string name="settings_direct_media_proxied_desc">On proxy and VLESS/REALITY networks, fetch media previews over your device\'s direct connection instead of the tunnel. Previews load, but the media host sees your IP address.</string>
     <string name="settings_show_link_previews">Show link previews</string>
     <string name="settings_show_link_previews_desc">Fetch page titles and descriptions for links</string>
-    <string name="chat_video_preview">Video preview</string>
     <string name="chat_video_play">Play video</string>
     <string name="chat_image_open">Open image</string>
     <string name="chat_remote_media_download">Download remote media</string>

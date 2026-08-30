@@ -411,7 +411,7 @@ private fun KeyDialog(
     }
 }
 
-private val LIMIT_PRESETS = listOf(25, 50, 100, 500)
+internal val LIMIT_PRESETS = listOf(25, 50, 100, 500)
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable

@@ -44,14 +44,18 @@ live beside the harness in [`test/e2e/`](test/e2e/README.md).
   `nix develop -c ...`; do not recommend Guix packages, apt, Homebrew, a global
   Android SDK, or unpinned replacement tooling.
 - Match verification to the affected surface, using the command matrix in
-  [`.agents/testing.md`](.agents/testing.md). Tests for changed behavior are
-  part of the implementation, not optional follow-up work.
+  [`.agents/testing.md`](.agents/testing.md). Changed behavior must add or update
+  the nearest regression, or name an existing regression that already exercises
+  the changed branch. Compile-only evidence does not replace a behavior test.
 - The app is a single Google-free build with no product flavors. Push delivery
   is UnifiedPush only; do not reintroduce Firebase/FCM or a Play Store
   distribution unless the maintainer explicitly asks for it. Lint warnings are
   errors.
   When a change crosses modules or release behavior, run the nearest checks in
   each affected module; Required CI owns full release parity.
+- Run the nearest test method, then its class, and run path-selected
+  `./tools/prepush.sh` before pushing a clean candidate. Robolectric Compose
+  component tests are local unit-tier checks, not hosted-emulator follow-up.
 - Do not run emulator/device E2E as part of routine local development. Keep
   local verification to unit/integration tests, lint, and builds. Before
   committing a change that affects a journey covered by `RequiredHeadlessE2eTest`,

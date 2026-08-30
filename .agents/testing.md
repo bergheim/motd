@@ -1,10 +1,11 @@
 # Testing and verification
 
 Run all Gradle commands through the repository Nix shell. During development,
-run the nearest useful check in each changed boundary; do not expand every edit
-into full local suites. Run `nix develop -c ./gradlew ktlintCheck` before handoff;
-use `ktlintFormat` to apply the enforced Kotlin style. Before pushing a clean
-candidate commit, run `./tools/prepush.sh` once for path-selected CI parity.
+run the nearest test method, then its class. Changed behavior needs a new or
+updated regression unless an existing named test already exercises that branch.
+Run `nix develop -c ./gradlew ktlintCheck` before handoff; use `ktlintFormat` to
+apply enforced style. Before pushing a clean candidate commit, run
+`./tools/prepush.sh` once for path-selected CI parity.
 
 ## Command matrix
 
@@ -15,7 +16,7 @@ candidate commit, run `./tools/prepush.sh` once for path-selected CI parity.
 | IRC parser/client/transport | Nearest `:irc` test method, then its class |
 | Android repositories, services, preferences, or ViewModels | Nearest `:app` test method, then its class |
 | Room entities/schema/migrations | Nearest database test; pre-push schema verification |
-| Compose Kotlin | Nearest behavior test; its Gradle task already compiles the app |
+| Compose Kotlin | Nearest Robolectric behavior test in `testDebug`; its Gradle task already compiles the app |
 | Resources/manifest/packaging | Nearest test when behavior changed, then `:app:assembleDebug` |
 | Instrumentation source | `:app:compileE2eAndroidTestKotlin`; emulator only when lower tiers cannot prove behavior |
 | Ordinary app user journey | Relevant unit/integration test; assemble only when an APK is needed |
@@ -29,10 +30,10 @@ nix develop -c ./gradlew :app:testDebugUnitTest \
 ```
 
 Use `:irc:test` instead for IRC tests. Run `:app:assembleDebug` only when
-resources, manifest, packaging, or an installable APK must be checked. Full
-module suites, release variants, lint, and E2E belong to Required CI except for
-the path-selected pre-push checks. Run `:app:lintDebug` locally only for an
-explicit pre-push lint check.
+resources, manifest, packaging, or an installable APK must be checked. Pre-push
+runs the debug unit/Robolectric suite once plus release lint for production
+Android changes; release unit tests duplicate shared coverage and are not part
+of the gate. Emulator E2E remains hosted unless lower tiers cannot prove behavior.
 
 ## Pre-push gate
 
@@ -54,11 +55,11 @@ cases per target. Required CI explicitly selects the PR workload and replaces th
 seed with the candidate commit; `.github/workflows/fuzz.yml` selects the larger
 nightly profile.
 
-The nightly workflow runs three disjoint case-index shards for each module. An
-IRC shard covers 200,000 parser cases and 75,000 mapper cases. An app shard
-covers 75,000 presentation cases, 1,500 canonical-timeline cases with 128
-operations each, and 500 EventProcessor cases. Job summaries report the
-effective counts, index ranges, and any manual overrides.
+The nightly workflow runs one fresh-seed shard for each module. The IRC shard
+covers 200,000 parser cases and 75,000 mapper cases. The app shard covers 75,000
+presentation cases, 1,500 canonical-timeline cases with 128 operations each,
+and 500 EventProcessor cases. Job summaries report effective counts, index
+ranges, and any manual overrides.
 
 - `MOTD_FUZZ_SEED=<text>` selects an exact seed.
 - `MOTD_FUZZ_CASE=<index>` replays one independently seeded case.
@@ -82,9 +83,8 @@ version, seed, case, and fixture in that module's
   nearest unit/integration tests and assembly only when the matrix requires it.
 - `.github/workflows/ci.yml` owns the complete required gate. Its `headless` job runs exactly
   four isolated `@FastHeadlessE2e` methods on API34 Pixel 6 AOSP, while the parallel
-  `component-ui` job runs every hermetic component instrumentation case outside the
-  real-stack test file. `test/e2e/component-suite.sh` derives the expected count from those
-  source tests and verifies every case reports a result. Documentation-only
+  component tier runs fixture-free Compose/UI tests through `:app:testDebugUnitTest` under
+  Robolectric. Documentation-only
   changes run the path classifier and stable gate without booting Android jobs.
   Push the candidate commit and require the complete CI gate to pass before
   tagging a release. An `action_required` external-PR run is not evidence:
@@ -97,16 +97,14 @@ version, seed, case, and fixture in that module's
   maintainer explicitly asks for device validation.
 - Only when lower-level checks cannot validate behavior, reproduce the focused
   CI suite with `./test/e2e/headless.sh fast`.
-- `test/e2e/component-suite.sh` is the canonical managed-device launcher for the hermetic
-  Compose/component instrumentation tier. It enforces the expected case count so new tests cannot
-  silently disappear from CI.
+- Fixture-free Compose/component tests live in `app/src/testDebug` and run with
+  `:app:testDebugUnitTest`; only real-stack journeys and their support remain in `androidTest`.
 - `test/e2e/fast-suite.sh` is the canonical fast-suite launcher and fixture
-  argument source for local direct instrumentation, connected CI, and the
-  managed-device smoke workflow. Do not duplicate its annotation or fixture
-  arguments in workflow YAML.
+  argument source for local direct instrumentation and connected CI. Do not duplicate its
+  annotation or fixture arguments in workflow YAML.
 - Use `test/e2e/runbook.sh` for multi-screen interaction and crash sweeps. The
   local headless `full` command runs A-H/J/V/R before teardown phase I on the isolated emulator;
-  the hermetic Docker stack is used by the scheduled/manual CI workflow.
+  the exhaustive hosted runbook is manual-only, while scheduled proxy and ZNC probes stay enabled.
 - Use `:app:assembleE2e` only for x86_64 emulator testing. It deliberately
   excludes the arm64-only embedded libbox core and is not representative of
   obfuscation support.

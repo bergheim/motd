@@ -14,8 +14,15 @@ concurrency:
 jobs:
   changes:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       runtime: ${{ steps.classify.outputs.runtime }}
+      irc: ${{ steps.classify.outputs.irc }}
+      app: ${{ steps.classify.outputs.app }}
+      device: ${{ steps.classify.outputs.device }}
+      package: ${{ steps.classify.outputs.package }}
+      harness: ${{ steps.classify.outputs.harness }}
+      debug_lint: ${{ steps.classify.outputs.debug_lint }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { fetch-depth: 0 }
@@ -25,24 +32,20 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
           set -euo pipefail
-          runtime=true
           if [[ -n "$BASE_SHA" && ! "$BASE_SHA" =~ ^0+$ ]] && git cat-file -e "$BASE_SHA^{commit}"; then
             git diff --check "$BASE_SHA" "$GITHUB_SHA"
-            runtime=false
-            while IFS= read -r path; do
-              case "$path" in
-                *.md|LICENSE|docs/*|site/*|screenshots/*|fastlane/metadata/*) ;;
-                *) runtime=true; break ;;
-              esac
-            done < <(git diff --name-only "$BASE_SHA" "$GITHUB_SHA")
+            mapfile -t paths < <(git diff --name-only "$BASE_SHA" "$GITHUB_SHA")
+            ./tools/ci-paths.sh "${paths[@]}" >> "$GITHUB_OUTPUT"
+          else
+            ./tools/ci-paths.sh unknown/runtime.surface >> "$GITHUB_OUTPUT"
           fi
-          echo "runtime=$runtime" >> "$GITHUB_OUTPUT"
+      - name: Validate workflow and E2E harness changes
+        if: steps.classify.outputs.harness == 'true'
+        run: ./test/e2e/validate.sh
 
-  # Pure-JVM protocol module: fast, no Android SDK needed. Runs in parallel
-  # with the app job so a slow/hanging app build never blocks irc feedback.
   irc:
     needs: changes
-    if: needs.changes.outputs.runtime == 'true'
+    if: needs.changes.outputs.irc == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -53,8 +56,9 @@ jobs:
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with: { distribution: temurin, java-version: 21 }
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
-      - name: irc unit tests
-        run: ./gradlew :irc:test --stacktrace
+        with: { cache-read-only: true }
+      - name: IRC format and unit tests
+        run: ./gradlew :irc:ktlintCheck :irc:test --stacktrace
       - name: Upload IRC generated-test failure
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -64,12 +68,11 @@ jobs:
             irc/build/fuzz-failures/**
             irc/build/reports/tests/test/**
           if-no-files-found: ignore
+          retention-days: 14
 
-  # Android app: debug + release unit tests, lint, and APK assembly. The release APK is unsigned in
-  # required CI; tag builds inject the production signing secrets in release.yml.
   app:
     needs: changes
-    if: needs.changes.outputs.runtime == 'true'
+    if: needs.changes.outputs.app == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
@@ -79,23 +82,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with: { distribution: temurin, java-version: 21 }
+      # This is the sole writable Gradle cache producer. Parallel and scheduled jobs read it.
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
       - name: Kotlin formatting
         run: ./gradlew ktlintCheck --stacktrace
-      - name: App unit tests (debug and release)
-        run: >-
-          ./gradlew :app:testDebugUnitTest :app:testReleaseUnitTest
-          --stacktrace
-      - name: Upload app generated-test failure
+      - name: App unit and Robolectric component tests
+        run: ./gradlew :app:testDebugUnitTest --stacktrace
+      - name: Upload app test failure
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: app-fuzz-failure-${{ github.run_id }}
+          name: app-test-failure-${{ github.run_id }}
           path: |
             app/build/fuzz-failures/**
             app/build/reports/tests/testDebugUnitTest/**
-            app/build/reports/tests/testReleaseUnitTest/**
           if-no-files-found: ignore
+          retention-days: 14
       - name: Verify checked-in Room schemas
         run: |
           git diff --exit-code -- app/schemas
@@ -103,43 +105,37 @@ jobs:
       - name: Verify FOSS dependency boundary
         run: |
           if ./gradlew :app:dependencies --configuration releaseRuntimeClasspath \
-            | rg -i 'firebase|play-services'; then
+            | grep -Ei 'firebase|play-services'; then
             echo "Google-only dependencies reached the FOSS runtime classpath" >&2
             exit 1
           fi
-      # Lint occasionally hits a rare Gradle-worker classloader race that
-      # surfaces as NoClassDefFoundError in ModifierDeclarationDetector. The old
-      # --no-daemon --max-workers=1 guard never fully prevented it (hence this
-      # retry) while costing ~30x the wall-clock, so lint now runs with the warm
-      # daemon and the repo's bounded worker cap; the bounded retry (2 attempts,
-      # each now sharing the daemon) is the actual safety net for the rare race.
       - name: Android lint (warnings as errors)
-        run: |
-          for attempt in 1 2; do
-            echo "::group::lint attempt $attempt"
-            ./gradlew :app:lintDebug :app:lintRelease --stacktrace \
-              && { echo "::endgroup::"; exit 0; }
-            echo "::endgroup::"
-            echo "lint attempt $attempt failed; retrying" >&2
-          done
-          exit 1
-      # Native packaging is irrelevant to formatting and unit-test failures. Defer the large
-      # toolchain setup so deterministic red runs report sooner and avoid the download entirely.
-      - uses: ./.github/actions/setup-native-toolchain
-      - name: Assemble debug and release APKs
-        run: >-
-          ./gradlew :app:assembleDebug :app:assembleRelease
-          --stacktrace
-      - name: Validate E2E shell and Compose configuration
-        run: ./test/e2e/validate.sh
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: lint
+        env:
+          MOTD_LINT_DEBUG: ${{ needs.changes.outputs.debug_lint }}
+          MOTD_LINT_LOG: app/build/reports/android-lint.log
+        run: ./tools/android-lint.sh
+      - name: Upload lint diagnostics
+        if: steps.lint.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: motd-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: app-lint-failure-${{ github.run_id }}
+          path: |
+            app/build/reports/android-lint.log
+            app/build/reports/lint-results-*.txt
+            app/build/reports/lint-results-*.sarif
+            app/build/reports/lint-results-*.html
+          if-no-files-found: ignore
+          retention-days: 14
+      - uses: ./.github/actions/setup-native-toolchain
+        if: needs.changes.outputs.package == 'true'
+      - name: Assemble debug and release APKs
+        if: needs.changes.outputs.package == 'true'
+        run: ./gradlew :app:assembleDebug :app:assembleRelease --stacktrace
 
   headless:
     needs: changes
-    if: needs.changes.outputs.runtime == 'true'
+    if: needs.changes.outputs.device == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -147,38 +143,29 @@ jobs:
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with: { distribution: temurin, java-version: 21 }
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with: { cache-read-only: true }
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      # A cached AVD + snapshot is only valid for the emulator that produced it,
-      # so the key has to carry the emulator revision: when the runner image
-      # upgrades its bundled emulator, a prefix-identical key would otherwise
-      # restore a stale snapshot and degrade into odd boots and flaky runs.
       - name: Resolve emulator revision for the AVD cache key
         id: emulator-revision
         run: |
           set -uo pipefail
           sdk="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}"
           revision=""
-          # Preferred source: the emulator binary the run will actually use.
           if [ -x "$sdk/emulator/emulator" ]; then
             revision="$(timeout 60 "$sdk/emulator/emulator" -version 2>/dev/null \
               | sed -n 's/.*emulator version \([0-9][0-9A-Za-z.]*\).*/\1/p' \
               | head -n 1)" || revision=""
           fi
-          # Fallback: the installed SDK package revision, no binary launch.
           if [ -z "$revision" ] && [ -x "$sdk/cmdline-tools/latest/bin/sdkmanager" ]; then
             revision="$(timeout 300 "$sdk/cmdline-tools/latest/bin/sdkmanager" \
               --list_installed 2>/dev/null \
               | awk -F'|' '$1 ~ /^[[:space:]]*emulator[[:space:]]*$/ {
                   gsub(/[[:space:]]/, "", $2); print $2; exit }')" || revision=""
           fi
-          # Last resorts keep the key non-empty. The runner image version moves
-          # whenever the bundled emulator does, and a fully unresolvable
-          # revision falls back to a per-run key so the job cold-creates the AVD
-          # instead of trusting a cache entry it cannot validate.
           if [ -z "$revision" ] && [ -n "${ImageVersion:-}" ]; then
             revision="image-${ImageVersion}"
           fi
@@ -188,17 +175,11 @@ jobs:
           revision="$(printf '%s' "$revision" | tr -c 'A-Za-z0-9._-' '-')"
           echo "Emulator revision for AVD cache key: $revision"
           echo "revision=$revision" >> "$GITHUB_OUTPUT"
-      # Cache the AVD + a warm boot snapshot so runs load a snapshot instead of
-      # cold-booting. Key covers every dimension that changes the image/AVD.
-      # No restore-keys on purpose: a prefix match would reintroduce exactly the
-      # stale-AVD reuse the emulator revision is here to prevent.
       - name: AVD cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: avd-cache
         with:
-          path: |
-            ~/.android/avd/*
-            ~/.android/adb*
+          path: ~/.android/avd/*
           key: avd-api34-default-x86_64-pixel6-emu-${{ steps.emulator-revision.outputs.revision }}
       - name: Create AVD and generate snapshot for caching
         if: steps.avd-cache.outputs.cache-hit != 'true'
@@ -223,81 +204,45 @@ jobs:
           profile: pixel_6
           force-avd-creation: false
           disable-animations: true
-          # Load the cached snapshot; -no-snapshot-save keeps the cache immutable
-          # across runs (replaces the old cold-boot -no-snapshot).
           emulator-options: -no-window -no-snapshot-save -noaudio -no-boot-anim -gpu swiftshader_indirect
           script: ./test/e2e/fast-suite.sh connected
       - name: Upload privacy-safe required diagnostics
-        # always(), not failure(): the journeys also record a passing timeline
-        # snapshot, and a red run is only diffable against a green baseline.
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: headless-diagnostics
-          # ONLY the launcher's bundle. AGP keeps its own copy of the same per-test output under
-          # app/build/outputs, and uploading that directly would be the shorter path — but nothing
-          # audits it. e2e_audit_required_artifacts runs over this directory alone, so a second path
-          # would publish whatever the instrumentation happened to leave in an additional-output
-          # directory without the allowlist or the forbidden-field grep ever seeing it. The scrape
-          # into this bundle (e2e_collect_gradle_required_e2e_artifacts) is the audited route, and a
-          # scrape that misses is no longer silent: a red run with no per-test capture is now
-          # reported as ARTIFACTS_MISSING rather than under the real failure's name.
           path: test/e2e/artifacts/fast-suite/**
           if-no-files-found: ignore
+          retention-days: 14
       - name: Tear down hermetic stack
         if: always()
         run: ./test/e2e/hermetic-stack.sh down || true
 
-  component-ui:
-    needs: changes
-    if: needs.changes.outputs.runtime == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
-        with: { distribution: temurin, java-version: 21 }
-      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
-      - name: Enable KVM
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-      - name: Run hermetic component journeys
-        run: ./test/e2e/component-suite.sh
-      - name: Upload component test report
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: component-ui-report
-          path: |
-            app/build/reports/androidTests/managedDevice/**
-            app/build/outputs/androidTest-results/managedDevice/**
-          if-no-files-found: ignore
-
   gate:
     if: always()
-    needs: [changes, irc, app, headless, component-ui]
+    needs: [changes, irc, app, headless]
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Require every applicable CI tier
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
-          RUNTIME_CHANGED: ${{ needs.changes.outputs.runtime }}
+          IRC_REQUIRED: ${{ needs.changes.outputs.irc }}
+          APP_REQUIRED: ${{ needs.changes.outputs.app }}
+          DEVICE_REQUIRED: ${{ needs.changes.outputs.device }}
           IRC_RESULT: ${{ needs.irc.result }}
           APP_RESULT: ${{ needs.app.result }}
           HEADLESS_RESULT: ${{ needs.headless.result }}
-          COMPONENT_RESULT: ${{ needs.component-ui.result }}
         run: |
+          set -euo pipefail
           test "$CHANGES_RESULT" = success
-          test "$RUNTIME_CHANGED" = true || {
-            test "$IRC_RESULT" = skipped
-            test "$APP_RESULT" = skipped
-            test "$HEADLESS_RESULT" = skipped
-            test "$COMPONENT_RESULT" = skipped
-            exit
+          require_result() {
+            if [ "$1" = true ]; then
+              test "$2" = success
+            else
+              test "$2" = skipped
+            fi
           }
-          test "$IRC_RESULT" = success
-          test "$APP_RESULT" = success
-          test "$HEADLESS_RESULT" = success
-          test "$COMPONENT_RESULT" = success
+          require_result "$IRC_REQUIRED" "$IRC_RESULT"
+          require_result "$APP_REQUIRED" "$APP_RESULT"
+          require_result "$DEVICE_REQUIRED" "$HEADLESS_RESULT"

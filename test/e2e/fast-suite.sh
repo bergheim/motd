@@ -123,9 +123,8 @@ run_direct_suite() {
 run_attempt() {
   case "$MODE" in
     connected) run_gradle_suite :app:connectedE2eAndroidTest "$@" ;;
-    managed) run_gradle_suite headlessApi34E2eAndroidTest -Pandroid.testoptions.manageddevices.emulator.gpu=swiftshader_indirect "$@" ;;
     direct) run_direct_suite ;;
-    *) echo "usage: $0 {connected|managed|direct} [Gradle arguments...]" >&2; return 2 ;;
+    *) echo "usage: $0 {connected|direct} [Gradle arguments...]" >&2; return 2 ;;
   esac
 }
 

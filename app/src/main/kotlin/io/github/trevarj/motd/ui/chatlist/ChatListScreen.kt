@@ -506,13 +506,7 @@ fun ChatListContent(
 
                                 // Use the platform typography instead of the stylized brand asset here.
                                 ChatListTopBarMode.DEFAULT -> {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(
-                                            text = stringResource(R.string.app_name),
-                                            fontWeight = FontWeight.Bold,
-                                        )
-                                        ChatListTitleConnectingSpinner(visible = titleConnecting)
-                                    }
+                                    ChatListDefaultTitle(titleConnecting)
                                 }
                             }
                         }
@@ -2123,6 +2117,18 @@ private fun SelectableChatListRow(
 }
 
 const val CHAT_LIST_TITLE_CONNECTING_TAG = "chatlist_title_connecting"
+
+@Composable
+internal fun ChatListDefaultTitle(titleConnecting: Boolean) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = stringResource(R.string.app_name),
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.testTag("chatlist_title"),
+        )
+        ChatListTitleConnectingSpinner(visible = titleConnecting)
+    }
+}
 
 /**
  * The title's socket-establishment cue, in the chat title's `ChatTitleSyncSpinner` shape: a trailing 12 dp

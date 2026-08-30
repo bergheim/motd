@@ -170,44 +170,13 @@ fun NickActionSheet(
     }
 
     if (kickTarget) {
-        var reason by remember { mutableStateOf("") }
-        val kickLen = modeCatalog?.kickLen
-        AlertDialog(
-            onDismissRequest = { kickTarget = false },
-            // A dialog is its own Compose window, so it needs its own testTagsAsResourceId opt-in.
-            modifier =
-                Modifier
-                    .semantics { testTagsAsResourceId = true }
-                    .testTag("nick_sheet_kick_dialog"),
-            title = { Text(stringResource(R.string.nick_sheet_kick_title, nick)) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ReasonPresetChips(
-                        current = reason,
-                        onSelect = { reason = it },
-                        tagPrefix = "nick_sheet_kick_chip",
-                    )
-                    OutlinedTextField(
-                        value = reason,
-                        // Trim to the server's advertised KICKLEN so the reason is not silently cut.
-                        onValueChange = { if (kickLen == null || it.length <= kickLen) reason = it },
-                        label = { Text(stringResource(R.string.nick_sheet_kick_reason_hint)) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth().testTag("nick_sheet_kick_reason"),
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        kickTarget = false
-                        onKick(reason.ifBlank { null })
-                    },
-                    modifier = Modifier.testTag("nick_sheet_kick_confirm"),
-                ) { Text(stringResource(R.string.nick_sheet_kick)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { kickTarget = false }) { Text(stringResource(R.string.action_cancel)) }
+        NickKickDialog(
+            nick = nick,
+            kickLen = modeCatalog?.kickLen,
+            onDismiss = { kickTarget = false },
+            onKick = { reason ->
+                kickTarget = false
+                onKick(reason)
             },
         )
     }
@@ -235,6 +204,49 @@ fun NickActionSheet(
             },
         )
     }
+}
+
+@Composable
+internal fun NickKickDialog(
+    nick: String,
+    kickLen: Int?,
+    onDismiss: () -> Unit,
+    onKick: (String?) -> Unit,
+) {
+    var reason by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier =
+            Modifier
+                .semantics { testTagsAsResourceId = true }
+                .testTag("nick_sheet_kick_dialog"),
+        title = { Text(stringResource(R.string.nick_sheet_kick_title, nick)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                ReasonPresetChips(
+                    current = reason,
+                    onSelect = { reason = it },
+                    tagPrefix = "nick_sheet_kick_chip",
+                )
+                OutlinedTextField(
+                    value = reason,
+                    onValueChange = { if (kickLen == null || it.length <= kickLen) reason = it },
+                    label = { Text(stringResource(R.string.nick_sheet_kick_reason_hint)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("nick_sheet_kick_reason"),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onKick(reason.ifBlank { null }) },
+                modifier = Modifier.testTag("nick_sheet_kick_confirm"),
+            ) { Text(stringResource(R.string.nick_sheet_kick)) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
+        },
+    )
 }
 
 /** WHOIS summary lines, or the "details in server messages" fallback while whois is null. */
