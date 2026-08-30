@@ -21,9 +21,19 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.FormatIndentDecrease
+import androidx.compose.material.icons.automirrored.outlined.FormatIndentIncrease
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.AddCircleOutline
+import androidx.compose.material.icons.outlined.ArrowDownward
+import androidx.compose.material.icons.outlined.ArrowUpward
+import androidx.compose.material.icons.outlined.CreateNewFolder
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.DynamicFeed
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Remove
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -384,34 +394,40 @@ private fun RowOverflow(
             if (row.canRename) {
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.gesture_editor_rename)) },
+                    leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
                     onClick = { run(onRename) },
                 )
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.gesture_editor_icon)) },
+                    leadingIcon = { Icon(Icons.Outlined.Palette, contentDescription = null) },
                     onClick = { run(onPickIcon) },
                 )
             }
             if (row.canMoveUp) {
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.gesture_editor_move_up)) },
+                    leadingIcon = { Icon(Icons.Outlined.ArrowUpward, contentDescription = null) },
                     onClick = { run { callbacks.onMoveUp(id) } },
                 )
             }
             if (row.canMoveDown) {
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.gesture_editor_move_down)) },
+                    leadingIcon = { Icon(Icons.Outlined.ArrowDownward, contentDescription = null) },
                     onClick = { run { callbacks.onMoveDown(id) } },
                 )
             }
             if (row.canIndent) {
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.gesture_editor_indent)) },
+                    leadingIcon = { Icon(Icons.AutoMirrored.Outlined.FormatIndentIncrease, contentDescription = null) },
                     onClick = { run { callbacks.onIndent(id) } },
                 )
             }
             if (row.canOutdent) {
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.gesture_editor_outdent)) },
+                    leadingIcon = { Icon(Icons.AutoMirrored.Outlined.FormatIndentDecrease, contentDescription = null) },
                     onClick = { run { callbacks.onOutdent(id) } },
                 )
             }
@@ -419,14 +435,17 @@ private fun RowOverflow(
                 HorizontalDivider()
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.gesture_editor_add_leaf)) },
+                    leadingIcon = { Icon(Icons.Outlined.AddCircleOutline, contentDescription = null) },
                     onClick = { run { callbacks.onAddChild(id, GestureNodeKind.LEAF) } },
                 )
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.gesture_editor_add_submenu)) },
+                    leadingIcon = { Icon(Icons.Outlined.CreateNewFolder, contentDescription = null) },
                     onClick = { run { callbacks.onAddChild(id, GestureNodeKind.SUBMENU) } },
                 )
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.gesture_editor_add_provider)) },
+                    leadingIcon = { Icon(Icons.Outlined.DynamicFeed, contentDescription = null) },
                     onClick = { run { callbacks.onAddChild(id, GestureNodeKind.PROVIDER) } },
                 )
             }
@@ -435,6 +454,13 @@ private fun RowOverflow(
                 DropdownMenuItem(
                     text = {
                         Text(stringResource(R.string.action_delete), color = MaterialTheme.colorScheme.error)
+                    },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Outlined.Delete,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                        )
                     },
                     onClick = { run(onDelete) },
                 )

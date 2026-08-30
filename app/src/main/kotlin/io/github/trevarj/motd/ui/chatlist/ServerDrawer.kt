@@ -24,12 +24,15 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.DragHandle
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.DoneAll
 import androidx.compose.material.icons.outlined.DynamicFeed
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -585,6 +588,7 @@ private fun DrawerNetworkItem(
             if (canMoveUp) {
                 DropdownMenuItem(
                     text = { Text(moveUpLabel) },
+                    leadingIcon = { Icon(Icons.Filled.KeyboardArrowUp, contentDescription = null) },
                     onClick = {
                         onMove(-1)
                         menuOpen = false
@@ -594,6 +598,7 @@ private fun DrawerNetworkItem(
             if (canMoveDown) {
                 DropdownMenuItem(
                     text = { Text(moveDownLabel) },
+                    leadingIcon = { Icon(Icons.Filled.KeyboardArrowDown, contentDescription = null) },
                     onClick = {
                         onMove(1)
                         menuOpen = false
@@ -604,6 +609,7 @@ private fun DrawerNetworkItem(
             if (live) {
                 DropdownMenuItem(
                     text = { Text(stringResource(R.string.drawer_disconnect)) },
+                    leadingIcon = { Icon(Icons.Outlined.CloudOff, contentDescription = null) },
                     onClick = {
                         onDisconnect()
                         menuOpen = false
@@ -622,6 +628,7 @@ private fun DrawerNetworkItem(
                             ),
                         )
                     },
+                    leadingIcon = { Icon(Icons.Outlined.Cloud, contentDescription = null) },
                     onClick = {
                         onConnect()
                         menuOpen = false
@@ -630,6 +637,7 @@ private fun DrawerNetworkItem(
             }
             DropdownMenuItem(
                 text = { Text(stringResource(R.string.drawer_server_messages)) },
+                leadingIcon = { Icon(Icons.Outlined.Terminal, contentDescription = null) },
                 onClick = {
                     onServerMessages()
                     menuOpen = false
@@ -637,6 +645,7 @@ private fun DrawerNetworkItem(
             )
             DropdownMenuItem(
                 text = { Text(stringResource(R.string.drawer_network_settings)) },
+                leadingIcon = { Icon(Icons.Outlined.Settings, contentDescription = null) },
                 onClick = {
                     onOpenNetworkSettings()
                     menuOpen = false

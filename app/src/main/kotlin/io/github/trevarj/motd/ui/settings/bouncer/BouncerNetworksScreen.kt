@@ -18,6 +18,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
@@ -409,6 +411,7 @@ private fun BouncerRow(
                         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.action_edit)) },
+                                leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
                                 onClick = {
                                     menuOpen = false
                                     onEdit(row)
@@ -419,6 +422,13 @@ private fun BouncerRow(
                                     Text(
                                         stringResource(R.string.bouncer_delete_from_bouncer),
                                         color = MaterialTheme.colorScheme.error,
+                                    )
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Outlined.Delete,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error,
                                     )
                                 },
                                 onClick = {

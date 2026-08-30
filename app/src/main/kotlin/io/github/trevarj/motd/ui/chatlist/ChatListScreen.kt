@@ -52,9 +52,11 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.outlined.Archive
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DoneAll
 import androidx.compose.material.icons.outlined.DynamicFeed
+import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.Mail
 import androidx.compose.material.icons.outlined.Notifications
@@ -648,6 +650,7 @@ fun ChatListContent(
                                             DropdownMenu(moreOpen, { moreOpen = false }) {
                                                 DropdownMenuItem(
                                                     text = { Text(stringResource(R.string.folders_manage)) },
+                                                    leadingIcon = { Icon(Icons.Outlined.FolderOpen, contentDescription = null) },
                                                     onClick = {
                                                         moreOpen = false
                                                         onOpenManageFolders()
@@ -656,6 +659,7 @@ fun ChatListContent(
                                                 )
                                                 DropdownMenuItem(
                                                     text = { Text(stringResource(R.string.folders_auto_group)) },
+                                                    leadingIcon = { Icon(Icons.Outlined.AutoAwesome, contentDescription = null) },
                                                     onClick = {
                                                         moreOpen = false
                                                         onOpenAutoGroup(state.selectedNetworkId)
@@ -665,6 +669,7 @@ fun ChatListContent(
                                                 if (state.globalFeedEnabled) {
                                                     DropdownMenuItem(
                                                         text = { Text(stringResource(R.string.chatlist_feed)) },
+                                                        leadingIcon = { Icon(Icons.Outlined.DynamicFeed, contentDescription = null) },
                                                         onClick = {
                                                             moreOpen = false
                                                             onOpenFeed()
@@ -674,6 +679,7 @@ fun ChatListContent(
                                                 }
                                                 DropdownMenuItem(
                                                     text = { Text(stringResource(R.string.chatlist_settings)) },
+                                                    leadingIcon = { Icon(Icons.Outlined.Settings, contentDescription = null) },
                                                     onClick = {
                                                         moreOpen = false
                                                         onOpenSettings()

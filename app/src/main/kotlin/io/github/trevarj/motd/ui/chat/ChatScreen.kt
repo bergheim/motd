@@ -65,7 +65,9 @@ import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.GroupAdd
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Mic
+import androidx.compose.material.icons.outlined.PeopleOutline
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.ViewAgenda
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -2280,6 +2282,7 @@ fun ChatContent(
                                         )
                                     }
                                 },
+                                leadingIcon = { Icon(Icons.Outlined.ViewAgenda, contentDescription = null) },
                                 onClick = {
                                     overflowOpen = false
                                     conversationLayoutSheetOpen = true
@@ -2299,6 +2302,7 @@ fun ChatContent(
                                         )
                                     }
                                 },
+                                leadingIcon = { Icon(Icons.Outlined.PeopleOutline, contentDescription = null) },
                                 onClick = {
                                     overflowOpen = false
                                     presenceModeSheetOpen = true

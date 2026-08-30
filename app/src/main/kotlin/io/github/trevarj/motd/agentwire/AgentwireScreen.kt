@@ -36,6 +36,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -372,6 +374,7 @@ private fun AgentwireScreen(
                             DropdownMenu(expanded = overflow, onDismissRequest = { overflow = false }) {
                                 DropdownMenuItem(
                                     text = { Text("Session log") },
+                                    leadingIcon = { Icon(Icons.Outlined.History, contentDescription = null) },
                                     onClick = {
                                         overflow = false
                                         sheet = AgentwireSheet.LOG
@@ -379,6 +382,7 @@ private fun AgentwireScreen(
                                 )
                                 DropdownMenuItem(
                                     text = { Text("View IRC transcript") },
+                                    leadingIcon = { Icon(Icons.Outlined.Terminal, contentDescription = null) },
                                     onClick = {
                                         overflow = false
                                         viewModel.viewTranscript()
