@@ -86,6 +86,26 @@ class SystemEventChunkTest {
         assertEquals("2 away · 1 back", summarizeSystemRun(run))
     }
 
+    @Test fun `newest-first gathered chunks present chronologically across consecutive pills`() {
+        val newerChunk =
+            listOf(
+                systemMessage(6, MessageKind.AWAY),
+                systemMessage(5, MessageKind.PART),
+                systemMessage(4, MessageKind.JOIN),
+            )
+        val olderChunk =
+            listOf(
+                systemMessage(3, MessageKind.AWAY),
+                systemMessage(2, MessageKind.PART),
+                systemMessage(1, MessageKind.JOIN),
+            )
+
+        val topToBottomLines =
+            listOf(olderChunk, newerChunk).flatMap(::systemRunPresentationLines)
+
+        assertEquals((1L..6L).map { "line $it" }, topToBottomLines)
+    }
+
     @Test fun `command responses group only within their own session`() {
         val join = systemMessage(1, MessageKind.JOIN)
         val first = systemMessage(2, MessageKind.SERVER_INFO, "${COMMAND_RESPONSE_PAYLOAD_PREFIX}first")

@@ -160,6 +160,9 @@ internal fun updateExpandedSystemEvents(
     expanded: Boolean,
 ): Set<Long> = if (expanded) current + runIds else current - runIds.toSet()
 
+/** Present a newest-first storage chunk chronologically inside its pill. */
+internal fun systemRunPresentationLines(run: List<MessageEntity>): List<String> = run.asReversed().map { it.text }
+
 /** Reuse lazy compositions only across rows with the same structural layout. */
 internal enum class MessageContentType {
     SYSTEM,
@@ -1255,7 +1258,7 @@ private fun SystemEventRun(
         SystemEventPill(
             summary = summary,
             lineCount = run.size,
-            loadLines = { run.map { it.text } },
+            loadLines = { systemRunPresentationLines(run) },
             contentKey = SystemRunContentKey(newest.id, oldest.id, run.size),
             expanded = systemRunExpanded(runIds, expandedEventIds),
             onExpandedChange = { expanded -> onExpandedChange(runIds, expanded) },
