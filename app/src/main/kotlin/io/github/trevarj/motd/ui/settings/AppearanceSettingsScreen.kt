@@ -71,6 +71,7 @@ import io.github.trevarj.motd.data.prefs.AvatarStyle
 import io.github.trevarj.motd.data.prefs.ColorThemePreset
 import io.github.trevarj.motd.data.prefs.DEFAULT_FONT_SCALE_PERCENT
 import io.github.trevarj.motd.data.prefs.FONT_SCALE_STEP_PERCENT
+import io.github.trevarj.motd.data.prefs.FolderDisplayMode
 import io.github.trevarj.motd.data.prefs.FontChoice
 import io.github.trevarj.motd.data.prefs.LauncherIcon
 import io.github.trevarj.motd.data.prefs.LayoutDensity
@@ -128,6 +129,7 @@ fun AppearanceSettingsScreen(
         onFollowSystem = viewModel::setFollowSystem,
         onDynamicColor = viewModel::setDynamicColor,
         onLayoutDensity = viewModel::setLayoutDensity,
+        onFolderDisplayMode = viewModel::setFolderDisplayMode,
         onAvatarStyle = viewModel::setAvatarStyle,
         onNickColorsEnabled = viewModel::setNickColorsEnabled,
         onNickColorPalette = viewModel::setNickColorPalette,
@@ -158,6 +160,7 @@ fun AppearanceSettingsContent(
     onFollowSystem: (Boolean) -> Unit,
     onDynamicColor: (Boolean) -> Unit,
     onLayoutDensity: (LayoutDensity) -> Unit,
+    onFolderDisplayMode: (FolderDisplayMode) -> Unit,
     onAvatarStyle: (AvatarStyle) -> Unit,
     onNickColorsEnabled: (Boolean) -> Unit,
     onNickColorPalette: (NickColorPalette) -> Unit,
@@ -334,6 +337,15 @@ fun AppearanceSettingsContent(
                 )
             }
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            SettingsTarget(target?.name, SettingsTarget.FOLDER_LAYOUT.name) { targetModifier ->
+                SettingsNavigationRow(
+                    title = stringResource(R.string.settings_folder_layout),
+                    value = folderDisplayModeLabel(settings.folderDisplayMode),
+                    modifier = targetModifier.testTag("settings_folder_layout_picker"),
+                    onClick = { choiceSheet = AppearanceChoice.FOLDER_LAYOUT },
+                )
+            }
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             SettingsTarget(target?.name, SettingsTarget.MESSAGE_STYLE.name) { targetModifier ->
                 SettingsNavigationRow(
                     title = stringResource(R.string.settings_density),
@@ -434,6 +446,7 @@ fun AppearanceSettingsContent(
             appearance = appearance,
             onPalette = onNickColorPalette,
             onDensity = onLayoutDensity,
+            onFolderDisplayMode = onFolderDisplayMode,
             onAvatar = onAvatarStyle,
             onTime = onTimeFormat,
             onSpacing = onMessageSpacing,
@@ -454,7 +467,7 @@ fun AppearanceSettingsContent(
     }
 }
 
-private enum class AppearanceChoice { PALETTE, DENSITY, AVATAR, TIME, SPACING, BUBBLES, LAUNCHER }
+private enum class AppearanceChoice { PALETTE, FOLDER_LAYOUT, DENSITY, AVATAR, TIME, SPACING, BUBBLES, LAUNCHER }
 
 @Composable
 private fun AppearanceChoiceSheet(
@@ -463,6 +476,7 @@ private fun AppearanceChoiceSheet(
     appearance: io.github.trevarj.motd.data.prefs.AppearanceConfig,
     onPalette: (NickColorPalette) -> Unit,
     onDensity: (LayoutDensity) -> Unit,
+    onFolderDisplayMode: (FolderDisplayMode) -> Unit,
     onAvatar: (AvatarStyle) -> Unit,
     onTime: (TimeFormat) -> Unit,
     onSpacing: (io.github.trevarj.motd.data.prefs.MessageSpacing) -> Unit,
@@ -479,6 +493,20 @@ private fun AppearanceChoiceSheet(
                 onSelect = onPalette,
                 onDismiss = onDismiss,
                 tag = "settings_palette_sheet",
+            )
+        }
+
+        AppearanceChoice.FOLDER_LAYOUT -> {
+            SingleChoiceSheet(
+                title = stringResource(R.string.settings_folder_layout),
+                selected = settings.folderDisplayMode,
+                options =
+                    FolderDisplayMode.entries.map {
+                        ChoiceOption(it, folderDisplayModeLabel(it), folderDisplayModeDescription(it), "settings_folder_layout_${it.name.lowercase()}")
+                    },
+                onSelect = onFolderDisplayMode,
+                onDismiss = onDismiss,
+                tag = "settings_folder_layout_sheet",
             )
         }
 
@@ -564,6 +592,24 @@ private fun nickPaletteLabel(value: NickColorPalette): String =
             NickColorPalette.THEME -> R.string.settings_palette_theme
             NickColorPalette.CLASSIC -> R.string.settings_palette_classic
             NickColorPalette.VIVID -> R.string.settings_palette_vivid
+        },
+    )
+
+@Composable
+private fun folderDisplayModeLabel(value: FolderDisplayMode): String =
+    stringResource(
+        when (value) {
+            FolderDisplayMode.INLINE -> R.string.settings_folder_layout_inline
+            FolderDisplayMode.TABS -> R.string.settings_folder_layout_tabs
+        },
+    )
+
+@Composable
+private fun folderDisplayModeDescription(value: FolderDisplayMode): String =
+    stringResource(
+        when (value) {
+            FolderDisplayMode.INLINE -> R.string.settings_folder_layout_inline_desc
+            FolderDisplayMode.TABS -> R.string.settings_folder_layout_tabs_desc
         },
     )
 
@@ -1047,6 +1093,7 @@ private fun AppearanceSettingsPreview() {
             onFollowSystem = {},
             onDynamicColor = {},
             onLayoutDensity = {},
+            onFolderDisplayMode = {},
             onAvatarStyle = {},
             onNickColorsEnabled = {},
             onNickColorPalette = {},
@@ -1080,6 +1127,7 @@ private fun AppearanceSettingsMinTextPreview() {
             onFollowSystem = {},
             onDynamicColor = {},
             onLayoutDensity = {},
+            onFolderDisplayMode = {},
             onAvatarStyle = {},
             onNickColorsEnabled = {},
             onNickColorPalette = {},
@@ -1113,6 +1161,7 @@ private fun AppearanceSettingsMaxTextPreview() {
             onFollowSystem = {},
             onDynamicColor = {},
             onLayoutDensity = {},
+            onFolderDisplayMode = {},
             onAvatarStyle = {},
             onNickColorsEnabled = {},
             onNickColorPalette = {},

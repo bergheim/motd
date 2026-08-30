@@ -32,7 +32,13 @@ class SettingsSearchTest {
 
         val composer = searchSettings("bold", entries).single().destination as SettingsSearchDestination.Page
         val encrypted = searchSettings("encrypted", entries).single().destination as SettingsSearchDestination.Page
+        val folderLayout = searchSettings("tabs", entries).single()
+        val folderDestination = folderLayout.destination as SettingsSearchDestination.Page
 
+        assertEquals("Folder layout", folderLayout.title)
+        assertEquals("Choose how folders appear in the chat list.", folderLayout.summary)
+        assertEquals(SettingsSearchPage.APPEARANCE, folderDestination.page)
+        assertEquals(SettingsTarget.FOLDER_LAYOUT, folderDestination.target)
         assertEquals(SettingsSearchPage.CHAT, composer.page)
         assertEquals(SettingsTarget.COMPOSER_FORMATTING, composer.target)
         assertEquals(SettingsSearchPage.BACKUP, encrypted.page)
@@ -112,6 +118,8 @@ class SettingsSearchTest {
             R.string.network_settings_avatar_section -> "Avatar"
             R.string.network_settings_tools_section -> "Network tools"
             R.string.settings_search_network_summary -> "Open this network section"
+            R.string.settings_folder_layout -> "Folder layout"
+            R.string.settings_folder_layout_desc -> "Choose how folders appear in the chat list."
             else -> "resource-$id"
         }
 

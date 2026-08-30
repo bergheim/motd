@@ -17,6 +17,7 @@ import io.github.trevarj.motd.data.prefs.BouncerKindPrefsImpl
 import io.github.trevarj.motd.data.prefs.BubbleCornerStyle
 import io.github.trevarj.motd.data.prefs.ContentPreviewPrefsImpl
 import io.github.trevarj.motd.data.prefs.DataStoreSettingsRepository
+import io.github.trevarj.motd.data.prefs.FolderDisplayMode
 import io.github.trevarj.motd.data.prefs.FontChoice
 import io.github.trevarj.motd.data.prefs.LauncherIcon
 import io.github.trevarj.motd.data.prefs.MessageSpacing
@@ -329,6 +330,29 @@ class ConfigurationBackupRepositoryTest {
             backup.import(encrypted, password = "backup-password", importMode = BackupImportMode.MERGE)
             assertEquals("camera-user", prefs.config.first().username)
             assertEquals("camera-secret", prefs.config.first().password)
+        }
+
+    @Test
+    fun folderDisplayModeRoundTripsThroughSettingsBackup() =
+        runTest {
+            val context = ApplicationProvider.getApplicationContext<Context>()
+            val settings = DataStoreSettingsRepository(context)
+            val backup = repository(inMemoryDb())
+            try {
+                settings.setFolderDisplayMode(FolderDisplayMode.TABS)
+                val raw = backup.exportToString(mode = BackupExportMode.CREDENTIALS_EXCLUDED, nowEpochMillis = 1_000L)
+
+                settings.setFolderDisplayMode(FolderDisplayMode.INLINE)
+                backup.import(raw, importMode = BackupImportMode.MERGE)
+                assertEquals(FolderDisplayMode.TABS, settings.settings.first().folderDisplayMode)
+
+                val oldRaw = raw.replace(Regex(",\\s*\"folderDisplayMode\"\\s*:\\s*\"TABS\""), "")
+                assertFalse(oldRaw.contains("folderDisplayMode"))
+                backup.import(oldRaw, importMode = BackupImportMode.MERGE)
+                assertEquals(FolderDisplayMode.INLINE, settings.settings.first().folderDisplayMode)
+            } finally {
+                settings.setFolderDisplayMode(FolderDisplayMode.INLINE)
+            }
         }
 
     @Test

@@ -12,6 +12,7 @@ import io.github.trevarj.motd.data.db.InvitationEventRow
 import io.github.trevarj.motd.data.db.InviteState
 import io.github.trevarj.motd.data.db.MuteBacklogSuppression
 import io.github.trevarj.motd.data.db.NetworkEntity
+import io.github.trevarj.motd.data.prefs.FolderDisplayMode
 import io.github.trevarj.motd.data.prefs.GlobalFeedPrefs
 import io.github.trevarj.motd.data.prefs.OnboardingPrefs
 import io.github.trevarj.motd.data.prefs.SettingsRepository
@@ -103,6 +104,7 @@ data class ChatListState(
     val archivedRows: List<ChatListRow> = emptyList(),
     val invitations: List<ChatListInvitation> = emptyList(),
     val folders: List<ChatFolderEntity> = emptyList(),
+    val folderDisplayMode: FolderDisplayMode = FolderDisplayMode.INLINE,
     val connection: Map<Long, IrcClientState> = emptyMap(),
     val queryPresence: Map<Long, PresenceState> = emptyMap(),
     val networks: List<NetworkEntity> = emptyList(),
@@ -285,6 +287,7 @@ class ChatListViewModel
                             .filter { it.bufferId in scopedBufferIds }
                             .mapNotNull(::toChatListInvitation),
                     folders = folders,
+                    folderDisplayMode = settings.folderDisplayMode,
                     connection = connection,
                     queryPresence =
                         scopedRows

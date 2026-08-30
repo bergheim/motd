@@ -10,6 +10,7 @@ import io.github.trevarj.motd.data.prefs.AppearancePrefs
 import io.github.trevarj.motd.data.prefs.AvatarStyle
 import io.github.trevarj.motd.data.prefs.BubbleCornerStyle
 import io.github.trevarj.motd.data.prefs.ColorThemePreset
+import io.github.trevarj.motd.data.prefs.FolderDisplayMode
 import io.github.trevarj.motd.data.prefs.FontChoice
 import io.github.trevarj.motd.data.prefs.LauncherIcon
 import io.github.trevarj.motd.data.prefs.LayoutDensity
@@ -62,6 +63,8 @@ class AppearanceSettingsViewModel
         fun setDynamicColor(value: Boolean) = launch { settingsRepository.setDynamicColor(value) }
 
         fun setLayoutDensity(value: LayoutDensity) = launch { settingsRepository.setLayoutDensity(value) }
+
+        fun setFolderDisplayMode(value: FolderDisplayMode) = launch { settingsRepository.setFolderDisplayMode(value) }
 
         fun setAvatarStyle(value: AvatarStyle) = launch { settingsRepository.setAvatarStyle(value) }
 

@@ -39,6 +39,7 @@ internal object PrefKeys {
 
     // Round 4
     val LAYOUT_DENSITY = stringPreferencesKey("layout_density")
+    val FOLDER_DISPLAY_MODE = stringPreferencesKey("folder_display_mode")
     val NICK_COLORS_ENABLED = stringPreferencesKey("nick_colors_enabled")
     val NICK_COLOR_PALETTE = stringPreferencesKey("nick_color_palette")
     val NICK_COLOR_OVERRIDES = stringPreferencesKey("nick_color_overrides")
@@ -148,6 +149,7 @@ class DataStoreSettingsRepository
                     autoAwayEnabled = prefs[PrefKeys.AUTO_AWAY_ENABLED]?.toBooleanStrictOrNull() ?: false,
                     autoAwayMinutes = autoAwayMinutesFromPreference(prefs[PrefKeys.AUTO_AWAY_MINUTES]?.toIntOrNull()),
                     autoAwayMessage = prefs[PrefKeys.AUTO_AWAY_MESSAGE].orEmpty(),
+                    folderDisplayMode = folderDisplayModeFromPreference(prefs[PrefKeys.FOLDER_DISPLAY_MODE]),
                 )
             }
 
@@ -167,6 +169,10 @@ class DataStoreSettingsRepository
 
         override suspend fun setLayoutDensity(d: LayoutDensity) {
             store.edit { it[PrefKeys.LAYOUT_DENSITY] = d.name }
+        }
+
+        override suspend fun setFolderDisplayMode(mode: FolderDisplayMode) {
+            store.edit { it[PrefKeys.FOLDER_DISPLAY_MODE] = mode.name }
         }
 
         override suspend fun setNickColorsEnabled(enabled: Boolean) {

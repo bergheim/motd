@@ -30,6 +30,11 @@ enum class NickColorPalette { THEME, CLASSIC, VIVID }
 
 enum class FoolsMode { COLLAPSE, HIDE }
 
+enum class FolderDisplayMode { INLINE, TABS }
+
+/** Decode folder presentation without letting unknown future values break startup. */
+internal fun folderDisplayModeFromPreference(saved: String?): FolderDisplayMode = saved?.let { runCatching { FolderDisplayMode.valueOf(it) }.getOrNull() } ?: FolderDisplayMode.INLINE
+
 /**
  * How presence events (join/part/quit and nick changes) are presented in a conversation.
  *
@@ -163,6 +168,8 @@ data class Settings(
     val autoAwayMinutes: Int = DEFAULT_AUTO_AWAY_MINUTES,
     /** Away text written by auto-away; blank means "use the localized default". */
     val autoAwayMessage: String = "",
+    /** Present chat folders as expandable inline sections or a tab strip. */
+    val folderDisplayMode: FolderDisplayMode = FolderDisplayMode.INLINE,
 )
 
 /** Canonical key for friends/fools/override lookups: trimmed + lowercased.
@@ -190,6 +197,8 @@ interface SettingsRepository {
 
     // Round 4
     suspend fun setLayoutDensity(d: LayoutDensity)
+
+    suspend fun setFolderDisplayMode(mode: FolderDisplayMode) {}
 
     suspend fun setNickColorsEnabled(enabled: Boolean)
 

@@ -492,6 +492,7 @@ class ConfigurationBackupRepositoryImpl
                 settingsRepository.setDynamicColor(it.dynamicColor)
                 settingsRepository.setDeliveryMode(it.deliveryMode)
                 settingsRepository.setLayoutDensity(it.layoutDensity)
+                settingsRepository.setFolderDisplayMode(it.folderDisplayMode)
                 settingsRepository.setNickColorsEnabled(it.nickColorsEnabled)
                 settingsRepository.setNickColorPalette(it.nickColorPalette)
                 current.nickColorOverrides.keys

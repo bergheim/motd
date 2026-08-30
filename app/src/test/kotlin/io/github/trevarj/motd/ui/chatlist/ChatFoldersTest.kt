@@ -39,6 +39,34 @@ class ChatFoldersTest {
     }
 
     @Test
+    fun tabsKeepStoredOrderDropEmptyScopedFoldersAndRetainPins() {
+        val first = ChatFolderEntity(id = 7, displayName = "First", normalizedName = "first", ordering = 0)
+        val second = ChatFolderEntity(id = 8, displayName = "Second", normalizedName = "second", ordering = 1)
+        val empty = ChatFolderEntity(id = 9, displayName = "Empty", normalizedName = "empty", ordering = 2)
+        val pinned = row(1, "#pinned", folderId = 8, pinned = true)
+        val regular = row(2, "#regular", folderId = 7)
+        val otherScope = row(3, "#other", network = 2, folderId = 9)
+
+        val tabs = presentFolderTabs(listOf(pinned, regular), listOf(second, first, empty))
+
+        assertEquals(listOf(8L, 7L), tabs.map { it.folder.id })
+        assertEquals(listOf(1L), tabs.first().children.map(ChatListRow::bufferId))
+        assertTrue(
+            tabs
+                .first()
+                .children
+                .single()
+                .pinned,
+        )
+        assertFalse(tabs.first().temporarilyExpanded)
+        assertEquals(
+            listOf(7L, 8L, 9L),
+            presentFolderTabs(listOf(regular, pinned, otherScope), listOf(first, second, empty))
+                .map { it.folder.id },
+        )
+    }
+
+    @Test
     fun collapsedSummaryUsesMutedPreviewButNotMutedBadges() {
         val mutedLatest = row(1, "#one", folderId = 7, muted = true, time = 20, unread = 9, mentions = 3)
         val older = row(2, "#two", folderId = 7, time = 10, unread = 2, incomplete = true)

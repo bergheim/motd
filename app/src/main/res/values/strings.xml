@@ -164,6 +164,12 @@
     <string name="settings_theme_light_group">Light</string>
     <string name="settings_theme_dark_group">Dark</string>
     <string name="settings_layout_section">Chat layout</string>
+    <string name="settings_folder_layout">Folder layout</string>
+    <string name="settings_folder_layout_desc">Choose how folders appear in the chat list.</string>
+    <string name="settings_folder_layout_inline">Inline</string>
+    <string name="settings_folder_layout_inline_desc">Show folders as expandable sections.</string>
+    <string name="settings_folder_layout_tabs">Tabs</string>
+    <string name="settings_folder_layout_tabs_desc">Show folders in a tab strip.</string>
     <string name="settings_delivery">Message delivery</string>
     <string name="settings_delivery_method">Delivery method</string>
     <string name="settings_background_reliability">Background reliability</string>
@@ -1237,6 +1243,7 @@
     <string name="chatlist_unarchive">Unarchive</string>
 
     <!-- Local flat chat folders and reviewed Auto-group. -->
+    <string name="folders_all">All</string>
     <string name="folders_manage">Manage Folders</string>
     <string name="folders_create">Create folder</string>
     <string name="folders_edit">Edit folder</string>

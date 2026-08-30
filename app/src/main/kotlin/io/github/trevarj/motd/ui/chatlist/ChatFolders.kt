@@ -63,6 +63,18 @@ fun presentChatFolders(
     return FolderChatListPresentation(pinned, presented, sectionChatList(remaining, friends, fools))
 }
 
+/** Non-empty tabs from already-scoped active rows. Raw assignments, pins, and stored order survive. */
+fun presentFolderTabs(
+    rows: List<ChatListRow>,
+    folders: List<ChatFolderEntity>,
+): List<PresentedChatFolder> {
+    val byFolder = rows.filter { it.folderId != null }.groupBy(ChatListRow::folderId)
+    return folders.mapNotNull { folder ->
+        val children = byFolder[folder.id].orEmpty()
+        if (children.isEmpty()) null else PresentedChatFolder(folder, children, summarizeFolder(children), temporarilyExpanded = false)
+    }
+}
+
 fun summarizeFolder(rows: List<ChatListRow>): ChatFolderSummary {
     val latest = rows.maxWithOrNull(compareBy<ChatListRow> { it.lastMessageTime ?: Long.MIN_VALUE }.thenBy(ChatListRow::bufferId))
     val badgeRows = rows.filterNot(ChatListRow::muted)

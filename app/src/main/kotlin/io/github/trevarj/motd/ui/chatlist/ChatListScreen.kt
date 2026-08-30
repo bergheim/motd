@@ -82,11 +82,13 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -158,6 +160,7 @@ import io.github.trevarj.motd.data.db.ChatListRow
 import io.github.trevarj.motd.data.db.InviteState
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
+import io.github.trevarj.motd.data.prefs.FolderDisplayMode
 import io.github.trevarj.motd.data.repo.FolderIconRef
 import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.ui.components.AudioMiniPlayer
@@ -364,8 +367,23 @@ fun ChatListContent(
     // The per-row network tag is redundant once the list is scoped to one network.
     val showNetworkChip = state.networks.size > 1 && state.selectedNetworkId == null
     val visibleRows = if (archiveMode) state.archivedRows else state.rows
-    var selectedIds by rememberSaveable(archiveMode, invitationMode, state.selectedNetworkId) { mutableStateOf(emptyList<Long>()) }
-    val selectedRows = orderedSelectedRows(visibleRows, selectedIds)
+    val folderTabs = if (state.folderDisplayMode == FolderDisplayMode.TABS) presentFolderTabs(state.rows, state.folders) else emptyList()
+    var selectedFolderId by rememberSaveable { mutableStateOf<Long?>(null) }
+    val effectiveFolderId = selectedFolderId?.takeIf { id -> folderTabs.any { it.folder.id == id } }
+    LaunchedEffect(state.loading, state.folderDisplayMode, selectedFolderId, folderTabs.map { it.folder.id }) {
+        if (!state.loading && state.folderDisplayMode == FolderDisplayMode.TABS && selectedFolderId != effectiveFolderId) {
+            selectedFolderId = null
+        }
+    }
+    val displayedRows =
+        if (!archiveMode && !invitationMode && state.folderDisplayMode == FolderDisplayMode.TABS) {
+            effectiveFolderId?.let { id -> state.rows.filter { it.folderId == id } } ?: state.rows
+        } else {
+            visibleRows
+        }
+    var tabChangeSignal by rememberSaveable { mutableIntStateOf(0) }
+    var selectedIds by rememberSaveable(archiveMode, invitationMode, state.selectedNetworkId, effectiveFolderId) { mutableStateOf(emptyList<Long>()) }
+    val selectedRows = orderedSelectedRows(displayedRows, selectedIds)
     val selectionActive = selectedRows.isNotEmpty()
     val topBarMode =
         chatListTopBarMode(
@@ -391,9 +409,9 @@ fun ChatListContent(
         if (!archiveMode && archived && ids.isNotEmpty()) archiveRevealSignal += 1
     }
 
-    LaunchedEffect(visibleRows) {
-        selectedIds = pruneSelectedIds(selectedIds, visibleRows)
-        if (confirmRemoval && orderedSelectedRows(visibleRows, selectedIds).isEmpty()) confirmRemoval = false
+    LaunchedEffect(displayedRows) {
+        selectedIds = pruneSelectedIds(selectedIds, displayedRows)
+        if (confirmRemoval && orderedSelectedRows(displayedRows, selectedIds).isEmpty()) confirmRemoval = false
     }
 
     // One ordered Back policy keeps drawer, transient selection, and archive mode independent.
@@ -738,6 +756,21 @@ fun ChatListContent(
                         )
                     }
 
+                    if (!archiveMode && !invitationMode && folderTabs.isNotEmpty()) {
+                        FolderTabStrip(
+                            folders = folderTabs,
+                            allSummary = summarizeFolder(state.rows),
+                            selectedFolderId = effectiveFolderId,
+                            onSelect = { folderId ->
+                                if (folderId != effectiveFolderId) {
+                                    selectedIds = emptyList()
+                                    selectedFolderId = folderId
+                                    tabChangeSignal++
+                                }
+                            },
+                        )
+                    }
+
                     val hasInvitationRoute = state.invitations.any(ChatListInvitation::actionable)
                     if (!invitationMode && !shouldRenderChatList(archiveMode, state.rows, state.archivedRows) && !hasInvitationRoute && !state.loading) {
                         val noNetworks = !archiveMode && state.networks.isEmpty()
@@ -776,10 +809,10 @@ fun ChatListContent(
                         )
                     } else {
                         ChatList(
-                            rows = visibleRows,
-                            archivedRows = state.archivedRows,
-                            folders = state.folders,
-                            invitations = state.invitations,
+                            rows = displayedRows,
+                            archivedRows = if (effectiveFolderId == null || archiveMode || invitationMode) state.archivedRows else emptyList(),
+                            folders = if (state.folderDisplayMode == FolderDisplayMode.INLINE) state.folders else emptyList(),
+                            invitations = if (effectiveFolderId == null || archiveMode || invitationMode) state.invitations else emptyList(),
                             archiveMode = archiveMode,
                             invitationMode = invitationMode,
                             archiveRevealSignal = archiveRevealSignal,
@@ -805,6 +838,7 @@ fun ChatListContent(
                             onToggleSelection = { id -> selectedIds = toggleSelectedId(selectedIds, id) },
                             onStartSelection = { id -> selectedIds = addSelectedId(selectedIds, id) },
                             onRemoveSelection = { ids -> selectedIds = selectedIds.filterNot(ids::contains) },
+                            scrollToTopSignal = tabChangeSignal,
                         )
                     }
                 }
@@ -951,6 +985,76 @@ private fun ScopeChip(
     }
 }
 
+@Composable
+private fun FolderTabStrip(
+    folders: List<PresentedChatFolder>,
+    allSummary: ChatFolderSummary,
+    selectedFolderId: Long?,
+    onSelect: (Long?) -> Unit,
+) {
+    val selectedIndex = folders.indexOfFirst { it.folder.id == selectedFolderId }.let { if (it < 0) 0 else it + 1 }
+    PrimaryScrollableTabRow(
+        selectedTabIndex = selectedIndex,
+        edgePadding = 0.dp,
+        modifier = Modifier.fillMaxWidth().testTag("chatlist_folder_tabs"),
+    ) {
+        Tab(
+            selected = selectedFolderId == null,
+            onClick = { onSelect(null) },
+            modifier = Modifier.testTag("chatlist_folder_tab_all"),
+            text = {
+                FolderTabLabel(
+                    name = stringResource(R.string.folders_all),
+                    summary = allSummary,
+                    icon = { Icon(Icons.Outlined.Forum, contentDescription = null, modifier = Modifier.size(20.dp)) },
+                )
+            },
+        )
+        folders.forEach { folder ->
+            val tint = remember(folder.folder.displayName) { Color.hsv((folderColorSeed(folder.folder.displayName).toUInt() % 360u).toFloat(), .55f, .72f) }
+            Tab(
+                selected = selectedFolderId == folder.folder.id,
+                onClick = { onSelect(folder.folder.id) },
+                modifier = Modifier.testTag("chatlist_folder_tab_${folder.folder.id}"),
+                text = {
+                    FolderTabLabel(
+                        name = folder.folder.displayName,
+                        summary = folder.summary,
+                        icon = {
+                            FolderIcon(
+                                FolderIconRef(folder.folder.iconKind, folder.folder.iconKey),
+                                contentDescription = null,
+                                tint = tint,
+                                modifier = Modifier.size(20.dp).testTag("chatlist_folder_tab_icon_${folder.folder.id}"),
+                            )
+                        },
+                        activityColor = tint,
+                    )
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun FolderTabLabel(
+    name: String,
+    summary: ChatFolderSummary,
+    icon: @Composable () -> Unit,
+    activityColor: Color = MaterialTheme.colorScheme.primary,
+) {
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        icon()
+        Text(name, maxLines = 1)
+        val badge = if (summary.mentionCount > 0) summary.mentionCount else summary.unreadCount
+        when {
+            badge > 0 -> Badge { Text(if (badge > 999) "999+" else badge.toString()) }
+            summary.unreadIncomplete || summary.mentionIncomplete -> Badge { Text("?") }
+            summary.advertisedActivity -> Text("•", color = activityColor)
+        }
+    }
+}
+
 /** Signals that move the chat list between "reorders are watched" and "reorders are replayed". */
 internal enum class ChatListPlacementSignal {
     /** The pane's own destination reached RESUMED: on screen, on top, and being drawn. */
@@ -1085,6 +1189,7 @@ private fun ChatList(
     onToggleSelection: (Long) -> Unit,
     onStartSelection: (Long) -> Unit,
     onRemoveSelection: (Collection<Long>) -> Unit,
+    scrollToTopSignal: Int,
 ) {
     // Pinned rows escape folders; non-empty folders follow in manual order, then legacy tiers.
     val presentation = presentChatFolders(rows, folders, friends, fools, activeBufferId)
@@ -1092,6 +1197,13 @@ private fun ChatList(
     // Fools section is collapsed by default; state is local to the screen (accepted).
     var foolsExpanded by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
+    var handledScrollToTopSignal by rememberSaveable { mutableIntStateOf(scrollToTopSignal) }
+    LaunchedEffect(scrollToTopSignal) {
+        if (handledScrollToTopSignal != scrollToTopSignal) {
+            listState.scrollToItem(0)
+            handledScrollToTopSignal = scrollToTopSignal
+        }
+    }
     // Resolved once so every row in every section shares one placement decision per frame.
     val placementSpec = ChatListItemMotion.rememberPlacementSpec()
     val scope = rememberCoroutineScope()
@@ -1342,6 +1454,7 @@ private fun ChatList(
             modifier =
                 Modifier
                     .fillMaxSize()
+                    .testTag("chatlist_rows")
                     .graphicsLayer {
                         translationY =
                             when {

@@ -59,6 +59,7 @@ enum class SettingsTarget {
     APP_FONT,
     UI_FONT_SIZE,
     CONVERSATION_FONT_SIZE,
+    FOLDER_LAYOUT,
     MESSAGE_STYLE,
     AVATAR_STYLE,
     TIMESTAMPS,

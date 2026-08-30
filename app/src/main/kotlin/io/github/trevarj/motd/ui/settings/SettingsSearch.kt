@@ -149,6 +149,7 @@ private val STATIC_SEARCH_SPECS =
         spec(R.string.settings_app_font, R.string.settings_layout_section, "typeface text", SettingsSearchPage.APPEARANCE, SettingsTarget.APP_FONT),
         spec(R.string.settings_ui_font_size, R.string.settings_ui_font_size_desc, "interface text scale", SettingsSearchPage.APPEARANCE, SettingsTarget.UI_FONT_SIZE),
         spec(R.string.settings_conversation_font_size, R.string.settings_conversation_font_size_desc, "message text scale", SettingsSearchPage.APPEARANCE, SettingsTarget.CONVERSATION_FONT_SIZE),
+        spec(R.string.settings_folder_layout, R.string.settings_folder_layout_desc, "folders tabs inline chat list", SettingsSearchPage.APPEARANCE, SettingsTarget.FOLDER_LAYOUT),
         spec(R.string.settings_density, R.string.settings_density_comfortable_desc, "layout compact two line bubbles", SettingsSearchPage.APPEARANCE, SettingsTarget.MESSAGE_STYLE),
         spec(R.string.settings_avatar_style, R.string.settings_avatar_irc_sprite_desc, "monogram initials sprite", SettingsSearchPage.APPEARANCE, SettingsTarget.AVATAR_STYLE),
         spec(R.string.settings_show_timestamps, R.string.settings_show_timestamps_desc, "time", SettingsSearchPage.APPEARANCE, SettingsTarget.TIMESTAMPS),
