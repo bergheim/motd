@@ -1,0 +1,4 @@
+- Media now loads according to your network preferences.
+- Link previews are safer when pages redirect or reference private addresses.
+- Replies warn when the original sender has left the channel.
+- Join, leave, and other presence updates stay chronological when grouped.
