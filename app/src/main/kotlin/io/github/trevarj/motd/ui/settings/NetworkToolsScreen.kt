@@ -107,41 +107,23 @@ fun NetworkToolsContent(
     onSetMuted: (Long, Boolean) -> Unit = { _, _ -> },
     onSendCommand: (IrcMessage) -> Unit = {},
 ) {
-    Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.network_tools_title)) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.onboarding_back))
-                    }
-                },
+    SettingsScaffold(
+        title = stringResource(R.string.network_tools_title),
+        onBack = onBack,
+        snackbarHostState = snackbarHostState,
+        modifier = Modifier.testTag("screen_network_tools"),
+    ) {
+        state.status?.let { status ->
+            val text = networkToolsStatusText(status)
+            PersistentStatusNotice(
+                text = stringResource(R.string.network_tools_status, stringResource(text.resId, *text.args)),
+                error = status is NetworkToolsStatus.IgnoreFailed || status is NetworkToolsStatus.CommandFailed,
+                modifier = Modifier.testTag("network_tools_status"),
             )
-        },
-    ) { padding ->
-        Column(
-            modifier =
-                Modifier
-                    .fillMaxSize()
-                    .padding(padding)
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            state.status?.let { status ->
-                val text = networkToolsStatusText(status)
-                Text(
-                    text = stringResource(R.string.network_tools_status, stringResource(text.resId, *text.args)),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.testTag("network_tools_status"),
-                )
-            }
-            IgnoreSection(state, onAddIgnore, onSetIgnoreEnabled, onDeleteIgnore)
-            MuteSection(state, onSetMuted)
-            OperatorSection(state, onSendCommand)
         }
+        IgnoreSection(state, onAddIgnore, onSetIgnoreEnabled, onDeleteIgnore)
+        MuteSection(state, onSetMuted)
+        OperatorSection(state, onSendCommand)
     }
 }
 

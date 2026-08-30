@@ -37,6 +37,16 @@ class NavGraphTest {
     }
 
     @Test
+    fun `settings routes retain typed targets and concrete network identity`() {
+        assertEquals(SettingsTarget.THEME, AppearanceSettingsRoute(SettingsTarget.THEME).target)
+        assertEquals(SettingsTarget.EXPORT_BACKUP, BackupRestoreRoute(SettingsTarget.EXPORT_BACKUP).target)
+        assertEquals(
+            NetworkSettingsRoute(42, NetworkSettingsTarget.OBFUSCATION),
+            NetworkSettingsRoute(networkId = 42, target = NetworkSettingsTarget.OBFUSCATION),
+        )
+    }
+
+    @Test
     fun `opening another chat pushes its route and keeps the previous chat for back`() {
         val controller =
             NavHostController(ApplicationProvider.getApplicationContext<Context>()).apply {

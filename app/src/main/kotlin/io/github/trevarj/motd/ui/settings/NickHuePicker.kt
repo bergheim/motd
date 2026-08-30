@@ -2,7 +2,6 @@ package io.github.trevarj.motd.ui.settings
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,6 +11,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
@@ -21,7 +22,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import io.github.trevarj.motd.R
@@ -53,9 +58,11 @@ fun NickHuePickerDialog(
                     columns = GridCells.Fixed(6),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.selectableGroup(),
                 ) {
                     items(PICKER_HUES, key = { it }) { hue ->
                         val selected = hue == currentHue
+                        val description = stringResource(R.string.manage_color_hue, hue)
                         // Swatch filled with the resolved palette color; selected swatch gets a border.
                         Box(
                             modifier =
@@ -69,7 +76,9 @@ fun NickHuePickerDialog(
                                         } else {
                                             Modifier
                                         },
-                                    ).clickable { onPick(hue) },
+                                    ).testTag("nick_hue_$hue")
+                                    .semantics { contentDescription = description }
+                                    .selectable(selected = selected, role = Role.RadioButton) { onPick(hue) },
                         )
                     }
                 }

@@ -1,5 +1,6 @@
 package io.github.trevarj.motd.ui.nav
 
+import androidx.annotation.Keep
 import kotlinx.serialization.Serializable
 
 @Serializable data object ChatListRoute
@@ -28,22 +29,115 @@ import kotlinx.serialization.Serializable
     val returnChannel: String? = null,
 )
 
-@Serializable data object AboutRoute
+@Serializable data class AboutRoute(
+    val target: SettingsTarget? = null,
+)
 
-@Serializable data object SettingsRoute
+@Serializable data class SettingsRoute(
+    val target: SettingsTarget? = null,
+)
+
+/** Typed anchors used by global Settings search. */
+@Keep
+@Serializable
+enum class SettingsTarget {
+    NETWORKS,
+    APPEARANCE,
+    CHAT,
+    DELIVERY,
+    UPLOADS,
+    BACKUP,
+    LABS,
+    ABOUT,
+    THEME,
+    FOLLOW_SYSTEM,
+    TRUE_BLACK,
+    DYNAMIC_COLOR,
+    NICK_COLORS,
+    NICK_PALETTE,
+    NICK_OVERRIDES,
+    APP_FONT,
+    UI_FONT_SIZE,
+    CONVERSATION_FONT_SIZE,
+    MESSAGE_STYLE,
+    AVATAR_STYLE,
+    TIMESTAMPS,
+    TIME_FORMAT,
+    MESSAGE_SPACING,
+    BUBBLE_CORNERS,
+    WALLPAPER,
+    LAUNCHER_ICON,
+    PRESENCE,
+    DELETED_MESSAGES,
+    IMAGES,
+    LINK_PREVIEWS,
+    MEDIA_UNMETERED,
+    MEDIA_METERED,
+    PROXIED_MEDIA,
+    SHARED_AVATARS,
+    AUTO_AWAY,
+    AUTO_AWAY_DELAY,
+    AWAY_MESSAGE,
+    CHAT_SOUNDS,
+    COMPOSER_EMOJI,
+    COMPOSER_FORMATTING,
+    REPLY_PREFIX,
+    DIRECT_CONNECTIONS,
+    VOICE_QUALITY,
+    VOICE_NOISE_REDUCTION,
+    VOICE_ENCRYPTION,
+    AUDIO_CACHE,
+    FRIENDS,
+    FOOLS,
+    FOOLS_MODE,
+    PERSISTENT_DELIVERY,
+    UNIFIED_PUSH,
+    START_ON_BOOT,
+    BATTERY,
+    UPLOAD_PROVIDER,
+    UPLOAD_CONNECTION,
+    UPLOAD_PRIVACY,
+    UPLOAD_LIMIT,
+    EXPORT_BACKUP,
+    IMPORT_BACKUP,
+    GESTURES,
+    AGENTWIRE,
+    GLOBAL_FEED,
+    DIAGNOSTICS,
+    LICENSE,
+    PROJECT,
+}
+
+@Keep
+@Serializable
+enum class NetworkSettingsTarget { CONNECTION, AUTHENTICATION, OBFUSCATION, AVATAR, TOOLS }
 
 // Settings category sub-screens (reached from the top-level Settings list).
-@Serializable data object AppearanceSettingsRoute
+@Serializable data class AppearanceSettingsRoute(
+    val target: SettingsTarget? = null,
+)
 
-@Serializable data object ChatSettingsRoute
+@Serializable data class ChatSettingsRoute(
+    val target: SettingsTarget? = null,
+)
 
 @Serializable data object DirectConnectionsRoute
 
-@Serializable data object DeliverySettingsRoute
+@Serializable data class DeliverySettingsRoute(
+    val target: SettingsTarget? = null,
+)
 
-@Serializable data object NetworksSettingsRoute
+@Serializable data class UploadsSettingsRoute(
+    val target: SettingsTarget? = null,
+)
 
-@Serializable data object BackupRestoreRoute
+@Serializable data class NetworksSettingsRoute(
+    val target: SettingsTarget? = null,
+)
+
+@Serializable data class BackupRestoreRoute(
+    val target: SettingsTarget? = null,
+)
 
 @Serializable data object ManageFoldersRoute
 
@@ -56,13 +150,16 @@ import kotlinx.serialization.Serializable
 )
 
 // Experimental features (gestures, Agentwire harness) live under their own category.
-@Serializable data object LabsRoute
+@Serializable data class LabsRoute(
+    val target: SettingsTarget? = null,
+)
 
 // The gesture lab's menu-graph editor, reached from Labs > Gestures > Configure menu.
 @Serializable data object GestureMenuEditorRoute
 
 @Serializable data class NetworkSettingsRoute(
     val networkId: Long,
+    val target: NetworkSettingsTarget? = null,
 )
 
 @Serializable data class NetworkToolsRoute(

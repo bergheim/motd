@@ -1,6 +1,5 @@
 package io.github.trevarj.motd.ui.settings
 
-import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -18,6 +17,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -27,7 +27,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -48,6 +47,7 @@ import io.github.trevarj.motd.data.prefs.Settings
 import io.github.trevarj.motd.service.autoAwayText
 import io.github.trevarj.motd.ui.chat.presenceModeDescription
 import io.github.trevarj.motd.ui.chat.presenceModeLabel
+import io.github.trevarj.motd.ui.nav.SettingsTarget
 import io.github.trevarj.motd.ui.theme.MotdTheme
 import io.github.trevarj.motd.ui.theme.SheetSystemBars
 
@@ -58,20 +58,21 @@ fun ChatSettingsScreen(
     onOpenFriends: () -> Unit = {},
     onOpenFools: () -> Unit = {},
     onOpenDirectConnections: () -> Unit = {},
-    viewModel: SettingsViewModel = hiltViewModel(),
+    target: SettingsTarget? = null,
+    viewModel: ChatSettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val context = LocalContext.current
+    val snackbarHostState = remember { SnackbarHostState() }
     val audioCacheCleared = stringResource(R.string.settings_audio_cache_cleared)
     val audioCacheClearFailed = stringResource(R.string.settings_audio_cache_clear_failed)
-    LaunchedEffect(viewModel, context, audioCacheCleared, audioCacheClearFailed) {
+    LaunchedEffect(viewModel, audioCacheCleared, audioCacheClearFailed) {
         viewModel.audioCacheClearEvents.collect { event ->
             val message =
                 when (event) {
                     AudioCacheClearEvent.CLEARED -> audioCacheCleared
                     AudioCacheClearEvent.FAILED -> audioCacheClearFailed
                 }
-            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+            snackbarHostState.showSnackbar(message)
         }
     }
     ChatSettingsContent(
@@ -104,6 +105,8 @@ fun ChatSettingsScreen(
         onVoiceQuality = viewModel::setVoiceQuality,
         onVoiceNoiseReduction = viewModel::setVoiceNoiseReduction,
         onClearAudioCache = viewModel::clearAudioCache,
+        target = target,
+        snackbarHostState = snackbarHostState,
     )
 }
 
@@ -138,14 +141,32 @@ fun ChatSettingsContent(
     onVoiceQuality: (VoiceRecordingQuality) -> Unit,
     onVoiceNoiseReduction: (Boolean) -> Unit,
     onClearAudioCache: () -> Unit,
+    target: SettingsTarget? = null,
+    snackbarHostState: SnackbarHostState? = null,
 ) {
     var qualitySheetOpen by remember { mutableStateOf(false) }
+    var presenceSheetOpen by remember { mutableStateOf(false) }
+    var awayDelaySheetOpen by remember { mutableStateOf(false) }
+    var foolsSheetOpen by remember { mutableStateOf(false) }
     var awayMessageDialogOpen by remember { mutableStateOf(false) }
     val defaultAwayMessage = stringResource(R.string.auto_away_default_message)
-    SettingsScaffold(title = stringResource(R.string.settings_chat), onBack = onBack) {
-        SettingsGroup(title = stringResource(R.string.settings_messages_section)) {
-            SubLabel(stringResource(R.string.settings_presence_title))
-            PresenceModeGroup(current = settings.presenceMode, onSelect = onPresenceMode)
+    SettingsScaffold(
+        title = stringResource(R.string.settings_chat),
+        onBack = onBack,
+        snackbarHostState = snackbarHostState,
+    ) {
+        SettingsGroup(title = stringResource(R.string.settings_conversation_section)) {
+            SettingsTarget(
+                if (target == SettingsTarget.CHAT) SettingsTarget.PRESENCE.name else target?.name,
+                SettingsTarget.PRESENCE.name,
+            ) { targetModifier ->
+                SettingsNavigationRow(
+                    title = stringResource(R.string.settings_presence_title),
+                    value = stringResource(presenceModeLabel(settings.presenceMode)),
+                    modifier = targetModifier.testTag("settings_presence_picker"),
+                    onClick = { presenceSheetOpen = true },
+                )
+            }
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             SwitchRow(
                 title = stringResource(R.string.settings_show_redacted_messages),
@@ -153,14 +174,19 @@ fun ChatSettingsContent(
                 checked = settings.showRedactedMessages,
                 onCheckedChange = onShowRedactedMessages,
                 switchTag = "settings_switch_show_redacted_messages",
+                requestedTarget = target?.name,
+                targetName = SettingsTarget.DELETED_MESSAGES.name,
             )
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+        }
+        SettingsGroup(title = stringResource(R.string.settings_media_previews_section)) {
             SwitchRow(
                 title = stringResource(R.string.settings_show_images),
                 subtitle = stringResource(R.string.settings_show_images_desc),
                 checked = contentPreviews.showImages,
                 onCheckedChange = onShowImages,
                 switchTag = "settings_switch_show_images",
+                requestedTarget = target?.name,
+                targetName = SettingsTarget.IMAGES.name,
             )
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             SwitchRow(
@@ -169,6 +195,10 @@ fun ChatSettingsContent(
                 checked = contentPreviews.autoLoadOnUnmetered,
                 onCheckedChange = onAutoLoadOnUnmetered,
                 switchTag = "settings_switch_auto_media_unmetered",
+                enabled = contentPreviews.showImages,
+                disabledExplanation = stringResource(R.string.settings_media_disabled_explanation),
+                requestedTarget = target?.name,
+                targetName = SettingsTarget.MEDIA_UNMETERED.name,
             )
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             SwitchRow(
@@ -177,6 +207,10 @@ fun ChatSettingsContent(
                 checked = contentPreviews.autoLoadOnMetered,
                 onCheckedChange = onAutoLoadOnMetered,
                 switchTag = "settings_switch_auto_media_metered",
+                enabled = contentPreviews.showImages,
+                disabledExplanation = stringResource(R.string.settings_media_disabled_explanation),
+                requestedTarget = target?.name,
+                targetName = SettingsTarget.MEDIA_METERED.name,
             )
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             SwitchRow(
@@ -185,6 +219,10 @@ fun ChatSettingsContent(
                 checked = contentPreviews.directMediaOnProxiedNetworks,
                 onCheckedChange = onDirectMediaOnProxiedNetworks,
                 switchTag = "settings_switch_direct_media_proxied",
+                enabled = contentPreviews.showImages,
+                disabledExplanation = stringResource(R.string.settings_media_disabled_explanation),
+                requestedTarget = target?.name,
+                targetName = SettingsTarget.PROXIED_MEDIA.name,
             )
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             SwitchRow(
@@ -193,6 +231,8 @@ fun ChatSettingsContent(
                 checked = contentPreviews.showLinkPreviews,
                 onCheckedChange = onShowLinkPreviews,
                 switchTag = "settings_switch_show_link_previews",
+                requestedTarget = target?.name,
+                targetName = SettingsTarget.LINK_PREVIEWS.name,
             )
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             SwitchRow(
@@ -201,10 +241,20 @@ fun ChatSettingsContent(
                 checked = avatars.showSharedAvatars,
                 onCheckedChange = onShowSharedAvatars,
                 switchTag = "settings_switch_show_shared_avatars",
+                requestedTarget = target?.name,
+                targetName = SettingsTarget.SHARED_AVATARS.name,
+            )
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            SettingsNavigationRow(
+                icon = Icons.Outlined.AttachFile,
+                title = stringResource(R.string.settings_direct_connections),
+                summary = stringResource(R.string.settings_direct_connections_summary),
+                modifier = Modifier.testTag("settings_direct_connections"),
+                requestedTarget = target?.name,
+                targetName = SettingsTarget.DIRECT_CONNECTIONS.name,
+                onClick = onOpenDirectConnections,
             )
         }
-        // Deliberately after the message-display group: the presence radios stay the first thing on
-        // this screen, which is what the required E2E journey asserts without scrolling.
         SettingsGroup(title = stringResource(R.string.settings_auto_away_section)) {
             SwitchRow(
                 title = stringResource(R.string.settings_auto_away),
@@ -212,22 +262,35 @@ fun ChatSettingsContent(
                 checked = settings.autoAwayEnabled,
                 onCheckedChange = onAutoAwayEnabled,
                 switchTag = "settings_auto_away_switch",
+                requestedTarget = target?.name,
+                targetName = SettingsTarget.AUTO_AWAY.name,
             )
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-            SubLabel(stringResource(R.string.settings_auto_away_delay))
-            AutoAwayDelayGroup(
-                current = settings.autoAwayMinutes,
+            SettingsNavigationRow(
+                title = stringResource(R.string.settings_auto_away_delay),
+                value = pluralStringResource(R.plurals.settings_auto_away_minutes, settings.autoAwayMinutes, settings.autoAwayMinutes),
+                summary =
+                    if (settings.autoAwayEnabled) {
+                        null
+                    } else {
+                        stringResource(R.string.settings_auto_away_disabled_explanation)
+                    },
+                modifier = Modifier.testTag("settings_auto_away_delay"),
                 enabled = settings.autoAwayEnabled,
-                onSelect = onAutoAwayMinutes,
+                requestedTarget = target?.name,
+                targetName = SettingsTarget.AUTO_AWAY_DELAY.name,
+                onClick = { awayDelaySheetOpen = true },
             )
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-            ListItem(
-                headlineContent = { Text(stringResource(R.string.settings_auto_away_message_title)) },
-                supportingContent = { Text(autoAwayText(settings.autoAwayMessage, defaultAwayMessage)) },
-                modifier =
-                    Modifier
-                        .clickable(enabled = settings.autoAwayEnabled) { awayMessageDialogOpen = true }
-                        .testTag("settings_auto_away_message"),
+            SettingsNavigationRow(
+                title = stringResource(R.string.settings_auto_away_message_title),
+                value = autoAwayText(settings.autoAwayMessage, defaultAwayMessage),
+                enabled = settings.autoAwayEnabled,
+                summary = if (settings.autoAwayEnabled) null else stringResource(R.string.settings_auto_away_disabled_explanation),
+                modifier = Modifier.testTag("settings_auto_away_message"),
+                requestedTarget = target?.name,
+                targetName = SettingsTarget.AWAY_MESSAGE.name,
+                onClick = { awayMessageDialogOpen = true },
             )
         }
         SettingsGroup(title = stringResource(R.string.settings_composer_section)) {
@@ -237,6 +300,8 @@ fun ChatSettingsContent(
                 checked = settings.chatSoundsEnabled,
                 onCheckedChange = onChatSoundsEnabled,
                 switchTag = "settings_switch_chat_sounds",
+                requestedTarget = target?.name,
+                targetName = SettingsTarget.CHAT_SOUNDS.name,
             )
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             SwitchRow(
@@ -245,6 +310,8 @@ fun ChatSettingsContent(
                 checked = settings.showComposerEmoji,
                 onCheckedChange = onShowComposerEmoji,
                 switchTag = "settings_switch_composer_emoji",
+                requestedTarget = target?.name,
+                targetName = SettingsTarget.COMPOSER_EMOJI.name,
             )
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             SwitchRow(
@@ -253,6 +320,8 @@ fun ChatSettingsContent(
                 checked = settings.showComposerFormattingTools,
                 onCheckedChange = onShowComposerFormattingTools,
                 switchTag = "settings_switch_composer_formatting_tools",
+                requestedTarget = target?.name,
+                targetName = SettingsTarget.COMPOSER_FORMATTING.name,
             )
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             SwitchRow(
@@ -261,29 +330,19 @@ fun ChatSettingsContent(
                 checked = reply.visibleChannelPrefix,
                 onCheckedChange = onVisibleReplyPrefix,
                 switchTag = "settings_switch_reply_prefix",
+                requestedTarget = target?.name,
+                targetName = SettingsTarget.REPLY_PREFIX.name,
             )
         }
-        SettingsGroup(title = stringResource(R.string.settings_direct_connections)) {
+        SettingsGroup(title = stringResource(R.string.settings_voice_audio_section)) {
             SettingsNavigationRow(
-                icon = Icons.Outlined.AttachFile,
-                title = stringResource(R.string.settings_direct_connections),
-                summary = stringResource(R.string.settings_direct_connections_summary),
-                modifier = Modifier.testTag("settings_direct_connections"),
-                onClick = onOpenDirectConnections,
-            )
-        }
-        SettingsGroup(title = stringResource(R.string.settings_voice_section)) {
-            ListItem(
-                headlineContent = { Text(stringResource(R.string.settings_voice_quality)) },
-                supportingContent = {
-                    Text(
-                        "${voiceQualityLabel(voice.quality)} · ${voiceQualityDescription(voice.quality)}",
-                    )
-                },
-                modifier =
-                    Modifier
-                        .clickable { qualitySheetOpen = true }
-                        .testTag("settings_voice_quality"),
+                title = stringResource(R.string.settings_voice_quality),
+                value = voiceQualityLabel(voice.quality),
+                summary = voiceQualityDescription(voice.quality),
+                modifier = Modifier.testTag("settings_voice_quality"),
+                requestedTarget = target?.name,
+                targetName = SettingsTarget.VOICE_QUALITY.name,
+                onClick = { qualitySheetOpen = true },
             )
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             SwitchRow(
@@ -292,6 +351,8 @@ fun ChatSettingsContent(
                 checked = voice.noiseReduction,
                 onCheckedChange = onVoiceNoiseReduction,
                 switchTag = "settings_switch_voice_noise_reduction",
+                requestedTarget = target?.name,
+                targetName = SettingsTarget.VOICE_NOISE_REDUCTION.name,
             )
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             SwitchRow(
@@ -300,16 +361,18 @@ fun ChatSettingsContent(
                 checked = voice.encryptionDefault,
                 onCheckedChange = onVoiceEncryptionDefault,
                 switchTag = "settings_switch_voice_encryption",
+                requestedTarget = target?.name,
+                targetName = SettingsTarget.VOICE_ENCRYPTION.name,
             )
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-            ListItem(
-                headlineContent = { Text(stringResource(R.string.settings_clear_audio_cache)) },
-                supportingContent = { Text(stringResource(R.string.settings_clear_audio_cache_desc)) },
-                modifier =
-                    Modifier
-                        .clickable(onClick = onClearAudioCache)
-                        .testTag("settings_clear_audio_cache"),
-            )
+            SettingsTarget(target?.name, SettingsTarget.AUDIO_CACHE.name) { targetModifier ->
+                SettingsActionRow(
+                    title = stringResource(R.string.settings_clear_audio_cache),
+                    summary = stringResource(R.string.settings_clear_audio_cache_desc),
+                    modifier = targetModifier.testTag("settings_clear_audio_cache"),
+                    onClick = onClearAudioCache,
+                )
+            }
         }
         SettingsGroup(title = stringResource(R.string.settings_people)) {
             SettingsNavigationRow(
@@ -317,6 +380,8 @@ fun ChatSettingsContent(
                 title = stringResource(R.string.settings_friends),
                 value = pluralStringResource(R.plurals.settings_nick_count, settings.friends.size, settings.friends.size),
                 modifier = Modifier.testTag("settings_friends"),
+                requestedTarget = target?.name,
+                targetName = SettingsTarget.FRIENDS.name,
                 onClick = onOpenFriends,
             )
             SettingsNavigationRow(
@@ -324,11 +389,19 @@ fun ChatSettingsContent(
                 title = stringResource(R.string.settings_fools),
                 value = pluralStringResource(R.plurals.settings_nick_count, settings.fools.size, settings.fools.size),
                 modifier = Modifier.testTag("settings_fools"),
+                requestedTarget = target?.name,
+                targetName = SettingsTarget.FOOLS.name,
                 onClick = onOpenFools,
             )
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-            SubLabel(stringResource(R.string.settings_fools_mode))
-            FoolsModeGroup(current = settings.foolsMode, onSelect = onFoolsMode)
+            SettingsNavigationRow(
+                title = stringResource(R.string.settings_fools_mode),
+                value = stringResource(if (settings.foolsMode == FoolsMode.COLLAPSE) R.string.settings_fools_collapse else R.string.settings_fools_hide),
+                modifier = Modifier.testTag("settings_fools_mode_picker"),
+                requestedTarget = target?.name,
+                targetName = SettingsTarget.FOOLS_MODE.name,
+                onClick = { foolsSheetOpen = true },
+            )
         }
     }
     if (awayMessageDialogOpen) {
@@ -340,6 +413,55 @@ fun ChatSettingsContent(
                 awayMessageDialogOpen = false
             },
             onDismiss = { awayMessageDialogOpen = false },
+        )
+    }
+    if (presenceSheetOpen) {
+        SingleChoiceSheet(
+            title = stringResource(R.string.settings_presence_title),
+            selected = settings.presenceMode,
+            options =
+                PresenceMode.entries.map { mode ->
+                    ChoiceOption(
+                        mode,
+                        stringResource(presenceModeLabel(mode)),
+                        stringResource(presenceModeDescription(mode)),
+                        "settings_presence_mode_${mode.name.lowercase()}",
+                    )
+                },
+            onSelect = onPresenceMode,
+            onDismiss = { presenceSheetOpen = false },
+            tag = "settings_presence_sheet",
+        )
+    }
+    if (awayDelaySheetOpen) {
+        SingleChoiceSheet(
+            title = stringResource(R.string.settings_auto_away_delay),
+            selected = settings.autoAwayMinutes,
+            options =
+                AUTO_AWAY_MINUTE_CHOICES.map { minutes ->
+                    ChoiceOption(
+                        minutes,
+                        pluralStringResource(R.plurals.settings_auto_away_minutes, minutes, minutes),
+                        tag = "settings_auto_away_minutes_$minutes",
+                    )
+                },
+            onSelect = onAutoAwayMinutes,
+            onDismiss = { awayDelaySheetOpen = false },
+            tag = "settings_auto_away_delay_sheet",
+        )
+    }
+    if (foolsSheetOpen) {
+        SingleChoiceSheet(
+            title = stringResource(R.string.settings_fools_mode),
+            selected = settings.foolsMode,
+            options =
+                listOf(
+                    ChoiceOption(FoolsMode.COLLAPSE, stringResource(R.string.settings_fools_collapse), stringResource(R.string.settings_fools_collapse_desc), "settings_fools_mode_collapse"),
+                    ChoiceOption(FoolsMode.HIDE, stringResource(R.string.settings_fools_hide), stringResource(R.string.settings_fools_hide_desc), "settings_fools_mode_hide"),
+                ),
+            onSelect = onFoolsMode,
+            onDismiss = { foolsSheetOpen = false },
+            tag = "settings_fools_mode_sheet",
         )
     }
     if (qualitySheetOpen) {
@@ -380,39 +502,25 @@ private fun VoiceQualitySheet(
     }
 }
 
-private fun voiceQualityLabel(quality: VoiceRecordingQuality): String =
-    when (quality) {
-        VoiceRecordingQuality.DATA_SAVER -> "Data saver"
-        VoiceRecordingQuality.BALANCED -> "Balanced"
-        VoiceRecordingQuality.HIGH -> "High"
-    }
-
-private fun voiceQualityDescription(quality: VoiceRecordingQuality): String =
-    when (quality) {
-        VoiceRecordingQuality.DATA_SAVER -> "Opus 24 kbps · AAC 32 kbps"
-        VoiceRecordingQuality.BALANCED -> "Opus 48 kbps · AAC 64 kbps"
-        VoiceRecordingQuality.HIGH -> "Opus 64 kbps · AAC 96 kbps"
-    }
-
-/** Background delay before auto-away fires. Disabled (but visible) while the feature is off. */
 @Composable
-private fun AutoAwayDelayGroup(
-    current: Int,
-    enabled: Boolean,
-    onSelect: (Int) -> Unit,
-) {
-    Column(Modifier.selectableGroup()) {
-        AUTO_AWAY_MINUTE_CHOICES.forEach { minutes ->
-            RadioRow(
-                label = pluralStringResource(R.plurals.settings_auto_away_minutes, minutes, minutes),
-                selected = current == minutes,
-                enabled = enabled,
-                onClick = { onSelect(minutes) },
-                modifier = Modifier.testTag("settings_auto_away_minutes_$minutes"),
-            )
-        }
-    }
-}
+private fun voiceQualityLabel(quality: VoiceRecordingQuality): String =
+    stringResource(
+        when (quality) {
+            VoiceRecordingQuality.DATA_SAVER -> R.string.settings_voice_quality_data_saver
+            VoiceRecordingQuality.BALANCED -> R.string.settings_voice_quality_balanced
+            VoiceRecordingQuality.HIGH -> R.string.settings_voice_quality_high
+        },
+    )
+
+@Composable
+private fun voiceQualityDescription(quality: VoiceRecordingQuality): String =
+    stringResource(
+        when (quality) {
+            VoiceRecordingQuality.DATA_SAVER -> R.string.settings_voice_quality_data_saver_desc
+            VoiceRecordingQuality.BALANCED -> R.string.settings_voice_quality_balanced_desc
+            VoiceRecordingQuality.HIGH -> R.string.settings_voice_quality_high_desc
+        },
+    )
 
 /** Blank keeps the localized default, which the field advertises as its placeholder. */
 @Composable
@@ -449,51 +557,6 @@ private fun AutoAwayMessageDialog(
         },
         modifier = Modifier.testTag("settings_auto_away_message_dialog"),
     )
-}
-
-/** Global presence-event choice. A conversation can override it from its own overflow menu. */
-@Composable
-private fun PresenceModeGroup(
-    current: PresenceMode,
-    onSelect: (PresenceMode) -> Unit,
-) {
-    Column(Modifier.selectableGroup()) {
-        PresenceMode.entries.forEach { mode ->
-            RadioRow(
-                label = stringResource(presenceModeLabel(mode)),
-                subtitle = stringResource(presenceModeDescription(mode)),
-                selected = current == mode,
-                enabled = true,
-                onClick = { onSelect(mode) },
-                modifier = Modifier.testTag("settings_presence_mode_${mode.name.lowercase()}"),
-            )
-        }
-    }
-}
-
-@Composable
-private fun FoolsModeGroup(
-    current: FoolsMode,
-    onSelect: (FoolsMode) -> Unit,
-) {
-    Column(Modifier.selectableGroup()) {
-        RadioRow(
-            label = stringResource(R.string.settings_fools_collapse),
-            subtitle = stringResource(R.string.settings_fools_collapse_desc),
-            selected = current == FoolsMode.COLLAPSE,
-            enabled = true,
-            onClick = { onSelect(FoolsMode.COLLAPSE) },
-            modifier = Modifier.testTag("settings_fools_mode_collapse"),
-        )
-        RadioRow(
-            label = stringResource(R.string.settings_fools_hide),
-            subtitle = stringResource(R.string.settings_fools_hide_desc),
-            selected = current == FoolsMode.HIDE,
-            enabled = true,
-            onClick = { onSelect(FoolsMode.HIDE) },
-            modifier = Modifier.testTag("settings_fools_mode_hide"),
-        )
-    }
 }
 
 @Preview

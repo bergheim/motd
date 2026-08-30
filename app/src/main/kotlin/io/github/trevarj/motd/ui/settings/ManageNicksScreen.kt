@@ -10,25 +10,20 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -80,7 +75,6 @@ fun ManageNicksScreen(
     )
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ManageNicksContent(
     state: ManageNicksUiState,
@@ -113,136 +107,123 @@ fun ManageNicksContent(
         )
     }
 
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(titleRes)) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.onboarding_back),
-                        )
+    SettingsScaffold(
+        title = stringResource(titleRes),
+        onBack = onBack,
+        scroll = false,
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            // Add row -----------------------------------------------------------------------
+            val sanitized = sanitizeNickInput(input)
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedTextField(
+                        value = input,
+                        onValueChange = { input = it },
+                        singleLine = true,
+                        placeholder = { Text(stringResource(R.string.manage_add_nick_hint)) },
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(
+                        enabled = sanitized != null,
+                        onClick = {
+                            val nick = sanitized ?: return@TextButton
+                            if (state.kind == NickListKind.COLORS) {
+                                // Persist only once a swatch is picked in the dialog.
+                                editingNick = nick
+                            } else {
+                                onAdd(nick)
+                            }
+                            input = ""
+                        },
+                    ) {
+                        Text(stringResource(R.string.manage_add))
                     }
-                },
-            )
-        },
-    ) { padding ->
-        Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.TopCenter) {
-            Column(modifier = Modifier.fillMaxWidth().widthIn(max = 720.dp).padding(horizontal = 16.dp, vertical = 12.dp)) {
-                // Add row -----------------------------------------------------------------------
-                val sanitized = sanitizeNickInput(input)
+                }
+            }
+
+            // List --------------------------------------------------------------------------
+            if (state.nicks.isEmpty()) {
+                val emptyRes =
+                    when (state.kind) {
+                        NickListKind.FRIENDS -> R.string.manage_empty_friends
+                        NickListKind.FOOLS -> R.string.manage_empty_fools
+                        NickListKind.COLORS -> R.string.manage_empty_colors
+                    }
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        text = stringResource(emptyRes),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 32.dp),
+                    )
+                }
+            } else {
                 Surface(
                     shape = RoundedCornerShape(20.dp),
                     color = MaterialTheme.colorScheme.surfaceContainerLow,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxSize().padding(top = 12.dp),
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        OutlinedTextField(
-                            value = input,
-                            onValueChange = { input = it },
-                            singleLine = true,
-                            placeholder = { Text(stringResource(R.string.manage_add_nick_hint)) },
-                            modifier = Modifier.weight(1f),
-                        )
-                        TextButton(
-                            enabled = sanitized != null,
-                            onClick = {
-                                val nick = sanitized ?: return@TextButton
+                    LazyColumn(modifier = Modifier.fillMaxSize()) {
+                        items(state.nicks, key = { it }) { nick ->
+                            // Nick keys are stable, so add/remove edits fade and the surviving rows
+                            // settle into place instead of snapping.
+                            val animatedModifier =
+                                Modifier.animateItem(
+                                    fadeInSpec = MotdMotion.microFadeIn,
+                                    placementSpec = MotdMotion.rowPlacement,
+                                    fadeOutSpec = MotdMotion.microFadeOut,
+                                )
+                            val rowModifier =
                                 if (state.kind == NickListKind.COLORS) {
-                                    // Persist only once a swatch is picked in the dialog.
-                                    editingNick = nick
+                                    animatedModifier.clickable { editingNick = nick }
                                 } else {
-                                    onAdd(nick)
+                                    animatedModifier
                                 }
-                                input = ""
-                            },
-                        ) {
-                            Text(stringResource(R.string.manage_add))
-                        }
-                    }
-                }
-
-                // List --------------------------------------------------------------------------
-                if (state.nicks.isEmpty()) {
-                    val emptyRes =
-                        when (state.kind) {
-                            NickListKind.FRIENDS -> R.string.manage_empty_friends
-                            NickListKind.FOOLS -> R.string.manage_empty_fools
-                            NickListKind.COLORS -> R.string.manage_empty_colors
-                        }
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text(
-                            text = stringResource(emptyRes),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 32.dp),
-                        )
-                    }
-                } else {
-                    Surface(
-                        shape = RoundedCornerShape(20.dp),
-                        color = MaterialTheme.colorScheme.surfaceContainerLow,
-                        modifier = Modifier.fillMaxSize().padding(top = 12.dp),
-                    ) {
-                        LazyColumn(modifier = Modifier.fillMaxSize()) {
-                            items(state.nicks, key = { it }) { nick ->
-                                // Nick keys are stable, so add/remove edits fade and the surviving rows
-                                // settle into place instead of snapping.
-                                val animatedModifier =
-                                    Modifier.animateItem(
-                                        fadeInSpec = MotdMotion.microFadeIn,
-                                        placementSpec = MotdMotion.rowPlacement,
-                                        fadeOutSpec = MotdMotion.microFadeOut,
-                                    )
-                                val rowModifier =
-                                    if (state.kind == NickListKind.COLORS) {
-                                        animatedModifier.clickable { editingNick = nick }
+                            ListItem(
+                                headlineContent = { Text(nick) },
+                                // The color list keeps its chip (it is the point of the row); the friends
+                                // list drops the slot entirely when avatars are hidden.
+                                leadingContent =
+                                    if (state.kind != NickListKind.COLORS && avatarsHidden()) {
+                                        null
                                     } else {
-                                        animatedModifier
-                                    }
-                                ListItem(
-                                    headlineContent = { Text(nick) },
-                                    // The color list keeps its chip (it is the point of the row); the friends
-                                    // list drops the slot entirely when avatars are hidden.
-                                    leadingContent =
-                                        if (state.kind != NickListKind.COLORS && avatarsHidden()) {
-                                            null
-                                        } else {
-                                            {
-                                                if (state.kind == NickListKind.COLORS) {
-                                                    // Color chip previewing the resolved override color.
-                                                    Box(
-                                                        modifier =
-                                                            Modifier
-                                                                .size(20.dp)
-                                                                .clip(CircleShape)
-                                                                .background(scheme.hue(state.overrides[nick] ?: 0)),
-                                                    )
-                                                } else {
-                                                    Avatar(name = nick, size = 36.dp)
-                                                }
+                                        {
+                                            if (state.kind == NickListKind.COLORS) {
+                                                // Color chip previewing the resolved override color.
+                                                Box(
+                                                    modifier =
+                                                        Modifier
+                                                            .size(20.dp)
+                                                            .clip(CircleShape)
+                                                            .background(scheme.hue(state.overrides[nick] ?: 0)),
+                                                )
+                                            } else {
+                                                Avatar(name = nick, size = 36.dp)
                                             }
-                                        },
-                                    trailingContent = {
-                                        IconButton(onClick = { onRemove(nick) }) {
-                                            Icon(
-                                                Icons.Filled.Close,
-                                                contentDescription = stringResource(R.string.manage_remove),
-                                            )
                                         }
                                     },
-                                    modifier = rowModifier,
-                                    colors =
-                                        androidx.compose.material3.ListItemDefaults
-                                            .colors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
-                                )
-                            }
+                                trailingContent = {
+                                    IconButton(onClick = { onRemove(nick) }) {
+                                        Icon(
+                                            Icons.Filled.Close,
+                                            contentDescription = stringResource(R.string.manage_remove),
+                                        )
+                                    }
+                                },
+                                modifier = rowModifier,
+                                colors =
+                                    androidx.compose.material3.ListItemDefaults
+                                        .colors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
+                            )
                         }
                     }
                 }

@@ -1,0 +1,144 @@
+package io.github.trevarj.motd.ui.settings
+
+import io.github.trevarj.motd.R
+import io.github.trevarj.motd.attachment.AttachmentBackend
+import io.github.trevarj.motd.attachment.PasteBackendConfig
+import io.github.trevarj.motd.data.db.NetworkEntity
+import io.github.trevarj.motd.data.db.NetworkRole
+import io.github.trevarj.motd.ui.nav.NetworkSettingsTarget
+import io.github.trevarj.motd.ui.nav.SettingsTarget
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class SettingsSearchTest {
+    @Test
+    fun `search matches title summary and keywords case insensitively with title prefix first`() {
+        val entries =
+            listOf(
+                entry("Media previews", "Download images", "photos"),
+                entry("Preview links", "Metadata", "media"),
+                entry("Images", "Media previews", "photos"),
+            )
+
+        assertEquals(listOf("Media previews", "Images", "Preview links"), searchSettings("MEDIA", entries).map { it.title })
+        assertEquals(listOf("Images", "Media previews"), searchSettings("photos", entries).map { it.title })
+    }
+
+    @Test
+    fun `static keywords map to exact typed targets`() {
+        val entries = buildSettingsSearchEntries(emptyList(), ::resolve, ::networkTitle)
+
+        val composer = searchSettings("bold", entries).single().destination as SettingsSearchDestination.Page
+        val encrypted = searchSettings("encrypted", entries).single().destination as SettingsSearchDestination.Page
+
+        assertEquals(SettingsSearchPage.CHAT, composer.page)
+        assertEquals(SettingsTarget.COMPOSER_FORMATTING, composer.target)
+        assertEquals(SettingsSearchPage.BACKUP, encrypted.page)
+        assertEquals(SettingsTarget.EXPORT_BACKUP, encrypted.target)
+    }
+
+    @Test
+    fun `dynamic network entries use concrete network id and eligible sections without secrets`() {
+        val direct = network(7, "Libera", NetworkRole.DIRECT)
+        val child = network(9, "OFTC via soju", NetworkRole.BOUNCER_CHILD)
+        val entries = buildSettingsSearchEntries(listOf(direct, child), ::resolve, ::networkTitle)
+        val directRows = entries.filter { (it.destination as? SettingsSearchDestination.Network)?.networkId == 7L }
+        val childRows = entries.filter { (it.destination as? SettingsSearchDestination.Network)?.networkId == 9L }
+
+        assertEquals(NetworkSettingsTarget.OBFUSCATION, (searchSettings("proxy", directRows).single().destination as SettingsSearchDestination.Network).target)
+        assertEquals(NetworkSettingsTarget.AUTHENTICATION, (searchSettings("sasl", directRows).single().destination as SettingsSearchDestination.Network).target)
+        assertEquals(5, directRows.size)
+        assertEquals(3, childRows.size)
+        listOf(
+            "hidden-host.example",
+            "private-nick",
+            "private-user",
+            "private-realname",
+            "private-sasl-user",
+            "sasl-secret-value",
+            "server-secret-value",
+            "nickserv-secret-value",
+            "private-wss.example",
+            "private-proxy.example",
+            "private-vless-value",
+        ).forEach { enteredValue ->
+            assertTrue("entered value must not be indexed: $enteredValue", searchSettings(enteredValue, entries).isEmpty())
+        }
+        assertTrue(searchSettings("Libera", directRows).isNotEmpty())
+        assertTrue(childRows.none { (it.destination as SettingsSearchDestination.Network).target == NetworkSettingsTarget.AUTHENTICATION })
+    }
+
+    @Test
+    fun `global index omits destructive targets and includes upload controls only when eligible`() {
+        fun targets(backend: AttachmentBackend) =
+            buildSettingsSearchEntries(
+                networks = emptyList(),
+                resolve = ::resolve,
+                networkTitle = ::networkTitle,
+                uploads = PasteBackendConfig().copy(backend = backend),
+            ).mapNotNull { (it.destination as? SettingsSearchDestination.Page)?.target }
+
+        val crafterBin = targets(AttachmentBackend.CRAFTERBIN)
+        val custom = targets(AttachmentBackend.CUSTOM_0X0)
+        val catbox = targets(AttachmentBackend.CATBOX)
+        assertFalse(SettingsTarget.AUDIO_CACHE in crafterBin)
+        assertFalse(SettingsTarget.UPLOAD_CONNECTION in crafterBin)
+        assertTrue(SettingsTarget.UPLOAD_PRIVACY in crafterBin)
+        assertTrue(SettingsTarget.UPLOAD_CONNECTION in custom)
+        assertTrue(SettingsTarget.UPLOAD_PRIVACY in custom)
+        assertFalse(SettingsTarget.UPLOAD_CONNECTION in catbox)
+        assertFalse(SettingsTarget.UPLOAD_PRIVACY in catbox)
+        assertTrue(SettingsTarget.UPLOAD_PROVIDER in catbox)
+        assertTrue(SettingsTarget.UPLOAD_LIMIT in catbox)
+    }
+
+    private fun entry(
+        title: String,
+        summary: String,
+        keywords: String,
+    ) = SettingsSearchEntry(title, summary, keywords, SettingsSearchDestination.Page(SettingsSearchPage.ROOT, SettingsTarget.NETWORKS))
+
+    private fun resolve(id: Int): String =
+        when (id) {
+            R.string.settings_composer_formatting_tools -> "Formatting tools"
+            R.string.settings_composer_formatting_tools_desc -> "Show rich text controls"
+            R.string.backup_export_title -> "Export configuration"
+            R.string.backup_export_guidance -> "Save settings"
+            R.string.network_settings_connection_section -> "Connection"
+            R.string.network_settings_identity_section -> "Identity and authentication"
+            R.string.network_settings_routing -> "Routing and obfuscation"
+            R.string.network_settings_avatar_section -> "Avatar"
+            R.string.network_settings_tools_section -> "Network tools"
+            R.string.settings_search_network_summary -> "Open this network section"
+            else -> "resource-$id"
+        }
+
+    private fun networkTitle(
+        network: String,
+        section: String,
+    ) = "$network · $section"
+
+    private fun network(
+        id: Long,
+        name: String,
+        role: NetworkRole,
+    ) = NetworkEntity(
+        id = id,
+        name = name,
+        role = role,
+        host = "hidden-host.example",
+        port = 6697,
+        nick = "private-nick",
+        username = "private-user",
+        realname = "private-realname",
+        saslUser = "private-sasl-user",
+        saslPassword = "sasl-secret-value",
+        serverPassword = "server-secret-value",
+        nickServPassword = "nickserv-secret-value",
+        wsUrl = "wss://private-wss.example/socket",
+        proxyHost = "private-proxy.example",
+        obfsLink = "private-vless-value",
+    )
+}

@@ -65,6 +65,11 @@ enum class BackupExportMode { CREDENTIALS_EXCLUDED, ENCRYPTED_WITH_CREDENTIALS }
 
 enum class BackupImportMode { MERGE, REPLACE }
 
+/** Valid backup envelope or payload that this build cannot safely accept. */
+internal class BackupFormatException(
+    cause: Exception? = null,
+) : IllegalArgumentException(cause)
+
 data class ConfigurationImportPreview(
     val appVersion: String,
     val exportedAtEpochMillis: Long,
@@ -337,19 +342,18 @@ class ConfigurationBackupRepositoryImpl
             password: String?,
         ): DecodedDocument {
             val envelope = decodeEnvelope(rawDocument)
-            require(envelope.formatVersion == FORMAT_VERSION) { "Unsupported backup format ${envelope.formatVersion}." }
+            if (envelope.formatVersion != FORMAT_VERSION) throw BackupFormatException()
             val payload =
                 when (envelope.mode) {
                     BackupEnvelopeMode.CREDENTIALS_EXCLUDED -> {
-                        envelope.payload
-                            ?: error("Backup payload is missing.")
+                        envelope.payload ?: throw BackupFormatException()
                     }
 
                     BackupEnvelopeMode.ENCRYPTED_WITH_CREDENTIALS -> {
-                        require(!password.isNullOrBlank()) { "This backup requires its export password." }
-                        val encryptedPayload = envelope.encryptedPayload ?: error("Encrypted backup payload is missing.")
+                        require(!password.isNullOrBlank())
+                        val encryptedPayload = envelope.encryptedPayload ?: throw BackupFormatException()
                         val decrypted = decryptPayload(encryptedPayload, password, envelope.appVersion, envelope.exportedAtEpochMillis)
-                        require(decrypted.size <= MAX_DECRYPTED_BYTES) { "Backup payload is too large." }
+                        if (decrypted.size > MAX_DECRYPTED_BYTES) throw BackupFormatException()
                         compactJson.decodeFromString<BackupPayload>(decrypted.decodeToString())
                     }
                 }
@@ -358,11 +362,19 @@ class ConfigurationBackupRepositoryImpl
         }
 
         private fun decodeEnvelope(rawDocument: String): BackupEnvelope {
-            require(rawDocument.encodeToByteArray().size <= MAX_DOCUMENT_BYTES) { "Backup file is too large." }
+            if (rawDocument.encodeToByteArray().size > MAX_DOCUMENT_BYTES) throw BackupFormatException()
             return compactJson.decodeFromString<BackupEnvelope>(rawDocument)
         }
 
         private fun validatePayload(payload: BackupPayload) {
+            try {
+                validatePayloadFields(payload)
+            } catch (failure: IllegalArgumentException) {
+                throw BackupFormatException(failure)
+            }
+        }
+
+        private fun validatePayloadFields(payload: BackupPayload) {
             require(payload.version == FORMAT_VERSION) { "Unsupported payload version ${payload.version}." }
             require(payload.networks.size <= MAX_NETWORKS) { "Too many networks in backup." }
             val ids = payload.networks.map { it.exportId }
@@ -602,10 +614,10 @@ class ConfigurationBackupRepositoryImpl
             appVersion: String,
             exportedAt: Long,
         ): ByteArray {
-            require(encrypted.kdf == "PBKDF2WithHmacSHA256" && encrypted.cipher == "AES-256-GCM") {
-                "Unsupported backup encryption."
+            if (encrypted.kdf != "PBKDF2WithHmacSHA256" || encrypted.cipher != "AES-256-GCM") {
+                throw BackupFormatException()
             }
-            require(encrypted.iterations in 100_000..PBKDF2_ITERATIONS) { "Unsupported backup work factor." }
+            if (encrypted.iterations !in 100_000..PBKDF2_ITERATIONS) throw BackupFormatException()
             val salt = encrypted.salt.fromB64()
             val nonce = encrypted.nonce.fromB64()
             val ciphertext = encrypted.ciphertext.fromB64()

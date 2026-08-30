@@ -103,7 +103,7 @@ internal fun initialAwayValidationError(message: String): String? {
     return runCatching {
         IrcMessage(command = "AWAY", params = listOf(trimmed)).serialize()
         null
-    }.getOrElse { error -> error.message ?: "Invalid away message" }
+    }.getOrElse { "invalid" }
 }
 
 /** Details displayed before changing the endpoint/credentials a bouncer's child mirrors inherit. */

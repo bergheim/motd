@@ -21,10 +21,12 @@ import androidx.core.net.toUri
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.trevarj.motd.R
+import io.github.trevarj.motd.ui.nav.SettingsTarget
 import io.github.trevarj.motd.ui.settings.SettingsGroup
 import io.github.trevarj.motd.ui.settings.SettingsScaffold
 import io.github.trevarj.motd.ui.settings.SwitchRow
 import io.github.trevarj.motd.ui.theme.MotdTheme
+import io.github.trevarj.motd.ui.settings.SettingsTarget as SettingsTargetAnchor
 
 /**
  * Labs category: experimental features, each behind its own switch. Lab flags live in their own
@@ -34,6 +36,7 @@ import io.github.trevarj.motd.ui.theme.MotdTheme
 fun LabsScreen(
     onBack: () -> Unit = {},
     onOpenGestureMenu: () -> Unit = {},
+    target: SettingsTarget? = null,
     viewModel: LabsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -44,6 +47,7 @@ fun LabsScreen(
         onAgentwireChanged = viewModel::setAgentwireEnabled,
         onGlobalFeedChanged = viewModel::setGlobalFeedEnabled,
         onOpenGestureMenu = onOpenGestureMenu,
+        target = target,
     )
 }
 
@@ -55,6 +59,7 @@ fun LabsContent(
     onAgentwireChanged: (Boolean) -> Unit,
     onGlobalFeedChanged: (Boolean) -> Unit = {},
     onOpenGestureMenu: () -> Unit = {},
+    target: SettingsTarget? = null,
 ) {
     val context = LocalContext.current
     val agentwireUrl = stringResource(R.string.labs_agentwire_url)
@@ -69,55 +74,64 @@ fun LabsContent(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 4.dp),
         )
-        SettingsGroup(title = stringResource(R.string.labs_gestures_section)) {
-            SwitchRow(
-                title = stringResource(R.string.labs_gestures),
-                subtitle = stringResource(R.string.labs_gestures_desc),
-                checked = state.gesturesEnabled,
-                onCheckedChange = onGesturesChanged,
-                switchTag = "labs_gestures_switch",
-            )
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-            // The menu graph is authored work that survives the lab being off, so the editor stays
-            // reachable whatever the switch says.
-            ListItem(
-                headlineContent = { Text(stringResource(R.string.labs_gestures_configure)) },
-                supportingContent = { Text(stringResource(R.string.labs_gestures_configure_desc)) },
-                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                modifier =
-                    Modifier
-                        .clickable(onClick = onOpenGestureMenu)
-                        .testTag("labs_gestures_configure"),
-            )
+        SettingsTargetAnchor(
+            if (target == SettingsTarget.LABS) SettingsTarget.GESTURES.name else target?.name,
+            SettingsTarget.GESTURES.name,
+        ) { targetModifier ->
+            SettingsGroup(title = stringResource(R.string.labs_gestures_section), modifier = targetModifier) {
+                SwitchRow(
+                    title = stringResource(R.string.labs_gestures),
+                    subtitle = stringResource(R.string.labs_gestures_desc),
+                    checked = state.gesturesEnabled,
+                    onCheckedChange = onGesturesChanged,
+                    switchTag = "labs_gestures_switch",
+                )
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                // The menu graph is authored work that survives the lab being off, so the editor stays
+                // reachable whatever the switch says.
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.labs_gestures_configure)) },
+                    supportingContent = { Text(stringResource(R.string.labs_gestures_configure_desc)) },
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                    modifier =
+                        Modifier
+                            .clickable(onClick = onOpenGestureMenu)
+                            .testTag("labs_gestures_configure"),
+                )
+            }
         }
-        SettingsGroup(title = stringResource(R.string.labs_agentwire_section)) {
-            SwitchRow(
-                title = stringResource(R.string.labs_agentwire),
-                subtitle = stringResource(R.string.labs_agentwire_desc),
-                checked = state.agentwireEnabled,
-                onCheckedChange = onAgentwireChanged,
-                switchTag = "labs_agentwire_switch",
-            )
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-            ListItem(
-                headlineContent = { Text(stringResource(R.string.labs_agentwire_repo)) },
-                supportingContent = { Text(agentwireUrl) },
-                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                modifier =
-                    Modifier
-                        .clickable {
-                            context.startActivity(Intent(Intent.ACTION_VIEW, agentwireUrl.toUri()))
-                        }.testTag("labs_agentwire_repo"),
-            )
+        SettingsTargetAnchor(target?.name, SettingsTarget.AGENTWIRE.name) { targetModifier ->
+            SettingsGroup(title = stringResource(R.string.labs_agentwire_section), modifier = targetModifier) {
+                SwitchRow(
+                    title = stringResource(R.string.labs_agentwire),
+                    subtitle = stringResource(R.string.labs_agentwire_desc),
+                    checked = state.agentwireEnabled,
+                    onCheckedChange = onAgentwireChanged,
+                    switchTag = "labs_agentwire_switch",
+                )
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.labs_agentwire_repo)) },
+                    supportingContent = { Text(agentwireUrl) },
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                    modifier =
+                        Modifier
+                            .clickable {
+                                context.startActivity(Intent(Intent.ACTION_VIEW, agentwireUrl.toUri()))
+                            }.testTag("labs_agentwire_repo"),
+                )
+            }
         }
-        SettingsGroup(title = stringResource(R.string.labs_feed_section)) {
-            SwitchRow(
-                title = stringResource(R.string.labs_global_feed),
-                subtitle = stringResource(R.string.labs_global_feed_desc),
-                checked = state.globalFeedEnabled,
-                onCheckedChange = onGlobalFeedChanged,
-                switchTag = "labs_global_feed_switch",
-            )
+        SettingsTargetAnchor(target?.name, SettingsTarget.GLOBAL_FEED.name) { targetModifier ->
+            SettingsGroup(title = stringResource(R.string.labs_feed_section), modifier = targetModifier) {
+                SwitchRow(
+                    title = stringResource(R.string.labs_global_feed),
+                    subtitle = stringResource(R.string.labs_global_feed_desc),
+                    checked = state.globalFeedEnabled,
+                    onCheckedChange = onGlobalFeedChanged,
+                    switchTag = "labs_global_feed_switch",
+                )
+            }
         }
     }
 }

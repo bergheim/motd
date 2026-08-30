@@ -11,16 +11,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -32,14 +26,12 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -61,6 +53,7 @@ import io.github.trevarj.motd.ui.settings.BouncerLoginFields
 import io.github.trevarj.motd.ui.settings.NetworkForm
 import io.github.trevarj.motd.ui.settings.RadioRow
 import io.github.trevarj.motd.ui.settings.SettingsGroup
+import io.github.trevarj.motd.ui.settings.SettingsScaffold
 import io.github.trevarj.motd.ui.settings.SubLabel
 import io.github.trevarj.motd.ui.theme.MotdMotion
 import io.github.trevarj.motd.ui.theme.MotdTheme
@@ -125,144 +118,119 @@ fun AddNetworkContent(
     val hasHalfCreated = state.phase != AddNetworkPhase.FORM
     BackHandler(enabled = hasHalfCreated) { onAbandon() }
 
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.add_network_title)) },
-                navigationIcon = {
-                    IconButton(onClick = { if (hasHalfCreated) onAbandon() else onBack() }) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.onboarding_back),
-                        )
-                    }
-                },
-            )
-        },
-    ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding), contentAlignment = androidx.compose.ui.Alignment.TopCenter) {
-            Column(
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .widthIn(max = 720.dp)
-                        .verticalScroll(rememberScrollState())
-                        .imePadding()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                FilledTonalButton(
-                    onClick = onScanInvite,
-                    modifier = Modifier.fillMaxWidth().testTag("add_network_scan_invite"),
+    SettingsScaffold(
+        title = stringResource(R.string.add_network_title),
+        onBack = { if (hasHalfCreated) onAbandon() else onBack() },
+    ) {
+        FilledTonalButton(
+            onClick = onScanInvite,
+            modifier = Modifier.fillMaxWidth().testTag("add_network_scan_invite"),
+        ) {
+            Icon(Icons.Filled.QrCodeScanner, contentDescription = null)
+            Text(stringResource(R.string.invite_scan_title), modifier = Modifier.padding(start = 8.dp))
+        }
+        // The type group and the preset picker share one Column child so the collapsed
+        // picker sits outside the spacedBy flow; its 12dp gap lives inside the animation.
+        Column {
+            SettingsGroup(title = stringResource(R.string.add_network_type_section)) {
+                KindSelector(kind = state.kind, enabled = state.phase == AddNetworkPhase.FORM, onSetKind = onSetKind)
+                AnimatedVisibility(
+                    visible = state.isBouncer,
+                    enter = fadeIn(MotdMotion.microFadeIn) + expandVertically(animationSpec = MotdMotion.contentSize),
+                    exit = fadeOut(MotdMotion.microFadeOut) + shrinkVertically(animationSpec = MotdMotion.contentSize),
                 ) {
-                    Icon(Icons.Filled.QrCodeScanner, contentDescription = null)
-                    Text(stringResource(R.string.invite_scan_title), modifier = Modifier.padding(start = 8.dp))
-                }
-                // The type group and the preset picker share one Column child so the collapsed
-                // picker sits outside the spacedBy flow; its 12dp gap lives inside the animation.
-                Column {
-                    SettingsGroup(title = stringResource(R.string.add_network_type_section)) {
-                        KindSelector(kind = state.kind, enabled = state.phase == AddNetworkPhase.FORM, onSetKind = onSetKind)
-                        AnimatedVisibility(
-                            visible = state.isBouncer,
-                            enter = fadeIn(MotdMotion.microFadeIn) + expandVertically(animationSpec = MotdMotion.contentSize),
-                            exit = fadeOut(MotdMotion.microFadeOut) + shrinkVertically(animationSpec = MotdMotion.contentSize),
-                        ) {
-                            BouncerKindSelector(
-                                kind = state.bouncerKind,
-                                enabled = state.phase == AddNetworkPhase.FORM,
-                                onSetKind = onSetBouncerKind,
-                            )
-                        }
-                    }
-                    AnimatedVisibility(
-                        visible = !state.isBouncer && state.phase == AddNetworkPhase.FORM,
-                        enter = fadeIn(MotdMotion.microFadeIn) + expandVertically(animationSpec = MotdMotion.contentSize),
-                        exit = fadeOut(MotdMotion.microFadeOut) + shrinkVertically(animationSpec = MotdMotion.contentSize),
-                    ) {
-                        Box(Modifier.padding(top = 12.dp)) {
-                            NetworkPresetPicker(selected = state.presetId, onSelect = onSelectPreset)
-                        }
-                    }
-                }
-                SettingsGroup(title = stringResource(R.string.add_network_details_section)) {
-                    // ZNC already collects its own per-bouncer network name (zncLogin.network,
-                    // required for auth); this field only needs to exist for DIRECT/soju, which
-                    // otherwise fall back to the preset name or bare host until edited later.
-                    if (!state.isZnc) {
-                        OutlinedTextField(
-                            value = state.displayName,
-                            onValueChange = onDisplayNameChange,
-                            label = { Text(stringResource(R.string.network_settings_display_name)) },
-                            placeholder = {
-                                Text(
-                                    networkPreset(state.presetId)?.displayName
-                                        ?: state.server.host.ifBlank { stringResource(R.string.add_network_kind_network) },
-                                )
-                            },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth().padding(16.dp).testTag("add_network_display_name"),
-                        )
-                    }
-                    // Ease the height between the two form variants; the branch swap itself (and
-                    // its field state reset) is unchanged from today.
-                    Box(Modifier.animateContentSize(animationSpec = MotdMotion.contentSize)) {
-                        if (state.isBouncer) {
-                            Column(Modifier.padding(16.dp)) {
-                                BouncerLoginFields(
-                                    kind = state.bouncerKind,
-                                    server = state.server,
-                                    sojuLogin = state.sojuLogin,
-                                    zncLogin = state.zncLogin,
-                                    onServerChange = onServerChange,
-                                    onSojuLoginChange = onSojuLoginChange,
-                                    onZncLoginChange = onZncLoginChange,
-                                )
-                            }
-                        } else {
-                            NetworkForm(
-                                server = state.server,
-                                auth = state.auth,
-                                onServerChange = onServerChange,
-                                onAuthChange = onAuthChange,
-                                modifier = Modifier.padding(vertical = 16.dp),
-                                preset = networkPreset(state.presetId),
-                            )
-                        }
-                    }
-                }
-                if (state.duplicateConnection) {
-                    Text(
-                        text = stringResource(R.string.add_network_duplicate),
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.testTag("add_network_duplicate"),
+                    BouncerKindSelector(
+                        kind = state.bouncerKind,
+                        enabled = state.phase == AddNetworkPhase.FORM,
+                        onSetKind = onSetBouncerKind,
                     )
                 }
-                Button(
-                    onClick = onSubmit,
-                    enabled = state.canSubmit,
-                    modifier = Modifier.fillMaxWidth().testTag("connect_save_button"),
-                ) { Text(stringResource(R.string.add_network_connect_save)) }
-
-                when (state.phase) {
-                    AddNetworkPhase.TESTING -> {
-                        TestingRow(state.connState)
-                    }
-
-                    AddNetworkPhase.FAILED -> {
-                        FailedSection(
-                            error = state.error,
-                            onEditForm = onEditForm,
-                            onSaveAnyway = onSaveAnyway,
-                            onRetry = onRetry,
-                        )
-                    }
-
-                    AddNetworkPhase.FORM -> {}
+            }
+            AnimatedVisibility(
+                visible = !state.isBouncer && state.phase == AddNetworkPhase.FORM,
+                enter = fadeIn(MotdMotion.microFadeIn) + expandVertically(animationSpec = MotdMotion.contentSize),
+                exit = fadeOut(MotdMotion.microFadeOut) + shrinkVertically(animationSpec = MotdMotion.contentSize),
+            ) {
+                Box(Modifier.padding(top = 12.dp)) {
+                    NetworkPresetPicker(selected = state.presetId, onSelect = onSelectPreset)
                 }
             }
+        }
+        SettingsGroup(title = stringResource(R.string.add_network_details_section)) {
+            // ZNC already collects its own per-bouncer network name (zncLogin.network,
+            // required for auth); this field only needs to exist for DIRECT/soju, which
+            // otherwise fall back to the preset name or bare host until edited later.
+            if (!state.isZnc) {
+                OutlinedTextField(
+                    value = state.displayName,
+                    onValueChange = onDisplayNameChange,
+                    label = { Text(stringResource(R.string.network_settings_display_name)) },
+                    placeholder = {
+                        Text(
+                            networkPreset(state.presetId)?.displayName
+                                ?: state.server.host.ifBlank { stringResource(R.string.add_network_kind_network) },
+                        )
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(16.dp).testTag("add_network_display_name"),
+                )
+            }
+            // Ease the height between the two form variants; the branch swap itself (and
+            // its field state reset) is unchanged from today.
+            Box(Modifier.animateContentSize(animationSpec = MotdMotion.contentSize)) {
+                if (state.isBouncer) {
+                    Column(Modifier.padding(16.dp)) {
+                        BouncerLoginFields(
+                            kind = state.bouncerKind,
+                            server = state.server,
+                            sojuLogin = state.sojuLogin,
+                            zncLogin = state.zncLogin,
+                            onServerChange = onServerChange,
+                            onSojuLoginChange = onSojuLoginChange,
+                            onZncLoginChange = onZncLoginChange,
+                        )
+                    }
+                } else {
+                    NetworkForm(
+                        server = state.server,
+                        auth = state.auth,
+                        onServerChange = onServerChange,
+                        onAuthChange = onAuthChange,
+                        modifier = Modifier.padding(vertical = 16.dp),
+                        preset = networkPreset(state.presetId),
+                    )
+                }
+            }
+        }
+        if (state.duplicateConnection) {
+            Text(
+                text = stringResource(R.string.add_network_duplicate),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.testTag("add_network_duplicate"),
+            )
+        }
+        Button(
+            onClick = onSubmit,
+            enabled = state.canSubmit,
+            modifier = Modifier.fillMaxWidth().testTag("connect_save_button"),
+        ) { Text(stringResource(R.string.add_network_connect_save)) }
+
+        when (state.phase) {
+            AddNetworkPhase.TESTING -> {
+                TestingRow(state.connState)
+            }
+
+            AddNetworkPhase.FAILED -> {
+                FailedSection(
+                    error = state.error,
+                    onEditForm = onEditForm,
+                    onSaveAnyway = onSaveAnyway,
+                    onRetry = onRetry,
+                )
+            }
+
+            AddNetworkPhase.FORM -> {}
         }
     }
 
@@ -299,12 +267,12 @@ internal fun NetworkPresetPicker(
         )
         SubLabel(stringResource(R.string.add_network_preset_secure))
         COMMON_NETWORK_PRESETS.filterNot(NetworkPreset::legacyUnencrypted).forEach { preset ->
-            val endpoint = "${preset.host}:${preset.port} · TLS"
+            val endpoint = stringResource(R.string.add_network_preset_tls_endpoint, preset.host, preset.port)
             RadioRow(
                 label = preset.displayName,
                 subtitle =
                     if (preset.id == NetworkPresetId.LIBERA) {
-                        "$endpoint · ${stringResource(R.string.add_network_preset_libera_motd)}"
+                        stringResource(R.string.add_network_preset_detail, endpoint, stringResource(R.string.add_network_preset_libera_motd))
                     } else {
                         endpoint
                     },
@@ -317,7 +285,13 @@ internal fun NetworkPresetPicker(
         COMMON_NETWORK_PRESETS.filter(NetworkPreset::legacyUnencrypted).forEach { preset ->
             RadioRow(
                 label = preset.displayName,
-                subtitle = "${preset.host}:${preset.port} · ${stringResource(R.string.add_network_preset_unencrypted)}",
+                subtitle =
+                    stringResource(
+                        R.string.add_network_preset_plain_endpoint,
+                        preset.host,
+                        preset.port,
+                        stringResource(R.string.add_network_preset_unencrypted),
+                    ),
                 selected = selected == preset.id,
                 enabled = true,
                 onClick = { onSelect(preset.id) },

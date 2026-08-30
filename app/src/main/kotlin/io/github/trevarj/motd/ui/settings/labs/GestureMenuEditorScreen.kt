@@ -21,7 +21,6 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.outlined.Add
@@ -40,11 +39,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -71,6 +68,7 @@ import io.github.trevarj.motd.gesture.GestureProviderKind
 import io.github.trevarj.motd.gesture.MAX_RING_SLICES
 import io.github.trevarj.motd.gesture.defaultGestureMenu
 import io.github.trevarj.motd.gesture.vector
+import io.github.trevarj.motd.ui.settings.SettingsScaffold
 import io.github.trevarj.motd.ui.theme.MotdTheme
 
 const val GESTURE_EDITOR_SCREEN_TAG = "screen_gesture_editor"
@@ -149,40 +147,30 @@ fun GestureMenuEditorContent(
     var configuring by remember { mutableStateOf<GestureNode.Provider?>(null) }
     var resetting by remember { mutableStateOf(false) }
 
-    Scaffold(
+    SettingsScaffold(
+        title = stringResource(R.string.gesture_editor_title),
+        onBack = onBack,
         modifier = Modifier.testTag(GESTURE_EDITOR_SCREEN_TAG),
-        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.gesture_editor_title)) },
-                navigationIcon = {
-                    IconButton(onClick = onBack, modifier = Modifier.testTag("settings_back")) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.onboarding_back),
-                        )
-                    }
-                },
-                actions = {
-                    TextButton(
-                        onClick = { resetting = true },
-                        enabled = state.loaded,
-                        modifier = Modifier.testTag(GESTURE_EDITOR_RESET_TAG),
-                    ) {
-                        Text(stringResource(R.string.gesture_editor_reset))
-                    }
-                    IconButton(
-                        onClick = callbacks.onSave,
-                        enabled = state.canSave,
-                        modifier = Modifier.testTag(GESTURE_EDITOR_SAVE_TAG),
-                    ) {
-                        Icon(Icons.Filled.Check, contentDescription = stringResource(R.string.action_save))
-                    }
-                },
-            )
+        scroll = false,
+        pagePadding = false,
+        topActions = {
+            TextButton(
+                onClick = { resetting = true },
+                enabled = state.loaded,
+                modifier = Modifier.testTag(GESTURE_EDITOR_RESET_TAG),
+            ) {
+                Text(stringResource(R.string.gesture_editor_reset))
+            }
+            IconButton(
+                onClick = callbacks.onSave,
+                enabled = state.canSave,
+                modifier = Modifier.testTag(GESTURE_EDITOR_SAVE_TAG),
+            ) {
+                Icon(Icons.Filled.Check, contentDescription = stringResource(R.string.action_save))
+            }
         },
-    ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
+    ) {
+        Column(Modifier.fillMaxSize()) {
             EditorBanner(state)
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
@@ -810,7 +798,7 @@ private fun IconPickerDialog(
                         modifier = Modifier.testTag("gesture_editor_icon_${icon.name.lowercase()}"),
                     ) {
                         IconButton(onClick = { onPick(icon) }) {
-                            Icon(icon.vector, contentDescription = icon.name)
+                            Icon(icon.vector, contentDescription = stringResource(gestureIconLabel(icon)))
                         }
                     }
                 }
@@ -851,7 +839,7 @@ private fun nodeSummary(node: GestureNode): String =
         is GestureNode.Provider -> {
             val source = stringResource(providerKindLabel(node.kind))
             val entries = stringResource(R.string.gesture_editor_provider_limit, node.clampedLimit)
-            "$source · $entries"
+            stringResource(R.string.gesture_editor_provider_summary, source, entries)
         }
 
         is GestureNode.Unknown -> {
@@ -877,6 +865,35 @@ private fun violationText(violation: GestureMenuViolation): String =
         is GestureMenuViolation.DuplicateId -> {
             stringResource(R.string.gesture_editor_violation_duplicate)
         }
+    }
+
+@StringRes
+private fun gestureIconLabel(icon: GestureIcon): Int =
+    when (icon) {
+        GestureIcon.UNKNOWN -> R.string.gesture_icon_unknown
+        GestureIcon.MENU -> R.string.gesture_icon_menu
+        GestureIcon.FOLDER -> R.string.gesture_icon_folder
+        GestureIcon.CHAT -> R.string.gesture_icon_chat
+        GestureIcon.PIN -> R.string.gesture_icon_pin
+        GestureIcon.STAR -> R.string.gesture_icon_star
+        GestureIcon.UNREAD -> R.string.gesture_icon_unread
+        GestureIcon.MARK_READ -> R.string.gesture_icon_mark_read
+        GestureIcon.PEOPLE -> R.string.gesture_icon_people
+        GestureIcon.PERSON -> R.string.gesture_icon_person
+        GestureIcon.MENTION -> R.string.gesture_icon_mention
+        GestureIcon.SEARCH -> R.string.gesture_icon_search
+        GestureIcon.INFO -> R.string.gesture_icon_info
+        GestureIcon.BOLT -> R.string.gesture_icon_bolt
+        GestureIcon.AWAY -> R.string.gesture_icon_away
+        GestureIcon.NETWORK -> R.string.gesture_icon_network
+        GestureIcon.GLOBE -> R.string.gesture_icon_globe
+        GestureIcon.ATTACH -> R.string.gesture_icon_attach
+        GestureIcon.LIGHT_MODE -> R.string.gesture_icon_light_mode
+        GestureIcon.DARK_MODE -> R.string.gesture_icon_dark_mode
+        GestureIcon.REFRESH -> R.string.gesture_icon_refresh
+        GestureIcon.POWER -> R.string.gesture_icon_power
+        GestureIcon.LINK -> R.string.gesture_icon_link
+        GestureIcon.MORE -> R.string.gesture_icon_more
     }
 
 @StringRes

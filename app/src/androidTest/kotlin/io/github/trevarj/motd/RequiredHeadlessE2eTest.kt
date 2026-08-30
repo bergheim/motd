@@ -563,8 +563,8 @@ class RequiredHeadlessE2eTest {
         // Return from Appearance to Settings, then exercise the category and bouncer routes.
         SettingsRobot(compose).apply {
             returnToRoot()
-            chat()
-            assertDisplayed("settings_presence_mode_smart")
+            searchPresence()
+            returnToPresenceSearch()
             returnToRoot()
             networks()
         }

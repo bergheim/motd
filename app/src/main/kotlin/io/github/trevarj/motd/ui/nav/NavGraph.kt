@@ -48,6 +48,9 @@ import io.github.trevarj.motd.ui.settings.NetworkToolsScreen
 import io.github.trevarj.motd.ui.settings.NetworksSettingsScreen
 import io.github.trevarj.motd.ui.settings.NickListKind
 import io.github.trevarj.motd.ui.settings.SettingsScreen
+import io.github.trevarj.motd.ui.settings.SettingsSearchDestination
+import io.github.trevarj.motd.ui.settings.SettingsSearchPage
+import io.github.trevarj.motd.ui.settings.UploadsSettingsScreen
 import io.github.trevarj.motd.ui.settings.addnetwork.AddNetworkScreen
 import io.github.trevarj.motd.ui.settings.bouncer.BouncerNetworksScreen
 import io.github.trevarj.motd.ui.settings.labs.GestureMenuEditorScreen
@@ -266,26 +269,31 @@ fun MotdNavGraph(
             )
         }
         composable<SettingsRoute> {
-            // Top-level Settings: category rows opening the focused sub-screens below.
             SettingsScreen(
                 onBack = { navController.popBackStack() },
-                onOpenAppearance = { navController.navigate(AppearanceSettingsRoute) },
-                onOpenChat = { navController.navigate(ChatSettingsRoute) },
-                onOpenDelivery = { navController.navigate(DeliverySettingsRoute) },
-                onOpenNetworks = { navController.navigate(NetworksSettingsRoute) },
-                onOpenBackupRestore = { navController.navigate(BackupRestoreRoute) },
-                onOpenLabs = { navController.navigate(LabsRoute) },
-                onOpenAbout = { navController.navigate(AboutRoute) },
+                onOpenAppearance = { navController.navigate(AppearanceSettingsRoute()) },
+                onOpenChat = { navController.navigate(ChatSettingsRoute()) },
+                onOpenDelivery = { navController.navigate(DeliverySettingsRoute()) },
+                onOpenNetworks = { navController.navigate(NetworksSettingsRoute()) },
+                onOpenUploads = { navController.navigate(UploadsSettingsRoute()) },
+                onOpenBackupRestore = { navController.navigate(BackupRestoreRoute()) },
+                onOpenLabs = { navController.navigate(LabsRoute()) },
+                onOpenAbout = { navController.navigate(AboutRoute()) },
+                onOpenSearchResult = { navController.openSettingsResult(it) },
             )
         }
-        composable<AppearanceSettingsRoute> {
+        composable<AppearanceSettingsRoute> { entry ->
+            val route = entry.toRoute<AppearanceSettingsRoute>()
             AppearanceSettingsScreen(
+                target = route.target,
                 onBack = { navController.popBackStack() },
                 onOpenNickColors = { navController.navigate(NickColorsRoute) },
             )
         }
-        composable<ChatSettingsRoute> {
+        composable<ChatSettingsRoute> { entry ->
+            val route = entry.toRoute<ChatSettingsRoute>()
             ChatSettingsScreen(
+                target = route.target,
                 onBack = { navController.popBackStack() },
                 onOpenFriends = { navController.navigate(FriendsRoute) },
                 onOpenFools = { navController.navigate(FoolsRoute) },
@@ -295,19 +303,33 @@ fun MotdNavGraph(
         composable<DirectConnectionsRoute> {
             DirectConnectionsScreen(onBack = { navController.popBackStack() })
         }
-        composable<DeliverySettingsRoute> {
-            DeliverySettingsScreen(onBack = { navController.popBackStack() })
+        composable<DeliverySettingsRoute> { entry ->
+            DeliverySettingsScreen(
+                target = entry.toRoute<DeliverySettingsRoute>().target,
+                onBack = { navController.popBackStack() },
+            )
         }
-        composable<NetworksSettingsRoute> {
+        composable<UploadsSettingsRoute> { entry ->
+            UploadsSettingsScreen(
+                target = entry.toRoute<UploadsSettingsRoute>().target,
+                onBack = { navController.popBackStack() },
+            )
+        }
+        composable<NetworksSettingsRoute> { entry ->
             NetworksSettingsScreen(
+                target = entry.toRoute<NetworksSettingsRoute>().target,
                 onBack = { navController.popBackStack() },
                 onOpenNetwork = { navController.navigate(NetworkSettingsRoute(it)) },
                 onOpenAddNetwork = { navController.navigate(AddNetworkRoute) },
                 onScanInvite = { navController.navigate(QrInviteScannerRoute) },
             )
         }
-        composable<BackupRestoreRoute> {
-            BackupRestoreScreen(onBack = { navController.popBackStack() })
+        composable<BackupRestoreRoute> { entry ->
+            BackupRestoreScreen(
+                target = entry.toRoute<BackupRestoreRoute>().target,
+                onBack = { navController.popBackStack() },
+                onReviewNetworks = { navController.navigate(NetworksSettingsRoute()) },
+            )
         }
         composable<ManageFoldersRoute> {
             ManageFoldersScreen(
@@ -327,8 +349,9 @@ fun MotdNavGraph(
                 onBack = { navController.popBackStack() },
             )
         }
-        composable<LabsRoute> {
+        composable<LabsRoute> { entry ->
             LabsScreen(
+                target = entry.toRoute<LabsRoute>().target,
                 onBack = { navController.popBackStack() },
                 onOpenGestureMenu = { navController.navigate(GestureMenuEditorRoute) },
             )
@@ -349,6 +372,7 @@ fun MotdNavGraph(
             val route = entry.toRoute<NetworkSettingsRoute>()
             NetworkSettingsScreen(
                 networkId = route.networkId,
+                target = route.target,
                 onBack = { navController.popBackStack() },
                 // Round 5: soju root -> bouncer manager; "Server messages" -> the SERVER buffer.
                 onOpenBouncerNetworks = { navController.navigate(BouncerNetworksRoute(it)) },
@@ -423,8 +447,11 @@ fun MotdNavGraph(
                 onCancel = { navController.popBackStack() },
             )
         }
-        composable<AboutRoute> {
-            AboutScreen(onBack = { navController.popBackStack() })
+        composable<AboutRoute> { entry ->
+            AboutScreen(
+                target = entry.toRoute<AboutRoute>().target,
+                onBack = { navController.popBackStack() },
+            )
         }
         // Round 5: app-shell / network-management destinations.
         composable<AddNetworkRoute> {
@@ -480,7 +507,7 @@ private fun ChatListPane(
                 replaceCurrentChat,
             )
         },
-        onOpenSettings = { navController.navigate(SettingsRoute) },
+        onOpenSettings = { navController.navigate(SettingsRoute()) },
         onOpenSearch = { navController.navigate(SearchRoute()) },
         onOpenFeed = { navController.navigate(GlobalFeedRoute) },
         onOpenManageFolders = { navController.navigate(ManageFoldersRoute) },
@@ -509,6 +536,29 @@ internal fun NavHostController.openChat(
 ) {
     navigate(route) {
         if (replaceCurrentChat) popUpTo<ChatRoute> { inclusive = true }
+    }
+}
+
+private fun NavHostController.openSettingsResult(destination: SettingsSearchDestination) {
+    when (destination) {
+        is SettingsSearchDestination.Network -> {
+            navigate(NetworkSettingsRoute(destination.networkId, destination.target))
+        }
+
+        is SettingsSearchDestination.Page -> {
+            val target = destination.target
+            when (destination.page) {
+                SettingsSearchPage.ROOT -> navigate(SettingsRoute(target))
+                SettingsSearchPage.APPEARANCE -> navigate(AppearanceSettingsRoute(target))
+                SettingsSearchPage.CHAT -> navigate(ChatSettingsRoute(target))
+                SettingsSearchPage.DELIVERY -> navigate(DeliverySettingsRoute(target))
+                SettingsSearchPage.UPLOADS -> navigate(UploadsSettingsRoute(target))
+                SettingsSearchPage.NETWORKS -> navigate(NetworksSettingsRoute(target))
+                SettingsSearchPage.BACKUP -> navigate(BackupRestoreRoute(target))
+                SettingsSearchPage.LABS -> navigate(LabsRoute(target))
+                SettingsSearchPage.ABOUT -> navigate(AboutRoute(target))
+            }
+        }
     }
 }
 

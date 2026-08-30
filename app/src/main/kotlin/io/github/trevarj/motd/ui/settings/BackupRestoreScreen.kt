@@ -1,236 +1,329 @@
 package io.github.trevarj.motd.ui.settings
 
-import android.content.Context
-import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
-import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewModelScope
-import dagger.hilt.android.lifecycle.HiltViewModel
-import dagger.hilt.android.qualifiers.ApplicationContext
 import io.github.trevarj.motd.R
 import io.github.trevarj.motd.data.backup.BackupExportMode
 import io.github.trevarj.motd.data.backup.BackupImportMode
-import io.github.trevarj.motd.data.backup.ConfigurationBackupRepository
 import io.github.trevarj.motd.data.backup.ConfigurationImportPreview
-import io.github.trevarj.motd.ui.theme.MotdMotion
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
-import java.io.ByteArrayOutputStream
-import javax.inject.Inject
+import io.github.trevarj.motd.ui.nav.SettingsTarget
+import java.text.DateFormat
+import java.util.Date
 
 @Composable
 fun BackupRestoreScreen(
     onBack: () -> Unit,
+    onReviewNetworks: () -> Unit = {},
+    target: SettingsTarget? = null,
     viewModel: BackupRestoreViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    var includeSecrets by rememberSaveable { mutableStateOf(false) }
+    var exportMode by rememberSaveable { mutableStateOf(BackupExportMode.CREDENTIALS_EXCLUDED) }
     var exportPassword by rememberSaveable { mutableStateOf("") }
     var importPassword by rememberSaveable { mutableStateOf("") }
-
-    val createDocument =
-        rememberLauncherForActivityResult(
-            ActivityResultContracts.CreateDocument("application/json"),
-        ) { uri -> if (uri != null) viewModel.writePreparedExport(uri) else viewModel.cancelPreparedExport() }
-    val openDocument =
-        rememberLauncherForActivityResult(
-            ActivityResultContracts.OpenDocument(),
-        ) { uri -> if (uri != null) viewModel.loadImport(uri) }
-
-    LaunchedEffect(state.exportRequestToken) {
-        val token = state.exportRequestToken ?: return@LaunchedEffect
-        createDocument.launch("motd-$token.motdconfig")
+    LaunchedEffect(state.importPhase) {
+        if (state.importPhase == BackupImportPhase.COMPLETE) importPassword = ""
     }
+    LaunchedEffect(exportMode, state.exportOutcome) {
+        exportPassword = retainedExportPassword(exportMode, state.exportOutcome, exportPassword)
+    }
+    val createDocument =
+        rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+            exportDestinationSelected(uri) { viewModel.export(it, exportMode, exportPassword) }
+        }
+    val openDocument =
+        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            uri?.let {
+                importPassword = ""
+                viewModel.loadImport(it)
+            }
+        }
 
+    BackupRestoreContent(
+        state = state,
+        exportMode = exportMode,
+        exportPassword = exportPassword,
+        importPassword = importPassword,
+        target = target,
+        onBack = onBack,
+        onExportMode = { exportMode = it },
+        onExportPassword = { exportPassword = it },
+        onChooseExport = { createDocument.launch("motd-${System.currentTimeMillis()}.motdconfig") },
+        onDismissExport = viewModel::dismissExportOutcome,
+        onChooseImport = { openDocument.launch(arrayOf("application/json", "text/*", "*/*")) },
+        onImportPassword = { importPassword = it },
+        onPreview = { viewModel.previewImport(importPassword) },
+        onImportMode = viewModel::setImportMode,
+        onApply = { viewModel.requestApply(importPassword) },
+        onConfirmReplace = { viewModel.confirmReplace(importPassword) },
+        onCancelReplace = viewModel::cancelReplace,
+        onDismissImport = viewModel::clearImportOutcome,
+        onReviewNetworks = onReviewNetworks,
+    )
+}
+
+internal fun exportDestinationSelected(
+    uri: android.net.Uri?,
+    export: (android.net.Uri) -> Unit,
+) {
+    uri?.let(export)
+}
+
+internal fun retainedExportPassword(
+    mode: BackupExportMode,
+    outcome: BackupExportOutcome?,
+    password: String,
+): String = if (mode == BackupExportMode.CREDENTIALS_EXCLUDED || outcome == BackupExportOutcome.Success) "" else password
+
+@Composable
+internal fun BackupRestoreContent(
+    state: BackupRestoreUiState,
+    exportMode: BackupExportMode,
+    exportPassword: String,
+    importPassword: String,
+    target: SettingsTarget? = null,
+    onBack: () -> Unit,
+    onExportMode: (BackupExportMode) -> Unit,
+    onExportPassword: (String) -> Unit,
+    onChooseExport: () -> Unit,
+    onDismissExport: () -> Unit,
+    onChooseImport: () -> Unit,
+    onImportPassword: (String) -> Unit,
+    onPreview: () -> Unit,
+    onImportMode: (BackupImportMode) -> Unit,
+    onApply: () -> Unit,
+    onConfirmReplace: () -> Unit,
+    onCancelReplace: () -> Unit,
+    onDismissImport: () -> Unit,
+    onReviewNetworks: () -> Unit,
+) {
     SettingsScaffold(
         title = stringResource(R.string.settings_backup_restore),
         onBack = onBack,
         modifier = Modifier.testTag("screen_backup_restore"),
     ) {
-        SettingsGroup("Export configuration") {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Messages, chat history, drafts, generated push keys, cached previews, upload history, certificate pins, pending account setup, channel keys, and runtime state are not exported.")
-                // The switch row and the password field share one Column child so the collapsed
-                // field sits outside the spacedBy flow; its 12dp gap lives inside the animation.
-                Column {
-                    Row(
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                .clickable(role = Role.Switch) { includeSecrets = !includeSecrets }
-                                .padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Include credentials", fontWeight = FontWeight.Medium)
-                            Text(
-                                "Creates a password-encrypted export. Client certificate selections still stay device-local.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Switch(
-                            checked = includeSecrets,
-                            onCheckedChange = null,
-                            modifier = Modifier.testTag("backup_export_include_credentials"),
+        SettingsTarget(
+            if (target == SettingsTarget.BACKUP) SettingsTarget.EXPORT_BACKUP.name else target?.name,
+            SettingsTarget.EXPORT_BACKUP.name,
+        ) { targetModifier ->
+            SettingsGroup(title = stringResource(R.string.backup_export_title)) {
+                Column(targetModifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(stringResource(R.string.backup_export_guidance))
+                    Column(Modifier.selectableGroup()) {
+                        RadioRow(
+                            label = stringResource(R.string.backup_export_without_credentials),
+                            subtitle = stringResource(R.string.backup_export_without_credentials_desc),
+                            selected = exportMode == BackupExportMode.CREDENTIALS_EXCLUDED,
+                            enabled = state.exportPhase != BackupExportPhase.EXPORTING,
+                            onClick = { onExportMode(BackupExportMode.CREDENTIALS_EXCLUDED) },
+                            modifier = Modifier.testTag("backup_export_without_credentials"),
+                        )
+                        RadioRow(
+                            label = stringResource(R.string.backup_export_with_credentials),
+                            subtitle = stringResource(R.string.backup_export_with_credentials_desc),
+                            selected = exportMode == BackupExportMode.ENCRYPTED_WITH_CREDENTIALS,
+                            enabled = state.exportPhase != BackupExportPhase.EXPORTING,
+                            onClick = { onExportMode(BackupExportMode.ENCRYPTED_WITH_CREDENTIALS) },
+                            modifier = Modifier.testTag("backup_export_with_credentials"),
                         )
                     }
-                    AnimatedVisibility(
-                        visible = includeSecrets,
-                        enter = fadeIn(MotdMotion.microFadeIn) + expandVertically(animationSpec = MotdMotion.contentSize),
-                        exit = fadeOut(MotdMotion.microFadeOut) + shrinkVertically(animationSpec = MotdMotion.contentSize),
-                    ) {
+                    if (exportMode == BackupExportMode.ENCRYPTED_WITH_CREDENTIALS) {
                         PasswordField(
                             value = exportPassword,
-                            onValueChange = { exportPassword = it },
-                            modifier = Modifier.padding(top = 12.dp).fillMaxWidth().testTag("backup_export_password"),
-                            label = "Export password",
-                            supportingText = "Use 12 to 128 characters.",
+                            onValueChange = onExportPassword,
+                            label = stringResource(R.string.backup_export_password),
+                            supportingText = stringResource(R.string.backup_password_requirements),
+                            isError = exportPassword.isNotEmpty() && exportPassword.length !in 12..128,
+                            modifier = Modifier.testTag("backup_export_password"),
                         )
                     }
-                }
-                Button(
-                    onClick = {
-                        viewModel.prepareExport(
-                            mode =
-                                if (includeSecrets) {
-                                    BackupExportMode.ENCRYPTED_WITH_CREDENTIALS
-                                } else {
-                                    BackupExportMode.CREDENTIALS_EXCLUDED
+                    Button(
+                        onClick = onChooseExport,
+                        enabled =
+                            !state.busy &&
+                                (exportMode == BackupExportMode.CREDENTIALS_EXCLUDED || exportPassword.length in 12..128),
+                        modifier = Modifier.testTag("backup_export"),
+                    ) { Text(stringResource(R.string.backup_choose_export_destination)) }
+                    if (state.exportPhase == BackupExportPhase.EXPORTING) {
+                        ProgressRow(stringResource(R.string.backup_export_progress), "backup_export_progress")
+                    }
+                    state.exportOutcome?.let { outcome ->
+                        PersistentStatusNotice(
+                            text =
+                                when (outcome) {
+                                    BackupExportOutcome.Success -> stringResource(R.string.backup_export_success)
+                                    is BackupExportOutcome.Failure -> backupFailureText(outcome.category)
                                 },
-                            password = exportPassword,
+                            error = outcome is BackupExportOutcome.Failure,
+                            modifier = Modifier.testTag("backup_export_result"),
+                            onDismiss = onDismissExport,
                         )
-                    },
-                    enabled = !state.busy && (!includeSecrets || exportPassword.length in 12..128),
-                    modifier = Modifier.testTag("backup_export"),
-                ) {
-                    Text("Export")
+                    }
                 }
             }
         }
 
-        SettingsGroup("Import configuration") {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                // Same grouping trick as the export block: each collapsed section stays outside
-                // the spacedBy flow and carries its own 12dp gap inside the animation.
-                Column {
+        SettingsTarget(target?.name, SettingsTarget.IMPORT_BACKUP.name) { targetModifier ->
+            SettingsGroup(title = stringResource(R.string.backup_import_title)) {
+                Column(targetModifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(stringResource(R.string.backup_import_guidance))
                     OutlinedButton(
-                        onClick = { openDocument.launch(arrayOf("application/json", "text/*", "*/*")) },
+                        onClick = onChooseImport,
                         enabled = !state.busy,
                         modifier = Modifier.testTag("backup_import_choose"),
-                    ) {
-                        Text("Choose backup")
-                    }
-                    AnimatedVisibility(
-                        visible = state.importNeedsPassword,
-                        enter = fadeIn(MotdMotion.microFadeIn) + expandVertically(animationSpec = MotdMotion.contentSize),
-                        exit = fadeOut(MotdMotion.microFadeOut) + shrinkVertically(animationSpec = MotdMotion.contentSize),
-                    ) {
-                        Column(Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            PasswordField(
-                                value = importPassword,
-                                onValueChange = { importPassword = it },
-                                modifier = Modifier.fillMaxWidth().testTag("backup_import_password"),
-                                label = "Backup password",
-                            )
-                            Button(
-                                onClick = { viewModel.previewImport(importPassword) },
-                                enabled = !state.busy && importPassword.isNotBlank(),
-                                modifier = Modifier.testTag("backup_import_preview_encrypted"),
-                            ) {
-                                Text("Preview")
-                            }
-                        }
-                    }
-                }
-                Column {
-                    ImportModeRow(
-                        selected = state.importMode,
-                        onSelected = viewModel::setImportMode,
-                    )
-                    // Exit latch: the preview nulls when the import applies, so the outgoing block
-                    // holds the last real preview while it collapses.
-                    var lastPreview by remember { mutableStateOf<ConfigurationImportPreview?>(null) }
-                    state.preview?.let { lastPreview = it }
-                    AnimatedVisibility(
-                        visible = state.preview != null,
-                        enter = fadeIn(MotdMotion.microFadeIn) + expandVertically(animationSpec = MotdMotion.contentSize),
-                        exit = fadeOut(MotdMotion.microFadeOut) + shrinkVertically(animationSpec = MotdMotion.contentSize),
-                    ) {
-                        lastPreview?.let { preview ->
-                            Column(Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                ImportPreview(preview)
-                                Button(
-                                    onClick = { viewModel.applyImport(importPassword) },
-                                    // Also disabled while the block is exiting (preview nulled):
-                                    // the latched content stays tappable for the collapse frames,
-                                    // and a second tap there would re-run the import.
-                                    enabled = !state.busy && state.preview != null,
-                                    modifier = Modifier.testTag("backup_import_apply"),
-                                ) {
-                                    Text(if (state.importMode == BackupImportMode.REPLACE && preview.removedNetworks > 0) "Replace configuration" else "Apply import")
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+                    ) { Text(stringResource(R.string.backup_choose_import_file)) }
 
-        if (state.busy) {
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                CircularProgressIndicator()
-                Text("Working...")
+                    val completedImport = state.importOutcome as? BackupImportOutcome.Success
+                    val displayedFilename = state.selectedFilename ?: completedImport?.sourceFilename
+                    displayedFilename?.let { filename ->
+                        SettingsValueRow(
+                            title = stringResource(R.string.backup_selected_file),
+                            value = filename,
+                            summary =
+                                stringResource(
+                                    if (completedImport?.encrypted ?: state.importEncrypted) {
+                                        R.string.backup_encrypted
+                                    } else {
+                                        R.string.backup_plain
+                                    },
+                                ),
+                            modifier = Modifier.testTag("backup_selected_document"),
+                        )
+                    }
+
+                    if (state.importPhase == BackupImportPhase.PASSWORD_REQUIRED) {
+                        PasswordField(
+                            value = importPassword,
+                            onValueChange = onImportPassword,
+                            label = stringResource(R.string.backup_import_password),
+                            modifier = Modifier.testTag("backup_import_password"),
+                        )
+                        Button(
+                            onClick = onPreview,
+                            enabled = importPassword.isNotBlank(),
+                            modifier = Modifier.testTag("backup_import_preview_encrypted"),
+                        ) { Text(stringResource(R.string.backup_preview_action)) }
+                    }
+
+                    if (state.selectedFilename != null && state.importPhase in setOf(BackupImportPhase.PREVIEW, BackupImportPhase.APPLYING)) {
+                        ImportModeRow(state.importMode, onImportMode, enabled = state.importPhase == BackupImportPhase.PREVIEW)
+                    } else if (completedImport != null) {
+                        SettingsValueRow(
+                            title = stringResource(R.string.backup_import_mode),
+                            value =
+                                stringResource(
+                                    if (completedImport.mode == BackupImportMode.MERGE) {
+                                        R.string.backup_import_merge
+                                    } else {
+                                        R.string.backup_import_replace
+                                    },
+                                ),
+                            modifier = Modifier.testTag("backup_completed_mode"),
+                        )
+                    }
+
+                    state.preview?.let { preview ->
+                        ImportPreview(preview)
+                        Button(
+                            onClick = onApply,
+                            enabled = state.importPhase == BackupImportPhase.PREVIEW,
+                            modifier = Modifier.testTag("backup_import_apply"),
+                        ) {
+                            Text(
+                                stringResource(
+                                    if (state.importMode == BackupImportMode.REPLACE) R.string.backup_replace_action else R.string.backup_apply_action,
+                                ),
+                            )
+                        }
+                    }
+                    if (state.importPhase == BackupImportPhase.READING) {
+                        ProgressRow(stringResource(R.string.backup_preview_progress), "backup_import_progress")
+                    }
+                    if (state.importPhase == BackupImportPhase.APPLYING) {
+                        ProgressRow(stringResource(R.string.backup_apply_progress), "backup_apply_progress")
+                    }
+
+                    state.importOutcome?.let { outcome ->
+                        when (outcome) {
+                            is BackupImportOutcome.Failure -> {
+                                PersistentStatusNotice(
+                                    text = backupFailureText(outcome.category),
+                                    error = true,
+                                    modifier = Modifier.testTag("backup_import_result"),
+                                    onDismiss = onDismissImport,
+                                )
+                            }
+
+                            is BackupImportOutcome.Success -> {
+                                val result = outcome.result
+                                PersistentStatusNotice(
+                                    text =
+                                        stringResource(
+                                            R.string.backup_import_success,
+                                            result.addedNetworks,
+                                            result.updatedNetworks,
+                                            result.removedNetworks,
+                                            result.missingCredentialNetworks,
+                                        ),
+                                    modifier = Modifier.testTag("backup_import_result"),
+                                    actionLabel =
+                                        if (result.missingCredentialNetworks > 0) {
+                                            stringResource(R.string.backup_review_networks)
+                                        } else {
+                                            null
+                                        },
+                                    onAction = if (result.missingCredentialNetworks > 0) onReviewNetworks else null,
+                                    onDismiss = onDismissImport,
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
-        state.message?.let {
-            Text(
-                it,
-                modifier = Modifier.testTag("backup_restore_message"),
-                color = if (state.error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-            )
-        }
+    }
+
+    if (state.confirmReplace) {
+        val removed = state.preview?.removedNetworks ?: 0
+        AlertDialog(
+            onDismissRequest = onCancelReplace,
+            modifier = Modifier.testTag("backup_replace_confirm"),
+            title = { Text(stringResource(R.string.backup_replace_confirm_title)) },
+            text = { Text(pluralStringResource(R.plurals.backup_replace_confirm_message, removed, removed)) },
+            confirmButton = {
+                TextButton(onClick = onConfirmReplace, modifier = Modifier.testTag("backup_replace_confirm_action")) {
+                    Text(stringResource(R.string.backup_replace_confirm_action))
+                }
+            },
+            dismissButton = { TextButton(onClick = onCancelReplace) { Text(stringResource(R.string.action_cancel)) } },
+        )
     }
 }
 
@@ -238,202 +331,91 @@ fun BackupRestoreScreen(
 internal fun ImportModeRow(
     selected: BackupImportMode,
     onSelected: (BackupImportMode) -> Unit,
+    enabled: Boolean = true,
 ) {
-    Column(
-        modifier = Modifier.selectableGroup(),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Text("Import mode", fontWeight = FontWeight.Medium)
-        ImportModeOption("Merge", "Update matching networks and keep local-only networks.", BackupImportMode.MERGE, selected, onSelected)
-        ImportModeOption("Replace", "Remove local-only networks and their local history.", BackupImportMode.REPLACE, selected, onSelected)
-    }
-}
-
-@Composable
-private fun ImportModeOption(
-    label: String,
-    description: String,
-    mode: BackupImportMode,
-    selected: BackupImportMode,
-    onSelected: (BackupImportMode) -> Unit,
-) {
-    val isSelected = selected == mode
-    Row(
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .selectable(selected = isSelected, role = Role.RadioButton) { onSelected(mode) }
-                .testTag("backup_import_mode_${mode.name.lowercase()}")
-                .padding(vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        RadioButton(selected = isSelected, onClick = null)
-        Column(Modifier.weight(1f)) {
-            Text(label)
-            Text(description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+    Column(Modifier.selectableGroup()) {
+        SectionHeader(stringResource(R.string.backup_import_mode))
+        RadioRow(
+            label = stringResource(R.string.backup_import_merge),
+            subtitle = stringResource(R.string.backup_import_merge_desc),
+            selected = selected == BackupImportMode.MERGE,
+            enabled = enabled,
+            onClick = { onSelected(BackupImportMode.MERGE) },
+            modifier = Modifier.testTag("backup_import_mode_merge"),
+        )
+        RadioRow(
+            label = stringResource(R.string.backup_import_replace),
+            subtitle = stringResource(R.string.backup_import_replace_desc),
+            selected = selected == BackupImportMode.REPLACE,
+            enabled = enabled,
+            onClick = { onSelected(BackupImportMode.REPLACE) },
+            modifier = Modifier.testTag("backup_import_mode_replace"),
+        )
     }
 }
 
 @Composable
 private fun ImportPreview(preview: ConfigurationImportPreview) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.testTag("backup_import_preview")) {
-        Text("Preview", fontWeight = FontWeight.Medium)
-        Text("${preview.networkCount} networks from motd ${preview.appVersion}")
-        Text("Add ${preview.addedNetworks}, update ${preview.updatedNetworks}, remove ${preview.removedNetworks}")
-        Text("${preview.folderCount} folders, ${preview.folderAssignmentCount} chat assignments")
-        Text("Settings: ${preview.settingGroups.joinToString().ifBlank { "none" }}")
-        if (preview.containsSecrets) Text("Credentials are included in this encrypted backup.")
-        if (preview.retainedLocalCredentials > 0) Text("${preview.retainedLocalCredentials} networks will retain local credentials.")
-        if (preview.missingCredentialNetworks > 0) Text("${preview.missingCredentialNetworks} networks need credentials before connecting.")
+    Column(Modifier.fillMaxWidth().testTag("backup_import_preview"), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(stringResource(R.string.backup_preview_title), fontWeight = FontWeight.SemiBold)
+        Text(stringResource(R.string.backup_preview_source, preview.appVersion, DateFormat.getDateTimeInstance().format(Date(preview.exportedAtEpochMillis))))
+        Text(pluralStringResource(R.plurals.backup_preview_networks, preview.networkCount, preview.networkCount))
+        Text(stringResource(R.string.backup_preview_changes, preview.addedNetworks, preview.updatedNetworks, preview.removedNetworks))
+        Text(stringResource(R.string.backup_preview_folders, preview.folderCount, preview.folderAssignmentCount))
+        val settingGroups = preview.settingGroups.map { backupSettingGroupLabel(it) }.distinct()
+        val settingGroupText = settingGroups.joinToString(stringResource(R.string.backup_settings_separator)).ifBlank { stringResource(R.string.backup_none) }
+        Text(stringResource(R.string.backup_preview_settings, settingGroupText))
+        if (preview.containsSecrets) Text(stringResource(R.string.backup_preview_credentials_included))
+        if (preview.retainedLocalCredentials > 0) {
+            Text(pluralStringResource(R.plurals.backup_preview_credentials_retained, preview.retainedLocalCredentials, preview.retainedLocalCredentials))
+        }
+        if (preview.missingCredentialNetworks > 0) {
+            Text(pluralStringResource(R.plurals.backup_preview_credentials_missing, preview.missingCredentialNetworks, preview.missingCredentialNetworks))
+        }
     }
 }
 
-@HiltViewModel
-class BackupRestoreViewModel
-    @Inject
-    constructor(
-        private val repository: ConfigurationBackupRepository,
-        @ApplicationContext private val context: Context,
-    ) : ViewModel() {
-        private val _state = MutableStateFlow(BackupRestoreUiState())
-        val state: StateFlow<BackupRestoreUiState> = _state.asStateFlow()
-        private var preparedExport: String? = null
-        private var importedDocument: String? = null
+@Composable
+private fun backupSettingGroupLabel(key: String): String =
+    stringResource(
+        when (key) {
+            "general" -> R.string.backup_settings_general
+            "appearance" -> R.string.backup_settings_appearance
+            "content previews" -> R.string.backup_settings_content_previews
+            "replies" -> R.string.backup_settings_replies
+            "uploads" -> R.string.backup_settings_uploads
+            "voice" -> R.string.backup_settings_voice
+            "avatars" -> R.string.backup_settings_avatars
+            "gesture menu" -> R.string.backup_settings_gesture_menu
+            else -> R.string.backup_settings_other
+        },
+    )
 
-        fun prepareExport(
-            mode: BackupExportMode,
-            password: String,
-        ) {
-            viewModelScope.launch {
-                runBusy {
-                    preparedExport = repository.exportToString(mode, password.takeIf(String::isNotBlank))
-                    _state.update {
-                        it.copy(
-                            exportRequestToken = System.currentTimeMillis(),
-                            message = null,
-                            error = false,
-                        )
-                    }
-                }
-            }
-        }
-
-        fun writePreparedExport(uri: Uri) {
-            viewModelScope.launch {
-                runBusy {
-                    val content = preparedExport ?: error("No export is ready.")
-                    context.contentResolver.openOutputStream(uri)?.use { output ->
-                        output.write(content.encodeToByteArray())
-                    } ?: error("Could not open export destination.")
-                    preparedExport = null
-                    _state.update { it.copy(exportRequestToken = null, message = "Configuration exported.", error = false) }
-                }
-            }
-        }
-
-        fun cancelPreparedExport() {
-            preparedExport = null
-            _state.update { it.copy(exportRequestToken = null) }
-        }
-
-        fun loadImport(uri: Uri) {
-            viewModelScope.launch {
-                runBusy {
-                    importedDocument = readText(uri)
-                    val encrypted = repository.isEncrypted(importedDocument.orEmpty())
-                    _state.update {
-                        it.copy(
-                            importNeedsPassword = encrypted,
-                            preview = null,
-                            message = if (encrypted) "Enter the backup password to preview." else null,
-                            error = false,
-                        )
-                    }
-                    if (!encrypted) previewImport("")
-                }
-            }
-        }
-
-        fun setImportMode(mode: BackupImportMode) {
-            _state.update { it.copy(importMode = mode) }
-            if (importedDocument != null && !_state.value.importNeedsPassword) previewImport("")
-        }
-
-        fun previewImport(password: String) {
-            viewModelScope.launch {
-                runBusy {
-                    val raw = importedDocument ?: error("Choose a backup first.")
-                    val preview = repository.preview(raw, password.takeIf(String::isNotBlank), _state.value.importMode)
-                    _state.update {
-                        it.copy(
-                            preview = preview,
-                            message = null,
-                            error = false,
-                        )
-                    }
-                }
-            }
-        }
-
-        fun applyImport(password: String) {
-            viewModelScope.launch {
-                runBusy {
-                    val raw = importedDocument ?: error("Choose a backup first.")
-                    val result = repository.import(raw, password.takeIf(String::isNotBlank), _state.value.importMode)
-                    _state.update {
-                        it.copy(
-                            preview = null,
-                            message = "Imported ${result.addedNetworks} added, ${result.updatedNetworks} updated, ${result.removedNetworks} removed. ${result.missingCredentialNetworks} need credentials.",
-                            error = false,
-                        )
-                    }
-                }
-            }
-        }
-
-        private suspend fun runBusy(block: suspend () -> Unit) {
-            _state.update { it.copy(busy = true, message = null, error = false) }
-            runCatching { block() }
-                .onFailure { failure ->
-                    _state.update {
-                        it.copy(
-                            message = failure.message ?: "Backup operation failed.",
-                            error = true,
-                        )
-                    }
-                }
-            _state.update { it.copy(busy = false) }
-        }
-
-        private fun readText(uri: Uri): String {
-            val output = ByteArrayOutputStream()
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                var total = 0
-                while (true) {
-                    val read = input.read(buffer)
-                    if (read < 0) break
-                    total += read
-                    require(total <= MAX_IMPORT_BYTES) { "Backup file is too large." }
-                    output.write(buffer, 0, read)
-                }
-            } ?: error("Could not open backup file.")
-            return output.toString(Charsets.UTF_8.name())
-        }
-
-        private companion object {
-            const val MAX_IMPORT_BYTES = 4 * 1024 * 1024
-        }
+@Composable
+private fun ProgressRow(
+    label: String,
+    tag: String,
+) {
+    Row(
+        modifier = Modifier.testTag(tag),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CircularProgressIndicator()
+        Text(label)
     }
+}
 
-data class BackupRestoreUiState(
-    val busy: Boolean = false,
-    val exportRequestToken: Long? = null,
-    val importMode: BackupImportMode = BackupImportMode.MERGE,
-    val importNeedsPassword: Boolean = false,
-    val preview: ConfigurationImportPreview? = null,
-    val message: String? = null,
-    val error: Boolean = false,
-)
+@Composable
+private fun backupFailureText(category: BackupFailure): String =
+    stringResource(
+        when (category) {
+            BackupFailure.WRONG_PASSWORD_OR_CORRUPT -> R.string.backup_error_password_corrupt
+            BackupFailure.UNSUPPORTED_OR_INVALID -> R.string.backup_error_invalid
+            BackupFailure.OVERSIZED -> R.string.backup_error_oversized
+            BackupFailure.READ -> R.string.backup_error_read
+            BackupFailure.WRITE -> R.string.backup_error_write
+            BackupFailure.EXPORT -> R.string.backup_error_export
+            BackupFailure.IMPORT -> R.string.backup_error_import
+        },
+    )

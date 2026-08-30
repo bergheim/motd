@@ -1,7 +1,6 @@
 package io.github.trevarj.motd.ui.settings
 
 import android.net.Uri
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -40,19 +39,20 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.painterResource
@@ -82,8 +82,7 @@ import io.github.trevarj.motd.data.prefs.TimeFormat
 import io.github.trevarj.motd.data.prefs.isDark
 import io.github.trevarj.motd.data.prefs.systemPartner
 import io.github.trevarj.motd.ui.chat.ChatWallpaperPicker
-import io.github.trevarj.motd.ui.components.IrcChannelBadge
-import io.github.trevarj.motd.ui.components.IrcSpriteAvatar
+import io.github.trevarj.motd.ui.nav.SettingsTarget
 import io.github.trevarj.motd.ui.theme.MotdMotion
 import io.github.trevarj.motd.ui.theme.MotdShapes
 import io.github.trevarj.motd.ui.theme.MotdTheme
@@ -98,18 +97,17 @@ import kotlin.math.roundToInt
 fun AppearanceSettingsScreen(
     onBack: () -> Unit = {},
     onOpenNickColors: () -> Unit = {},
-    viewModel: SettingsViewModel = hiltViewModel(),
+    target: SettingsTarget? = null,
+    viewModel: AppearanceSettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val context = LocalContext.current
+    val snackbarHostState = remember { SnackbarHostState() }
     val importFailedMessage = stringResource(R.string.settings_font_custom_invalid)
     // Success is already visible in the picker row (it selects and shows the file name); only the
-    // failure case needs a transient nudge, mirroring the audio-cache-clear Toast pattern.
-    LaunchedEffect(viewModel, context, importFailedMessage) {
+    // failure case needs transient scaffold feedback; success is visible in selected font row.
+    LaunchedEffect(viewModel, importFailedMessage) {
         viewModel.customFontImportEvents.collect { event ->
-            if (event == CustomFontImportEvent.FAILED) {
-                Toast.makeText(context, importFailedMessage, Toast.LENGTH_SHORT).show()
-            }
+            if (event == CustomFontImportEvent.FAILED) snackbarHostState.showSnackbar(importFailedMessage)
         }
     }
     // Re-read the on-disk font whenever the display name changes or the revision bumps: a
@@ -144,6 +142,8 @@ fun AppearanceSettingsScreen(
         onMessageSpacing = viewModel::setMessageSpacing,
         onBubbleCornerStyle = viewModel::setBubbleCornerStyle,
         onLauncherIcon = viewModel::setLauncherIcon,
+        target = target,
+        snackbarHostState = snackbarHostState,
     )
 }
 
@@ -173,153 +173,249 @@ fun AppearanceSettingsContent(
     onLauncherIcon: (LauncherIcon) -> Unit,
     customFontFile: File? = null,
     onImportCustomFont: (Uri) -> Unit = {},
+    target: SettingsTarget? = null,
+    snackbarHostState: SnackbarHostState? = null,
 ) {
     var showThemeSheet by rememberSaveable { mutableStateOf(false) }
     var showFontSheet by rememberSaveable { mutableStateOf(false) }
+    var choiceSheet by rememberSaveable { mutableStateOf<AppearanceChoice?>(null) }
     val followSystemAvailable = appearance.theme.systemPartner != null
     val trueBlackAvailable =
         appearance.theme == ColorThemePreset.SYSTEM ||
             appearance.theme.isDark || (appearance.followSystem && followSystemAvailable)
     val dynamicColorAvailable = appearance.theme == ColorThemePreset.SYSTEM
-    SettingsScaffold(title = stringResource(R.string.settings_appearance), onBack = onBack) {
+    SettingsScaffold(
+        title = stringResource(R.string.settings_appearance),
+        onBack = onBack,
+        snackbarHostState = snackbarHostState,
+    ) {
         SettingsGroup(title = stringResource(R.string.settings_theme_section)) {
-            SettingsNavigationRow(
-                icon = Icons.Outlined.Palette,
-                title = stringResource(R.string.settings_theme),
-                value = themePresetLabel(appearance.theme),
-                onClick = { showThemeSheet = true },
-                modifier = Modifier.testTag("settings_theme_picker"),
-            )
+            SettingsTarget(
+                if (target == SettingsTarget.APPEARANCE) SettingsTarget.THEME.name else target?.name,
+                SettingsTarget.THEME.name,
+            ) { targetModifier ->
+                SettingsNavigationRow(
+                    icon = Icons.Outlined.Palette,
+                    title = stringResource(R.string.settings_theme),
+                    value = themePresetLabel(appearance.theme),
+                    onClick = { showThemeSheet = true },
+                    modifier = targetModifier.testTag("settings_theme_picker"),
+                )
+            }
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-            SwitchRow(
-                title = stringResource(R.string.settings_follow_system),
-                subtitle =
-                    stringResource(
-                        when {
-                            appearance.theme == ColorThemePreset.SYSTEM -> R.string.settings_follow_system_system_desc
-                            followSystemAvailable -> R.string.settings_follow_system_desc
-                            else -> R.string.settings_follow_system_unavailable_desc
-                        },
-                    ),
-                checked = appearance.followSystem,
-                onCheckedChange = onFollowSystem,
-                switchTag = "settings_switch_follow_system",
-                enabled = followSystemAvailable,
-            )
+            SettingsTarget(target?.name, SettingsTarget.FOLLOW_SYSTEM.name) { targetModifier ->
+                SwitchRow(
+                    title = stringResource(R.string.settings_follow_system),
+                    subtitle =
+                        stringResource(
+                            when {
+                                appearance.theme == ColorThemePreset.SYSTEM -> R.string.settings_follow_system_system_desc
+                                followSystemAvailable -> R.string.settings_follow_system_desc
+                                else -> R.string.settings_follow_system_unavailable_desc
+                            },
+                        ),
+                    checked = appearance.followSystem,
+                    onCheckedChange = onFollowSystem,
+                    switchTag = "settings_switch_follow_system",
+                    enabled = followSystemAvailable,
+                    modifier = targetModifier,
+                )
+            }
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-            SwitchRow(
-                title = stringResource(R.string.settings_true_black),
-                subtitle =
-                    stringResource(
-                        when {
-                            appearance.theme == ColorThemePreset.SYSTEM -> R.string.settings_true_black_system_desc
-                            trueBlackAvailable -> R.string.settings_true_black_desc
-                            appearance.trueBlack -> R.string.settings_true_black_saved_desc
-                            else -> R.string.settings_true_black_unavailable_desc
-                        },
-                    ),
-                checked = appearance.trueBlack,
-                onCheckedChange = onTrueBlack,
-                switchTag = "settings_switch_true_black",
-                enabled = trueBlackAvailable,
-            )
+            SettingsTarget(target?.name, SettingsTarget.TRUE_BLACK.name) { targetModifier ->
+                SwitchRow(
+                    title = stringResource(R.string.settings_true_black),
+                    subtitle =
+                        stringResource(
+                            when {
+                                appearance.theme == ColorThemePreset.SYSTEM -> R.string.settings_true_black_system_desc
+                                trueBlackAvailable -> R.string.settings_true_black_desc
+                                appearance.trueBlack -> R.string.settings_true_black_saved_desc
+                                else -> R.string.settings_true_black_unavailable_desc
+                            },
+                        ),
+                    checked = appearance.trueBlack,
+                    onCheckedChange = onTrueBlack,
+                    switchTag = "settings_switch_true_black",
+                    enabled = trueBlackAvailable,
+                    modifier = targetModifier,
+                )
+            }
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-            SwitchRow(
-                title = stringResource(R.string.settings_dynamic_color),
-                subtitle =
-                    stringResource(
-                        if (dynamicColorAvailable) {
-                            R.string.settings_dynamic_color_desc
+            SettingsTarget(target?.name, SettingsTarget.DYNAMIC_COLOR.name) { targetModifier ->
+                SwitchRow(
+                    title = stringResource(R.string.settings_dynamic_color),
+                    subtitle =
+                        stringResource(
+                            if (dynamicColorAvailable) {
+                                R.string.settings_dynamic_color_desc
+                            } else {
+                                R.string.settings_dynamic_color_unavailable
+                            },
+                        ),
+                    checked = settings.dynamicColor && dynamicColorAvailable,
+                    onCheckedChange = onDynamicColor,
+                    switchTag = "settings_switch_dynamic_color",
+                    enabled = dynamicColorAvailable,
+                    modifier = targetModifier,
+                )
+            }
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            SettingsTarget(target?.name, SettingsTarget.NICK_COLORS.name) { targetModifier ->
+                SwitchRow(
+                    title = stringResource(R.string.settings_nick_colors),
+                    subtitle = stringResource(R.string.settings_nick_colors_desc),
+                    checked = settings.nickColorsEnabled,
+                    onCheckedChange = onNickColorsEnabled,
+                    switchTag = "settings_switch_nick_colors",
+                    modifier = targetModifier,
+                )
+            }
+            SettingsTarget(target?.name, SettingsTarget.NICK_PALETTE.name) { targetModifier ->
+                SettingsNavigationRow(
+                    title = stringResource(R.string.settings_nick_palette),
+                    value = nickPaletteLabel(settings.nickColorPalette),
+                    summary =
+                        if (settings.nickColorsEnabled) {
+                            null
                         } else {
-                            R.string.settings_dynamic_color_unavailable
+                            stringResource(R.string.settings_nick_palette_disabled)
                         },
-                    ),
-                checked = settings.dynamicColor && dynamicColorAvailable,
-                onCheckedChange = onDynamicColor,
-                switchTag = "settings_switch_dynamic_color",
-                enabled = dynamicColorAvailable,
-            )
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-            SwitchRow(
-                title = stringResource(R.string.settings_nick_colors),
-                subtitle = stringResource(R.string.settings_nick_colors_desc),
-                checked = settings.nickColorsEnabled,
-                onCheckedChange = onNickColorsEnabled,
-                switchTag = "settings_switch_nick_colors",
-            )
-            PaletteGroup(current = settings.nickColorPalette, enabled = settings.nickColorsEnabled, onSelect = onNickColorPalette)
-            SettingsNavigationRow(
-                icon = Icons.Outlined.ColorLens,
-                title = stringResource(R.string.settings_nick_color_overrides),
-                value =
-                    pluralStringResource(
-                        R.plurals.settings_nick_count,
-                        settings.nickColorOverrides.size,
-                        settings.nickColorOverrides.size,
-                    ),
-                modifier = Modifier.testTag("settings_nick_color_overrides"),
-                onClick = onOpenNickColors,
-            )
+                    enabled = settings.nickColorsEnabled,
+                    modifier = targetModifier.testTag("settings_palette_picker"),
+                    onClick = { choiceSheet = AppearanceChoice.PALETTE },
+                )
+            }
+            SettingsTarget(target?.name, SettingsTarget.NICK_OVERRIDES.name) { targetModifier ->
+                SettingsNavigationRow(
+                    icon = Icons.Outlined.ColorLens,
+                    title = stringResource(R.string.settings_nick_color_overrides),
+                    value =
+                        pluralStringResource(
+                            R.plurals.settings_nick_count,
+                            settings.nickColorOverrides.size,
+                            settings.nickColorOverrides.size,
+                        ),
+                    modifier = targetModifier.testTag("settings_nick_color_overrides"),
+                    onClick = onOpenNickColors,
+                )
+            }
         }
         SettingsGroup(title = stringResource(R.string.settings_layout_section)) {
-            SettingsNavigationRow(
-                icon = Icons.Outlined.TextFields,
-                title = stringResource(R.string.settings_app_font),
-                value = fontChoiceLabel(appearance.fontChoice),
-                onClick = { showFontSheet = true },
-                modifier = Modifier.testTag("settings_font_picker"),
-            )
+            SettingsTarget(target?.name, SettingsTarget.APP_FONT.name) { targetModifier ->
+                SettingsNavigationRow(
+                    icon = Icons.Outlined.TextFields,
+                    title = stringResource(R.string.settings_app_font),
+                    value = fontChoiceLabel(appearance.fontChoice),
+                    onClick = { showFontSheet = true },
+                    modifier = targetModifier.testTag("settings_font_picker"),
+                )
+            }
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-            FontScaleSlider(
-                title = stringResource(R.string.settings_ui_font_size),
-                description = stringResource(R.string.settings_ui_font_size_desc),
-                value = appearance.uiFontScalePercent,
-                tag = "settings_ui_font_scale",
-                onValue = onUiFontScale,
-            )
+            SettingsTarget(target?.name, SettingsTarget.UI_FONT_SIZE.name) { targetModifier ->
+                FontScaleSlider(
+                    title = stringResource(R.string.settings_ui_font_size),
+                    description = stringResource(R.string.settings_ui_font_size_desc),
+                    value = appearance.uiFontScalePercent,
+                    tag = "settings_ui_font_scale",
+                    onValue = onUiFontScale,
+                    modifier = targetModifier,
+                )
+            }
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-            FontScaleSlider(
-                title = stringResource(R.string.settings_conversation_font_size),
-                description = stringResource(R.string.settings_conversation_font_size_desc),
-                value = appearance.conversationFontScalePercent,
-                tag = "settings_conversation_font_scale",
-                onValue = onConversationFontScale,
-            )
+            SettingsTarget(target?.name, SettingsTarget.CONVERSATION_FONT_SIZE.name) { targetModifier ->
+                FontScaleSlider(
+                    title = stringResource(R.string.settings_conversation_font_size),
+                    description = stringResource(R.string.settings_conversation_font_size_desc),
+                    value = appearance.conversationFontScalePercent,
+                    tag = "settings_conversation_font_scale",
+                    onValue = onConversationFontScale,
+                    modifier = targetModifier,
+                )
+            }
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-            SubLabel(stringResource(R.string.settings_density))
-            DensityGroup(current = settings.layoutDensity, onSelect = onLayoutDensity)
+            SettingsTarget(target?.name, SettingsTarget.MESSAGE_STYLE.name) { targetModifier ->
+                SettingsNavigationRow(
+                    title = stringResource(R.string.settings_density),
+                    value = densityLabel(settings.layoutDensity),
+                    modifier = targetModifier.testTag("settings_density_picker"),
+                    onClick = { choiceSheet = AppearanceChoice.DENSITY },
+                )
+            }
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-            SubLabel(stringResource(R.string.settings_avatar_style))
-            AvatarStyleGroup(current = settings.avatarStyle, onSelect = onAvatarStyle)
+            SettingsTarget(target?.name, SettingsTarget.AVATAR_STYLE.name) { targetModifier ->
+                SettingsNavigationRow(
+                    title = stringResource(R.string.settings_avatar_style),
+                    value = avatarStyleLabel(settings.avatarStyle),
+                    modifier = targetModifier.testTag("settings_avatar_style_picker"),
+                    onClick = { choiceSheet = AppearanceChoice.AVATAR },
+                )
+            }
         }
         SettingsGroup(title = stringResource(R.string.settings_appearance_messages_section)) {
-            SwitchRow(
-                title = stringResource(R.string.settings_show_timestamps),
-                subtitle = stringResource(R.string.settings_show_timestamps_desc),
-                checked = appearance.showTimestamps,
-                onCheckedChange = onShowTimestamps,
-                switchTag = "settings_switch_show_timestamps",
-            )
+            SettingsTarget(target?.name, SettingsTarget.TIMESTAMPS.name) { targetModifier ->
+                SwitchRow(
+                    title = stringResource(R.string.settings_show_timestamps),
+                    subtitle = stringResource(R.string.settings_show_timestamps_desc),
+                    checked = appearance.showTimestamps,
+                    onCheckedChange = onShowTimestamps,
+                    switchTag = "settings_switch_show_timestamps",
+                    modifier = targetModifier,
+                )
+            }
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-            SubLabel(stringResource(R.string.settings_time_format))
-            TimeFormatGroup(
-                current = appearance.timeFormat,
-                onSelect = onTimeFormat,
-                customPattern = appearance.customTimeFormatPattern,
-                onCustomPatternChange = onCustomTimeFormatPattern,
-            )
+            SettingsTarget(target?.name, SettingsTarget.TIME_FORMAT.name) { targetModifier ->
+                SettingsNavigationRow(
+                    title = stringResource(R.string.settings_time_format),
+                    value = timeFormatLabel(appearance.timeFormat),
+                    modifier = targetModifier.testTag("settings_time_format_picker"),
+                    onClick = { choiceSheet = AppearanceChoice.TIME },
+                )
+            }
+            if (appearance.timeFormat == TimeFormat.CUSTOM) {
+                OutlinedTextField(
+                    value = appearance.customTimeFormatPattern,
+                    onValueChange = onCustomTimeFormatPattern,
+                    label = { Text(stringResource(R.string.settings_time_format)) },
+                    supportingText = { Text(stringResource(R.string.settings_time_format_custom_help)) },
+                    placeholder = { Text(stringResource(R.string.settings_time_format_custom_hint)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).testTag("settings_time_format_custom_pattern"),
+                )
+            }
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-            SubLabel(stringResource(R.string.settings_message_spacing))
-            MessageSpacingGroup(current = appearance.messageSpacing, onSelect = onMessageSpacing)
+            SettingsTarget(target?.name, SettingsTarget.MESSAGE_SPACING.name) { targetModifier ->
+                SettingsNavigationRow(
+                    title = stringResource(R.string.settings_message_spacing),
+                    value = messageSpacingLabel(appearance.messageSpacing),
+                    modifier = targetModifier.testTag("settings_message_spacing_picker"),
+                    onClick = { choiceSheet = AppearanceChoice.SPACING },
+                )
+            }
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-            SubLabel(stringResource(R.string.settings_bubble_corners))
-            BubbleCornerStyleGroup(current = appearance.bubbleCornerStyle, onSelect = onBubbleCornerStyle)
+            SettingsTarget(target?.name, SettingsTarget.BUBBLE_CORNERS.name) { targetModifier ->
+                SettingsNavigationRow(
+                    title = stringResource(R.string.settings_bubble_corners),
+                    value = bubbleCornerLabel(appearance.bubbleCornerStyle),
+                    modifier = targetModifier.testTag("settings_bubble_corner_picker"),
+                    onClick = { choiceSheet = AppearanceChoice.BUBBLES },
+                )
+            }
         }
-        SettingsGroup(title = stringResource(R.string.settings_wallpaper)) {
-            ChatWallpaperPicker(current = appearance.wallpaper, onApply = onWallpaper)
+        SettingsTarget(target?.name, SettingsTarget.WALLPAPER.name) { targetModifier ->
+            SettingsGroup(title = stringResource(R.string.settings_wallpaper), modifier = targetModifier) {
+                ChatWallpaperPicker(current = appearance.wallpaper, onApply = onWallpaper)
+            }
         }
-        SettingsGroup(title = stringResource(R.string.settings_app_icon_section)) {
-            LauncherIconGroup(current = appearance.launcherIcon, onSelect = onLauncherIcon)
+        SettingsTarget(target?.name, SettingsTarget.LAUNCHER_ICON.name) { targetModifier ->
+            SettingsGroup(title = stringResource(R.string.settings_app_icon_section), modifier = targetModifier) {
+                SettingsNavigationRow(
+                    title = stringResource(R.string.settings_app_icon_section),
+                    value = stringResource(launcherIconLabelRes(appearance.launcherIcon)),
+                    modifier = Modifier.testTag("settings_app_icon_picker"),
+                    onClick = { choiceSheet = AppearanceChoice.LAUNCHER },
+                )
+            }
         }
     }
     if (showThemeSheet) {
@@ -329,6 +425,21 @@ fun AppearanceSettingsContent(
             dynamicColor = settings.dynamicColor,
             onSelect = onThemePreset,
             onDismiss = { showThemeSheet = false },
+        )
+    }
+    choiceSheet?.let { choice ->
+        AppearanceChoiceSheet(
+            choice = choice,
+            settings = settings,
+            appearance = appearance,
+            onPalette = onNickColorPalette,
+            onDensity = onLayoutDensity,
+            onAvatar = onAvatarStyle,
+            onTime = onTimeFormat,
+            onSpacing = onMessageSpacing,
+            onBubbles = onBubbleCornerStyle,
+            onLauncher = onLauncherIcon,
+            onDismiss = { choiceSheet = null },
         )
     }
     if (showFontSheet) {
@@ -343,6 +454,189 @@ fun AppearanceSettingsContent(
     }
 }
 
+private enum class AppearanceChoice { PALETTE, DENSITY, AVATAR, TIME, SPACING, BUBBLES, LAUNCHER }
+
+@Composable
+private fun AppearanceChoiceSheet(
+    choice: AppearanceChoice,
+    settings: Settings,
+    appearance: io.github.trevarj.motd.data.prefs.AppearanceConfig,
+    onPalette: (NickColorPalette) -> Unit,
+    onDensity: (LayoutDensity) -> Unit,
+    onAvatar: (AvatarStyle) -> Unit,
+    onTime: (TimeFormat) -> Unit,
+    onSpacing: (io.github.trevarj.motd.data.prefs.MessageSpacing) -> Unit,
+    onBubbles: (io.github.trevarj.motd.data.prefs.BubbleCornerStyle) -> Unit,
+    onLauncher: (LauncherIcon) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    when (choice) {
+        AppearanceChoice.PALETTE -> {
+            SingleChoiceSheet(
+                title = stringResource(R.string.settings_nick_palette),
+                selected = settings.nickColorPalette,
+                options = NickColorPalette.entries.map { ChoiceOption(it, nickPaletteLabel(it), tag = "settings_palette_${it.name.lowercase()}") },
+                onSelect = onPalette,
+                onDismiss = onDismiss,
+                tag = "settings_palette_sheet",
+            )
+        }
+
+        AppearanceChoice.DENSITY -> {
+            SingleChoiceSheet(
+                title = stringResource(R.string.settings_density),
+                selected = settings.layoutDensity,
+                options = LayoutDensity.entries.map { ChoiceOption(it, densityLabel(it), densityDescription(it), "settings_density_${it.name.lowercase()}") },
+                onSelect = onDensity,
+                onDismiss = onDismiss,
+                tag = "settings_density_sheet",
+            )
+        }
+
+        AppearanceChoice.AVATAR -> {
+            SingleChoiceSheet(
+                title = stringResource(R.string.settings_avatar_style),
+                selected = settings.avatarStyle,
+                options =
+                    AvatarStyle.entries.map {
+                        ChoiceOption(it, avatarStyleLabel(it), avatarStyleDescription(it), "settings_avatar_style_${it.name.lowercase()}")
+                    },
+                onSelect = onAvatar,
+                onDismiss = onDismiss,
+                tag = "settings_avatar_style_sheet",
+            )
+        }
+
+        AppearanceChoice.TIME -> {
+            SingleChoiceSheet(
+                title = stringResource(R.string.settings_time_format),
+                selected = appearance.timeFormat,
+                options = TimeFormat.entries.map { ChoiceOption(it, timeFormatLabel(it), tag = "settings_time_format_${it.name.lowercase()}") },
+                onSelect = onTime,
+                onDismiss = onDismiss,
+                tag = "settings_time_format_sheet",
+            )
+        }
+
+        AppearanceChoice.SPACING -> {
+            SingleChoiceSheet(
+                title = stringResource(R.string.settings_message_spacing),
+                selected = appearance.messageSpacing,
+                options =
+                    io.github.trevarj.motd.data.prefs.MessageSpacing.entries
+                        .map { ChoiceOption(it, messageSpacingLabel(it), tag = "settings_message_spacing_${it.name.lowercase()}") },
+                onSelect = onSpacing,
+                onDismiss = onDismiss,
+                tag = "settings_message_spacing_sheet",
+            )
+        }
+
+        AppearanceChoice.BUBBLES -> {
+            SingleChoiceSheet(
+                title = stringResource(R.string.settings_bubble_corners),
+                selected = appearance.bubbleCornerStyle,
+                options =
+                    io.github.trevarj.motd.data.prefs.BubbleCornerStyle.entries
+                        .map { ChoiceOption(it, bubbleCornerLabel(it), tag = "settings_bubble_corner_${it.name.lowercase()}") },
+                onSelect = onBubbles,
+                onDismiss = onDismiss,
+                tag = "settings_bubble_corner_sheet",
+            )
+        }
+
+        AppearanceChoice.LAUNCHER -> {
+            SingleChoiceSheet(
+                title = stringResource(R.string.settings_app_icon_section),
+                selected = appearance.launcherIcon,
+                options = LauncherIcon.entries.map { ChoiceOption(it, stringResource(launcherIconLabelRes(it)), tag = "settings_app_icon_${it.name.lowercase()}") },
+                onSelect = onLauncher,
+                onDismiss = onDismiss,
+                tag = "settings_app_icon_sheet",
+            )
+        }
+    }
+}
+
+@Composable
+private fun nickPaletteLabel(value: NickColorPalette): String =
+    stringResource(
+        when (value) {
+            NickColorPalette.THEME -> R.string.settings_palette_theme
+            NickColorPalette.CLASSIC -> R.string.settings_palette_classic
+            NickColorPalette.VIVID -> R.string.settings_palette_vivid
+        },
+    )
+
+@Composable
+private fun densityLabel(value: LayoutDensity): String =
+    stringResource(
+        when (value) {
+            LayoutDensity.COMPACT -> R.string.settings_density_compact
+            LayoutDensity.COMFORTABLE -> R.string.settings_density_comfortable
+            LayoutDensity.TWO_LINE -> R.string.settings_density_two_line
+        },
+    )
+
+@Composable
+private fun densityDescription(value: LayoutDensity): String =
+    stringResource(
+        when (value) {
+            LayoutDensity.COMPACT -> R.string.settings_density_compact_desc
+            LayoutDensity.COMFORTABLE -> R.string.settings_density_comfortable_desc
+            LayoutDensity.TWO_LINE -> R.string.settings_density_two_line_desc
+        },
+    )
+
+@Composable
+private fun avatarStyleLabel(value: AvatarStyle): String =
+    stringResource(
+        when (value) {
+            AvatarStyle.MONOGRAM -> R.string.settings_avatar_monogram
+            AvatarStyle.INITIALS -> R.string.settings_avatar_initials
+            AvatarStyle.IRC_SPRITE -> R.string.settings_avatar_irc_sprite
+            AvatarStyle.NONE -> R.string.settings_avatar_none
+        },
+    )
+
+@Composable
+private fun avatarStyleDescription(value: AvatarStyle): String? =
+    when (value) {
+        AvatarStyle.IRC_SPRITE -> stringResource(R.string.settings_avatar_irc_sprite_desc)
+        AvatarStyle.NONE -> stringResource(R.string.settings_avatar_none_desc)
+        else -> null
+    }
+
+@Composable
+private fun timeFormatLabel(value: TimeFormat): String =
+    stringResource(
+        when (value) {
+            TimeFormat.AUTO -> R.string.settings_time_format_auto
+            TimeFormat.H12 -> R.string.settings_time_format_h12
+            TimeFormat.H24 -> R.string.settings_time_format_h24
+            TimeFormat.CUSTOM -> R.string.settings_time_format_custom
+        },
+    )
+
+@Composable
+private fun messageSpacingLabel(value: io.github.trevarj.motd.data.prefs.MessageSpacing): String =
+    stringResource(
+        when (value) {
+            io.github.trevarj.motd.data.prefs.MessageSpacing.COMPACT -> R.string.settings_message_spacing_compact
+            io.github.trevarj.motd.data.prefs.MessageSpacing.DEFAULT -> R.string.settings_message_spacing_default
+            io.github.trevarj.motd.data.prefs.MessageSpacing.RELAXED -> R.string.settings_message_spacing_relaxed
+        },
+    )
+
+@Composable
+private fun bubbleCornerLabel(value: io.github.trevarj.motd.data.prefs.BubbleCornerStyle): String =
+    stringResource(
+        when (value) {
+            io.github.trevarj.motd.data.prefs.BubbleCornerStyle.ROUNDED -> R.string.settings_bubble_corner_rounded
+            io.github.trevarj.motd.data.prefs.BubbleCornerStyle.SUBTLE -> R.string.settings_bubble_corner_subtle
+            io.github.trevarj.motd.data.prefs.BubbleCornerStyle.SQUARE -> R.string.settings_bubble_corner_square
+        },
+    )
+
 @Composable
 private fun FontScaleSlider(
     title: String,
@@ -350,11 +644,12 @@ private fun FontScaleSlider(
     value: Int,
     tag: String,
     onValue: (Int) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    var pending by remember(value) { mutableStateOf(value.toFloat()) }
+    var pending by remember(value) { mutableFloatStateOf(value.toFloat()) }
     val displayed = pending.toInt()
     val percent = stringResource(R.string.settings_font_size_percent, displayed)
-    Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+    Column(modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
         Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
@@ -634,7 +929,7 @@ private fun fontChoiceLabel(choice: FontChoice): String =
     )
 
 @Composable
-private fun themePresetLabel(mode: ColorThemePreset): String = stringResource(themePresetLabelRes(mode))
+internal fun themePresetLabel(mode: ColorThemePreset): String = stringResource(themePresetLabelRes(mode))
 
 internal fun themePresetLabelText(mode: ColorThemePreset): String =
     when (mode) {
@@ -725,232 +1020,6 @@ internal val DARK_THEME_PRESETS =
         .filter { it.isDark && it != ColorThemePreset.AMOLED }
         .sortedBy(::themePresetLabelText)
 
-@Composable
-private fun AvatarStyleGroup(
-    current: AvatarStyle,
-    onSelect: (AvatarStyle) -> Unit,
-) {
-    val options: List<Triple<AvatarStyle, Int, Int?>> =
-        listOf(
-            Triple(AvatarStyle.MONOGRAM, R.string.settings_avatar_monogram, null),
-            Triple(AvatarStyle.INITIALS, R.string.settings_avatar_initials, null),
-            Triple(
-                AvatarStyle.IRC_SPRITE,
-                R.string.settings_avatar_irc_sprite,
-                R.string.settings_avatar_irc_sprite_desc,
-            ),
-            Triple(AvatarStyle.NONE, R.string.settings_avatar_none, R.string.settings_avatar_none_desc),
-        )
-    Column(Modifier.selectableGroup()) {
-        options.forEach { (style, labelRes, subtitleRes) ->
-            RadioRow(
-                label = stringResource(labelRes),
-                subtitle = subtitleRes?.let { stringResource(it) },
-                selected = current == style,
-                enabled = true,
-                onClick = { onSelect(style) },
-                modifier = Modifier.testTag("settings_avatar_style_${style.name.lowercase()}"),
-            )
-            if (style == AvatarStyle.IRC_SPRITE) IrcSpriteSampleStrip()
-        }
-    }
-}
-
-/** A static, data-free sample shows both person sprites and contextual channel marks. */
-@Composable
-private fun IrcSpriteSampleStrip() {
-    Row(
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .padding(start = 52.dp, end = 16.dp, bottom = 10.dp)
-                .testTag("settings_avatar_sprite_preview"),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        IrcSpriteAvatar(name = "rustacean", size = 30.dp)
-        IrcSpriteAvatar(name = "alice", size = 30.dp)
-        IrcChannelBadge(name = "#guix", size = 30.dp)
-        IrcChannelBadge(name = "#debian", size = 30.dp)
-    }
-}
-
-@Composable
-private fun DensityGroup(
-    current: LayoutDensity,
-    onSelect: (LayoutDensity) -> Unit,
-) {
-    // Density selects the message *render style*, not the font size: Compact is classic single-line
-    // IRC, Comfortable is chat bubbles, Two-line is a compact avatar+nick+time header over the body.
-    // Subtitles spell that out.
-    val options =
-        listOf(
-            Triple(LayoutDensity.COMPACT, R.string.settings_density_compact, R.string.settings_density_compact_desc),
-            Triple(LayoutDensity.COMFORTABLE, R.string.settings_density_comfortable, R.string.settings_density_comfortable_desc),
-            Triple(LayoutDensity.TWO_LINE, R.string.settings_density_two_line, R.string.settings_density_two_line_desc),
-        )
-    Column(Modifier.selectableGroup()) {
-        options.forEach { (density, labelRes, descRes) ->
-            RadioRow(
-                label = stringResource(labelRes),
-                subtitle = stringResource(descRes),
-                selected = current == density,
-                enabled = true,
-                onClick = { onSelect(density) },
-                modifier = Modifier.testTag("settings_density_${density.name.lowercase()}"),
-            )
-        }
-    }
-}
-
-@Composable
-private fun TimeFormatGroup(
-    current: TimeFormat,
-    onSelect: (TimeFormat) -> Unit,
-    customPattern: String,
-    onCustomPatternChange: (String) -> Unit,
-) {
-    // Always enabled: the chat list keeps using the format even while message timestamps are hidden.
-    val options =
-        listOf(
-            TimeFormat.AUTO to R.string.settings_time_format_auto,
-            TimeFormat.H12 to R.string.settings_time_format_h12,
-            TimeFormat.H24 to R.string.settings_time_format_h24,
-            TimeFormat.CUSTOM to R.string.settings_time_format_custom,
-        )
-    Column(Modifier.selectableGroup()) {
-        options.forEach { (format, labelRes) ->
-            RadioRow(
-                label = stringResource(labelRes),
-                selected = current == format,
-                enabled = true,
-                onClick = { onSelect(format) },
-                modifier = Modifier.testTag("settings_time_format_${format.name.lowercase()}"),
-            )
-        }
-        AnimatedVisibility(
-            visible = current == TimeFormat.CUSTOM,
-            enter = fadeIn(MotdMotion.microFadeIn) + expandVertically(animationSpec = MotdMotion.contentSize),
-            exit = fadeOut(MotdMotion.microFadeOut) + shrinkVertically(animationSpec = MotdMotion.contentSize),
-        ) {
-            var draft by remember(customPattern) { mutableStateOf(customPattern) }
-            Column(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp)) {
-                OutlinedTextField(
-                    value = draft,
-                    onValueChange = {
-                        draft = it
-                        onCustomPatternChange(it)
-                    },
-                    singleLine = true,
-                    label = { Text(stringResource(R.string.settings_time_format)) },
-                    placeholder = { Text(stringResource(R.string.settings_time_format_custom_hint)) },
-                    modifier = Modifier.fillMaxWidth().testTag("settings_time_format_custom_pattern"),
-                )
-                Text(
-                    text = stringResource(R.string.settings_time_format_custom_help),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp),
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun MessageSpacingGroup(
-    current: io.github.trevarj.motd.data.prefs.MessageSpacing,
-    onSelect: (io.github.trevarj.motd.data.prefs.MessageSpacing) -> Unit,
-) {
-    val options =
-        listOf(
-            io.github.trevarj.motd.data.prefs.MessageSpacing.COMPACT to R.string.settings_message_spacing_compact,
-            io.github.trevarj.motd.data.prefs.MessageSpacing.DEFAULT to R.string.settings_message_spacing_default,
-            io.github.trevarj.motd.data.prefs.MessageSpacing.RELAXED to R.string.settings_message_spacing_relaxed,
-        )
-    Column(Modifier.selectableGroup()) {
-        options.forEach { (spacing, labelRes) ->
-            RadioRow(
-                label = stringResource(labelRes),
-                selected = current == spacing,
-                enabled = true,
-                onClick = { onSelect(spacing) },
-                modifier = Modifier.testTag("settings_message_spacing_${spacing.name.lowercase()}"),
-            )
-        }
-    }
-}
-
-@Composable
-private fun BubbleCornerStyleGroup(
-    current: io.github.trevarj.motd.data.prefs.BubbleCornerStyle,
-    onSelect: (io.github.trevarj.motd.data.prefs.BubbleCornerStyle) -> Unit,
-) {
-    // Applies to the Comfortable bubble layout only; the note lives on the first (default) option,
-    // mirroring the AvatarStyleGroup pattern where only the relevant option carries a subtitle.
-    val options =
-        listOf(
-            Triple(
-                io.github.trevarj.motd.data.prefs.BubbleCornerStyle.ROUNDED,
-                R.string.settings_bubble_corner_rounded,
-                R.string.settings_bubble_corners_desc,
-            ),
-            Triple(io.github.trevarj.motd.data.prefs.BubbleCornerStyle.SUBTLE, R.string.settings_bubble_corner_subtle, null),
-            Triple(io.github.trevarj.motd.data.prefs.BubbleCornerStyle.SQUARE, R.string.settings_bubble_corner_square, null),
-        )
-    Column(Modifier.selectableGroup()) {
-        options.forEach { (style, labelRes, subtitleRes) ->
-            RadioRow(
-                label = stringResource(labelRes),
-                subtitle = subtitleRes?.let { stringResource(it) },
-                selected = current == style,
-                enabled = true,
-                onClick = { onSelect(style) },
-                modifier = Modifier.testTag("settings_bubble_corner_${style.name.lowercase()}"),
-            )
-        }
-    }
-}
-
-@Composable
-private fun LauncherIconGroup(
-    current: LauncherIcon,
-    onSelect: (LauncherIcon) -> Unit,
-) {
-    Column(Modifier.selectableGroup()) {
-        LauncherIcon.entries.forEach { icon ->
-            RadioRow(
-                label = stringResource(launcherIconLabelRes(icon)),
-                selected = current == icon,
-                enabled = true,
-                onClick = { onSelect(icon) },
-                modifier = Modifier.testTag("settings_app_icon_${icon.name.lowercase()}"),
-                trailing = { LauncherIconPreview(icon) },
-            )
-        }
-    }
-}
-
-/** ~36dp circular swatch of the variant's background color with its launcher mark centered on top. */
-@Composable
-private fun LauncherIconPreview(icon: LauncherIcon) {
-    Box(
-        modifier =
-            Modifier
-                .size(36.dp)
-                .clip(CircleShape)
-                .background(colorResource(launcherIconBackgroundColorRes(icon))),
-    ) {
-        Image(
-            painter = painterResource(launcherIconForegroundDrawableRes(icon)),
-            contentDescription = null,
-            modifier =
-                Modifier
-                    .size(36.dp)
-                    .padding(4.dp),
-        )
-    }
-}
-
 private fun launcherIconLabelRes(icon: LauncherIcon): Int =
     when (icon) {
         LauncherIcon.DEFAULT -> R.string.settings_app_icon_default
@@ -961,48 +1030,6 @@ private fun launcherIconLabelRes(icon: LauncherIcon): Int =
         LauncherIcon.NORD -> R.string.settings_app_icon_nord
         LauncherIcon.LIGHT -> R.string.settings_app_icon_light
     }
-
-private fun launcherIconBackgroundColorRes(icon: LauncherIcon): Int =
-    when (icon) {
-        LauncherIcon.DEFAULT -> R.color.ic_launcher_background
-        LauncherIcon.MONO -> R.color.ic_launcher_background_mono
-        LauncherIcon.TERMINAL -> R.color.ic_launcher_background_terminal
-        LauncherIcon.GRUVBOX -> R.color.ic_launcher_background_gruvbox
-        LauncherIcon.CATPPUCCIN -> R.color.ic_launcher_background_catppuccin
-        LauncherIcon.NORD -> R.color.ic_launcher_background_nord
-        LauncherIcon.LIGHT -> R.color.ic_launcher_background_light
-    }
-
-private fun launcherIconForegroundDrawableRes(icon: LauncherIcon): Int =
-    when (icon) {
-        LauncherIcon.TERMINAL -> R.drawable.ic_launcher_foreground_terminal
-        else -> R.drawable.ic_launcher_foreground
-    }
-
-@Composable
-private fun PaletteGroup(
-    current: NickColorPalette,
-    enabled: Boolean,
-    onSelect: (NickColorPalette) -> Unit,
-) {
-    val options =
-        listOf(
-            NickColorPalette.THEME to R.string.settings_palette_theme,
-            NickColorPalette.CLASSIC to R.string.settings_palette_classic,
-            NickColorPalette.VIVID to R.string.settings_palette_vivid,
-        )
-    Column(Modifier.selectableGroup()) {
-        options.forEach { (palette, labelRes) ->
-            RadioRow(
-                label = stringResource(labelRes),
-                selected = current == palette,
-                enabled = enabled,
-                onClick = { onSelect(palette) },
-                modifier = Modifier.testTag("settings_palette_${palette.name.lowercase()}"),
-            )
-        }
-    }
-}
 
 @Preview
 @Composable

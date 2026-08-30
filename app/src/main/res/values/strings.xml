@@ -221,7 +221,6 @@
     <string name="dcc_direction_incoming">Incoming</string>
     <string name="dcc_direction_outgoing">Outgoing</string>
     <string name="dcc_remove_record">Remove record</string>
-    <string name="settings_messages_section">Message display</string>
     <string name="settings_composer_section">Composer</string>
     <string name="settings_delivery_summary">Choose how messages arrive and keep background delivery reliable.</string>
     <string name="settings_networks_summary">Add and manage IRC networks, bouncers, and connection details.</string>
@@ -424,8 +423,6 @@
     <string name="about_legal_notice">Free software with no warranty. You may share and modify it under the GNU GPL v3 or later.</string>
     <string name="about_diagnostic_logging">Diagnostic logging</string>
     <string name="about_diagnostic_logging_summary">Records bounded technical traces for connections, sync, push, and message handling. Message contents, credentials, and personal identifiers are excluded. Turning it on starts a fresh log.</string>
-    <string name="about_labs">Labs</string>
-    <string name="about_labs_moved">Experimental features moved to Settings › Labs.</string>
     <string name="about_export_diagnostics">Export diagnostic log</string>
     <string name="about_export_diagnostics_summary">Save the captured trace as a text file to share when reporting a problem.</string>
     <string name="about_export_diagnostics_success">Diagnostic log saved.</string>
@@ -1515,4 +1512,200 @@
     <string name="account_setup_creating">Creating account…</string>
     <string name="account_setup_signing_in">Saving account and signing in…</string>
     <string name="account_setup_success">Account ready</string>
+
+    <!-- Settings deep cleanup -->
+    <string name="settings_nick_palette">Nickname palette</string>
+    <string name="settings_nick_palette_disabled">Turn on Colored nicknames to choose a palette.</string>
+    <string name="settings_group_connections">Connections</string>
+    <string name="settings_group_experience">Experience</string>
+    <string name="settings_group_services">Services</string>
+    <string name="settings_group_data_support">Data and support</string>
+    <plurals name="settings_network_count">
+        <item quantity="one">%1$d network</item>
+        <item quantity="other">%1$d networks</item>
+    </plurals>
+    <string name="settings_search_open">Search settings</string>
+    <string name="settings_search_close">Close settings search</string>
+    <string name="settings_search_hint">Search settings</string>
+    <string name="settings_search_prompt">Type a setting or section name.</string>
+    <string name="settings_search_results">Search results</string>
+    <string name="settings_search_empty">No settings match your search.</string>
+    <string name="settings_search_network_title">%1$s · %2$s</string>
+    <string name="settings_search_network_summary">Open this section for this network.</string>
+    <string name="settings_about_summary_search">Version, diagnostics, license, and project links.</string>
+    <string name="settings_upload_limit_desc_search">Set maximum upload size.</string>
+    <string name="settings_networks_empty_title">No networks configured</string>
+    <string name="settings_networks_empty_message">Add a network or scan an invite to start connecting.</string>
+    <string name="settings_network_supporting_status">%1$s · %2$s</string>
+    <string name="network_settings_status_connected">Connected</string>
+    <string name="network_settings_status_attention">Needs attention</string>
+
+    <string name="settings_upload_provider">Upload provider</string>
+    <plurals name="settings_upload_expiry_hours">
+        <item quantity="one">%1$d hour</item>
+        <item quantity="other">%1$d hours</item>
+    </plurals>
+    <string name="upload_backend_crafterbin" translatable="false">CrafterBin</string>
+    <string name="upload_backend_zero_x_zero" translatable="false">0x0.st</string>
+    <string name="upload_backend_x0_at" translatable="false">x0.at</string>
+    <string name="upload_backend_custom">Custom HTTPS</string>
+    <string name="upload_backend_cnet" translatable="false">paste.c-net.org</string>
+    <string name="upload_backend_uguu" translatable="false">Uguu</string>
+    <string name="upload_backend_litterbox" translatable="false">Litterbox</string>
+    <string name="upload_backend_catbox" translatable="false">Catbox</string>
+    <string name="upload_backend_soju">Soju file host</string>
+    <string name="upload_backend_termbin" translatable="false">Termbin</string>
+    <string name="upload_backend_crafterbin_desc">Files, photos, and text · configurable expiry</string>
+    <string name="upload_backend_zero_x_zero_desc">Files, photos, and text · public service</string>
+    <string name="upload_backend_x0_at_desc">Files, photos, and text · 3–100 days by size · no deletion</string>
+    <string name="upload_backend_custom_desc">HTTPS URL, optional username and password</string>
+    <string name="upload_backend_cnet_desc">Files, photos, and text · rolling 180 days · deletable</string>
+    <string name="upload_backend_uguu_desc">Files, photos, and text · 3 hours</string>
+    <string name="upload_backend_litterbox_desc">Files, photos, and text · 1–72 hours</string>
+    <string name="upload_backend_catbox_desc">Files, photos, and text · long-lived</string>
+    <string name="upload_backend_soju_desc">Files, photos, and text · current chat’s bouncer</string>
+    <string name="upload_backend_termbin_desc">Text only · unencrypted TCP</string>
+
+    <string name="backup_export_title">Export configuration</string>
+    <string name="backup_export_guidance">Exports networks, folders, and settings. Messages, history, drafts, generated push keys, cached previews, upload history, certificate pins, channel keys, and runtime state stay on this device.</string>
+    <string name="backup_export_without_credentials">Without credentials</string>
+    <string name="backup_export_without_credentials_desc">Recommended. Passwords and private connection links are excluded; client certificates always stay device-local.</string>
+    <string name="backup_export_with_credentials">Encrypted with credentials</string>
+    <string name="backup_export_with_credentials_desc">Includes saved passwords and private connection links in a password-encrypted file. Client certificates stay device-local.</string>
+    <string name="backup_export_password">Export password</string>
+    <string name="backup_password_requirements">Use 12 to 128 characters.</string>
+    <string name="backup_choose_export_destination">Choose destination</string>
+    <string name="backup_export_progress">Exporting configuration…</string>
+    <string name="backup_export_success">Configuration exported.</string>
+    <string name="backup_import_title">Import configuration</string>
+    <string name="backup_import_guidance">Choose a motd backup to preview changes before applying them.</string>
+    <string name="backup_choose_import_file">Choose backup</string>
+    <string name="backup_selected_file">Selected backup</string>
+    <string name="backup_encrypted">Encrypted; password required</string>
+    <string name="backup_plain">Not encrypted; previewed automatically</string>
+    <string name="backup_import_password">Backup password</string>
+    <string name="backup_preview_action">Preview</string>
+    <string name="backup_import_mode">Import mode</string>
+    <string name="backup_import_merge">Merge</string>
+    <string name="backup_import_merge_desc">Update matching networks and keep local-only networks.</string>
+    <string name="backup_import_replace">Replace</string>
+    <string name="backup_import_replace_desc">Remove local-only networks and their local history.</string>
+    <string name="backup_apply_action">Apply import</string>
+    <string name="backup_replace_action">Replace configuration</string>
+    <string name="backup_preview_progress">Reading and previewing backup…</string>
+    <string name="backup_apply_progress">Applying configuration…</string>
+    <string name="backup_preview_title">Preview</string>
+    <string name="backup_preview_source">motd %1$s · %2$s</string>
+    <plurals name="backup_preview_networks">
+        <item quantity="one">%1$d network</item>
+        <item quantity="other">%1$d networks</item>
+    </plurals>
+    <string name="backup_preview_changes">Changes: +%1$d · ~%2$d · −%3$d</string>
+    <string name="backup_preview_folders">Folders: %1$d · chat assignments: %2$d</string>
+    <string name="backup_preview_settings">Settings: %1$s</string>
+    <string name="backup_settings_general">General</string>
+    <string name="backup_settings_appearance">Appearance</string>
+    <string name="backup_settings_content_previews">Content previews</string>
+    <string name="backup_settings_replies">Replies</string>
+    <string name="backup_settings_uploads">Uploads</string>
+    <string name="backup_settings_voice">Voice</string>
+    <string name="backup_settings_avatars">Avatars</string>
+    <string name="backup_settings_gesture_menu">Gesture menu</string>
+    <string name="backup_settings_other">Other settings</string>
+    <string name="backup_settings_separator">", "</string>
+    <string name="backup_none">none</string>
+    <string name="backup_preview_credentials_included">Credentials are included in this encrypted backup.</string>
+    <plurals name="backup_preview_credentials_retained">
+        <item quantity="one">%1$d network will retain local credentials.</item>
+        <item quantity="other">%1$d networks will retain local credentials.</item>
+    </plurals>
+    <plurals name="backup_preview_credentials_missing">
+        <item quantity="one">%1$d network needs credentials before connecting.</item>
+        <item quantity="other">%1$d networks need credentials before connecting.</item>
+    </plurals>
+    <string name="backup_replace_confirm_title">Replace local configuration?</string>
+    <plurals name="backup_replace_confirm_message">
+        <item quantity="one">This removes %1$d local network and its local message history. This cannot be undone.</item>
+        <item quantity="other">This removes %1$d local networks and their local message history. This cannot be undone.</item>
+    </plurals>
+    <string name="backup_replace_confirm_action">Replace and remove</string>
+    <string name="backup_import_success">Imported: +%1$d · ~%2$d · −%3$d. Credentials needed: %4$d.</string>
+    <string name="backup_review_networks">Review networks</string>
+    <string name="backup_error_password_corrupt">Password is wrong or encrypted backup is corrupt.</string>
+    <string name="backup_error_invalid">Backup is invalid or uses an unsupported format.</string>
+    <string name="backup_error_oversized">Backup is too large.</string>
+    <string name="backup_error_read">Could not read selected backup.</string>
+    <string name="backup_error_write">Could not write configuration to selected destination.</string>
+    <string name="backup_error_export">Could not prepare configuration for export.</string>
+    <string name="backup_error_import">Could not import configuration. No error details were exposed.</string>
+
+    <string name="network_settings_initial_away_invalid">Enter a valid IRC away message without line breaks.</string>
+    <string name="network_settings_bouncer_identity_title">Update bouncer connection?</string>
+    <plurals name="network_settings_bouncer_identity_message">
+        <item quantity="one">This changes the connection or login inherited by %1$d local bouncer mirror. Keep it, or remove its local buffers and history. Removing it does not change anything on the bouncer.</item>
+        <item quantity="other">This changes the connection or login inherited by %1$d local bouncer mirrors. Keep them, or remove their local buffers and history. Removing them does not change anything on the bouncer.</item>
+    </plurals>
+    <string name="network_settings_remove_local_mirrors">Remove local mirrors</string>
+    <string name="network_settings_keep_local_mirrors">Keep local mirrors</string>
+    <string name="network_settings_proxy_host_example" translatable="false">127.0.0.1</string>
+    <string name="network_settings_proxy_port_example" translatable="false">1080</string>
+    <string name="network_settings_vless_example" translatable="false">vless://uuid@host:443?type=tcp&amp;security=reality&amp;…</string>
+    <string name="network_settings_wss_example" translatable="false">wss://bnc.example.com:443/</string>
+    <string name="network_settings_reality_ingress_help">The VLESS URI host and port are the public tunnel ingress. Server host and port remain the bouncer destination inside that tunnel.</string>
+
+    <string name="settings_voice_quality_data_saver">Data saver</string>
+    <string name="settings_voice_quality_balanced">Balanced</string>
+    <string name="settings_voice_quality_high">High</string>
+    <string name="settings_voice_quality_data_saver_desc" translatable="false">Opus 24 kbps · AAC 32 kbps</string>
+    <string name="settings_voice_quality_balanced_desc" translatable="false">Opus 48 kbps · AAC 64 kbps</string>
+    <string name="settings_voice_quality_high_desc" translatable="false">Opus 64 kbps · AAC 96 kbps</string>
+    <string name="about_support_section">Support and diagnostics</string>
+    <string name="about_project_section">Project</string>
+    <string name="about_license_url" translatable="false">https://github.com/trevarj/motd/blob/main/LICENSE</string>
+    <string name="settings_direct_transfer_summary">%1$s · %2$s · %3$s</string>
+    <string name="dcc_protocol_send" translatable="false">SEND</string>
+    <string name="dcc_protocol_ssend" translatable="false">SSEND</string>
+    <string name="dcc_state_offered">Offered</string>
+    <string name="dcc_state_accepting">Accepting</string>
+    <string name="dcc_state_active">Transferring</string>
+    <string name="dcc_state_partial">Partially transferred</string>
+    <string name="dcc_state_completed">Completed</string>
+    <string name="dcc_state_failed">Failed</string>
+    <string name="dcc_state_rejected">Rejected</string>
+    <string name="dcc_state_expired">Expired</string>
+    <string name="dcc_state_removed">Removed</string>
+    <string name="settings_conversation_section">Conversation</string>
+    <string name="settings_media_previews_section">Media and previews</string>
+    <string name="settings_voice_audio_section">Voice and audio</string>
+    <string name="settings_media_disabled_explanation">Turn on Show images to configure automatic media loading.</string>
+    <string name="settings_auto_away_disabled_explanation">Turn on Away when backgrounded to configure this.</string>
+    <string name="add_network_preset_tls_endpoint">%1$s:%2$d · TLS</string>
+    <string name="add_network_preset_plain_endpoint">%1$s:%2$d · %3$s</string>
+    <string name="add_network_preset_detail">%1$s · %2$s</string>
+    <string name="manage_color_hue">Hue %1$d°</string>
+    <string name="gesture_editor_provider_summary">%1$s · %2$s</string>
+    <string name="gesture_icon_unknown">Unknown icon</string>
+    <string name="gesture_icon_menu">Menu</string>
+    <string name="gesture_icon_folder">Folder</string>
+    <string name="gesture_icon_chat">Chat</string>
+    <string name="gesture_icon_pin">Pin</string>
+    <string name="gesture_icon_star">Star</string>
+    <string name="gesture_icon_unread">Unread</string>
+    <string name="gesture_icon_mark_read">Mark read</string>
+    <string name="gesture_icon_people">People</string>
+    <string name="gesture_icon_person">Person</string>
+    <string name="gesture_icon_mention">Mention</string>
+    <string name="gesture_icon_search">Search</string>
+    <string name="gesture_icon_info">Information</string>
+    <string name="gesture_icon_bolt">Bolt</string>
+    <string name="gesture_icon_away">Away</string>
+    <string name="gesture_icon_network">Network</string>
+    <string name="gesture_icon_globe">Globe</string>
+    <string name="gesture_icon_attach">Attachment</string>
+    <string name="gesture_icon_light_mode">Light theme</string>
+    <string name="gesture_icon_dark_mode">Dark theme</string>
+    <string name="gesture_icon_refresh">Refresh</string>
+    <string name="gesture_icon_power">Power</string>
+    <string name="gesture_icon_link">Link</string>
+    <string name="gesture_icon_more">More</string>
 </resources>

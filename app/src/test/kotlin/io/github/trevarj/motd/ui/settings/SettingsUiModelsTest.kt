@@ -79,7 +79,6 @@ class SettingsUiModelsTest {
         assertEquals(25L, uploadLimitMaximumMiB(AttachmentBackend.LITTERBOX))
         assertEquals(512L, uploadLimitMaximumMiB(AttachmentBackend.CUSTOM_0X0))
         assertEquals(1024L, uploadLimitMaximumMiB(AttachmentBackend.X0_AT))
-        assertEquals("24 hours", litterboxExpiryLabel("24h"))
     }
 
     @Test

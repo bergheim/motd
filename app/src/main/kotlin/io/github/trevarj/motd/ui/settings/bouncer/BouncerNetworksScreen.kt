@@ -15,7 +15,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
@@ -31,13 +30,11 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.PrimaryScrollableTabRow
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -61,6 +58,7 @@ import io.github.trevarj.motd.bouncer.ChannelCommandFields
 import io.github.trevarj.motd.bouncer.NetworkCommandFields
 import io.github.trevarj.motd.bouncer.UserCommandFields
 import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.ui.settings.SettingsScaffold
 import io.github.trevarj.motd.ui.theme.LocalMotdSemanticColors
 import io.github.trevarj.motd.ui.theme.MotdMotion
 import io.github.trevarj.motd.ui.theme.MotdTheme
@@ -158,28 +156,18 @@ fun BouncerNetworksContent(
     callbacks: BouncerControlCallbacks,
 ) {
     val ready = state.rootState is IrcClientState.Ready
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.bouncer_control_title)) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = stringResource(R.string.onboarding_back),
-                        )
-                    }
-                },
-                actions = {
-                    IconButton(onClick = callbacks.onRefresh, enabled = ready && !state.loading) {
-                        Icon(Icons.Filled.Refresh, contentDescription = stringResource(R.string.action_refresh))
-                    }
-                },
-            )
+    SettingsScaffold(
+        title = stringResource(R.string.bouncer_control_title),
+        onBack = onBack,
+        scroll = false,
+        pagePadding = false,
+        topActions = {
+            IconButton(onClick = callbacks.onRefresh, enabled = ready && !state.loading) {
+                Icon(Icons.Filled.Refresh, contentDescription = stringResource(R.string.action_refresh))
+            }
         },
-    ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
+    ) {
+        Column(Modifier.fillMaxSize()) {
             if (state.loading || state.probing || state.commandBusy) {
                 LinearProgressIndicator(Modifier.fillMaxWidth())
             }

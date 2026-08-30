@@ -41,6 +41,7 @@ import io.github.trevarj.motd.R
 import io.github.trevarj.motd.service.DeliveryMode
 import io.github.trevarj.motd.service.isBootReceiverEnabled
 import io.github.trevarj.motd.service.setBootReceiverEnabled
+import io.github.trevarj.motd.ui.nav.SettingsTarget
 import io.github.trevarj.motd.ui.theme.MotdMotion
 import io.github.trevarj.motd.ui.theme.MotdTheme
 import android.provider.Settings as AndroidSettings
@@ -49,7 +50,8 @@ import android.provider.Settings as AndroidSettings
 @Composable
 fun DeliverySettingsScreen(
     onBack: () -> Unit = {},
-    viewModel: SettingsViewModel = hiltViewModel(),
+    target: SettingsTarget? = null,
+    viewModel: DeliverySettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -67,7 +69,7 @@ fun DeliverySettingsScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
     DeliverySettingsContent(
-        deliveryMode = state.settings.deliveryMode,
+        deliveryMode = state.deliveryMode,
         pushAvailability = state.pushAvailability,
         onBack = onBack,
         onDeliveryMode = viewModel::setDeliveryMode,
@@ -78,6 +80,7 @@ fun DeliverySettingsScreen(
         },
         onSelectDistributor = viewModel::selectPushDistributor,
         onRetryPush = viewModel::retryPushSetup,
+        target = target,
     )
 }
 
@@ -91,6 +94,7 @@ fun DeliverySettingsContent(
     onStartOnBoot: (Boolean) -> Unit = {},
     onSelectDistributor: (String) -> Unit = {},
     onRetryPush: () -> Unit = {},
+    target: SettingsTarget? = null,
 ) {
     val context = LocalContext.current
     var showDistributorChooser by remember { mutableStateOf(false) }
@@ -104,6 +108,7 @@ fun DeliverySettingsContent(
                 onInstallDistributor = { context.startActivity(Intent(Intent.ACTION_VIEW, distributorUrl.toUri())) },
                 onChooseDistributor = { showDistributorChooser = true },
                 onRetryPush = onRetryPush,
+                target = target,
             )
             // Permission is re-checked in onResume, so the warning flips while the user watches the
             // screen re-appear; ease the height change instead of jumping.
@@ -123,56 +128,61 @@ fun DeliverySettingsContent(
             }
         }
         SettingsGroup(title = stringResource(R.string.settings_background_reliability)) {
-            SwitchRow(
-                title = stringResource(R.string.settings_start_on_boot),
-                subtitle = stringResource(R.string.settings_start_on_boot_desc),
-                checked = startOnBoot,
-                onCheckedChange = onStartOnBoot,
-                switchTag = "settings_start_on_boot",
-            )
-            ListItem(
-                headlineContent = { Text(stringResource(R.string.settings_battery)) },
-                supportingContent = {
-                    Text(
-                        stringResource(
-                            when {
-                                deliveryMode != DeliveryMode.UNIFIED_PUSH -> {
-                                    R.string.settings_battery_desc
-                                }
+            SettingsTarget(target?.name, SettingsTarget.START_ON_BOOT.name) { targetModifier ->
+                SwitchRow(
+                    title = stringResource(R.string.settings_start_on_boot),
+                    subtitle = stringResource(R.string.settings_start_on_boot_desc),
+                    checked = startOnBoot,
+                    onCheckedChange = onStartOnBoot,
+                    switchTag = "settings_start_on_boot",
+                    modifier = targetModifier,
+                )
+            }
+            SettingsTarget(target?.name, SettingsTarget.BATTERY.name) { targetModifier ->
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.settings_battery)) },
+                    supportingContent = {
+                        Text(
+                            stringResource(
+                                when {
+                                    deliveryMode != DeliveryMode.UNIFIED_PUSH -> {
+                                        R.string.settings_battery_desc
+                                    }
 
-                                pushAvailability.protectedNetworks in 1 until pushAvailability.eligibleNetworks -> {
-                                    R.string.settings_battery_hybrid_desc
-                                }
+                                    pushAvailability.protectedNetworks in 1 until pushAvailability.eligibleNetworks -> {
+                                        R.string.settings_battery_hybrid_desc
+                                    }
 
-                                else -> {
-                                    R.string.settings_battery_push_desc
-                                }
-                            },
-                        ),
-                    )
-                },
-                colors =
-                    androidx.compose.material3.ListItemDefaults
-                        .colors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
-                modifier =
-                    Modifier.testTag("settings_battery_optimization").clickable {
-                        val pm = context.getSystemService(PowerManager::class.java)
-                        val targetPackage =
-                            if (deliveryMode == DeliveryMode.UNIFIED_PUSH) {
-                                pushAvailability.selectedDistributor ?: context.packageName
-                            } else {
-                                context.packageName
-                            }
-                        if (pm?.isIgnoringBatteryOptimizations(targetPackage) == true) {
-                            context.startActivity(Intent(AndroidSettings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
-                        } else {
-                            context.startActivity(
-                                Intent(AndroidSettings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
-                                    .setData("package:$targetPackage".toUri()),
-                            )
-                        }
+                                    else -> {
+                                        R.string.settings_battery_push_desc
+                                    }
+                                },
+                            ),
+                        )
                     },
-            )
+                    colors =
+                        androidx.compose.material3.ListItemDefaults
+                            .colors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
+                    modifier =
+                        targetModifier.testTag("settings_battery_optimization").clickable {
+                            val pm = context.getSystemService(PowerManager::class.java)
+                            val targetPackage =
+                                if (deliveryMode == DeliveryMode.UNIFIED_PUSH) {
+                                    pushAvailability.selectedDistributor ?: context.packageName
+                                } else {
+                                    context.packageName
+                                }
+                            if (pm?.isIgnoringBatteryOptimizations(targetPackage) == true) {
+                                context.startActivity(Intent(AndroidSettings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                            } else {
+                                context.startActivity(
+                                    Intent(AndroidSettings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                                        .setData("package:$targetPackage".toUri()),
+                                )
+                            }
+                        },
+                )
+            }
         }
     }
     if (showDistributorChooser) {
@@ -205,15 +215,22 @@ private fun DeliveryGroup(
     onInstallDistributor: () -> Unit,
     onChooseDistributor: () -> Unit,
     onRetryPush: () -> Unit,
+    target: SettingsTarget? = null,
 ) {
     Column(Modifier.selectableGroup()) {
-        RadioRow(
-            label = stringResource(R.string.settings_delivery_socket),
-            subtitle = stringResource(R.string.settings_delivery_socket_desc),
-            selected = current == DeliveryMode.PERSISTENT_SOCKET,
-            enabled = true,
-            onClick = { onSelect(DeliveryMode.PERSISTENT_SOCKET) },
-        )
+        SettingsTarget(
+            if (target == SettingsTarget.DELIVERY) SettingsTarget.PERSISTENT_DELIVERY.name else target?.name,
+            SettingsTarget.PERSISTENT_DELIVERY.name,
+        ) { targetModifier ->
+            RadioRow(
+                label = stringResource(R.string.settings_delivery_socket),
+                subtitle = stringResource(R.string.settings_delivery_socket_desc),
+                selected = current == DeliveryMode.PERSISTENT_SOCKET,
+                enabled = true,
+                onClick = { onSelect(DeliveryMode.PERSISTENT_SOCKET) },
+                modifier = targetModifier,
+            )
+        }
         // Selectable once the bouncer advertises webpush; a missing distributor is surfaced as
         // actionable guidance rather than a silently-disabled control (registration self-heals when
         // a distributor is installed). Only the missing-webpush case disables the control.
@@ -223,19 +240,21 @@ private fun DeliveryGroup(
                 availability.selectable -> stringResource(R.string.settings_delivery_push_desc)
                 else -> stringResource(R.string.settings_delivery_push_unavailable)
             }
-        RadioRow(
-            label = stringResource(R.string.settings_delivery_push),
-            subtitle = subtitle,
-            selected = current == DeliveryMode.UNIFIED_PUSH,
-            enabled = availability.selectable,
-            onClick = {
-                onSelect(DeliveryMode.UNIFIED_PUSH)
-                if (availability.distributors.size > 1 && availability.selectedDistributor == null) {
-                    onChooseDistributor()
-                }
-            },
-            modifier = Modifier.testTag("settings_unified_push_row"),
-        )
+        SettingsTarget(target?.name, SettingsTarget.UNIFIED_PUSH.name) { targetModifier ->
+            RadioRow(
+                label = stringResource(R.string.settings_delivery_push),
+                subtitle = subtitle,
+                selected = current == DeliveryMode.UNIFIED_PUSH,
+                enabled = availability.selectable,
+                onClick = {
+                    onSelect(DeliveryMode.UNIFIED_PUSH)
+                    if (availability.distributors.size > 1 && availability.selectedDistributor == null) {
+                        onChooseDistributor()
+                    }
+                },
+                modifier = targetModifier.testTag("settings_unified_push_row"),
+            )
+        }
         // Install-a-distributor action, shown only when push is selectable but no distributor exists.
         // Opens ntfy's F-Droid listing so the user can fix the missing-distributor gap in one tap.
         AnimatedVisibility(

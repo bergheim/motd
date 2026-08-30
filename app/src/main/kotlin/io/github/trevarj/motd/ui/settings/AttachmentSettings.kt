@@ -31,6 +31,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import io.github.trevarj.motd.R
 import io.github.trevarj.motd.attachment.AVAILABLE_ATTACHMENT_BACKENDS
 import io.github.trevarj.motd.attachment.AttachmentBackend
 import io.github.trevarj.motd.attachment.AttachmentPrefs
@@ -39,6 +40,7 @@ import io.github.trevarj.motd.attachment.PasteBackendConfig
 import io.github.trevarj.motd.attachment.backendMaxBytes
 import io.github.trevarj.motd.attachment.forBackend
 import io.github.trevarj.motd.attachment.validateEndpoint
+import io.github.trevarj.motd.ui.nav.SettingsTarget
 import io.github.trevarj.motd.ui.theme.MotdMotion
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
@@ -57,24 +59,54 @@ class AttachmentSettingsViewModel
     }
 
 @Composable
-fun UploadsSettingsContent(viewModel: AttachmentSettingsViewModel = hiltViewModel()) {
+fun UploadsSettingsScreen(
+    onBack: () -> Unit,
+    target: SettingsTarget? = null,
+    viewModel: AttachmentSettingsViewModel = hiltViewModel(),
+) {
+    SettingsScaffold(
+        title = stringResource(R.string.settings_uploads),
+        onBack = onBack,
+        modifier = Modifier.testTag("screen_uploads_settings"),
+    ) {
+        UploadsSettingsContent(target = target, viewModel = viewModel)
+    }
+}
+
+@Composable
+fun UploadsSettingsContent(
+    target: SettingsTarget? = null,
+    viewModel: AttachmentSettingsViewModel = hiltViewModel(),
+) {
     val config by viewModel.config.collectAsStateWithLifecycle()
     var customEndpoint by rememberSaveable { mutableStateOf("") }
+    var providerSheet by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(config.customEndpoint) {
         customEndpoint = config.customEndpoint
     }
 
-    SettingsGroup(title = stringResource(io.github.trevarj.motd.R.string.settings_upload_destination)) {
-        Column(Modifier.selectableGroup()) {
-            AVAILABLE_ATTACHMENT_BACKENDS.forEach { backend ->
-                RadioRow(
-                    label = backend.label,
-                    subtitle = backendDescription(backend),
-                    selected = config.backend == backend,
-                    enabled = true,
-                    onClick = { viewModel.update { it.forBackend(backend) } },
-                )
-            }
+    val connectionFallsBackToProvider =
+        target == SettingsTarget.UPLOAD_CONNECTION && config.backend != AttachmentBackend.CUSTOM_0X0
+    val privacyFallsBackToProvider =
+        target == SettingsTarget.UPLOAD_PRIVACY && !backendHasPrivacyControls(config.backend)
+    val providerTarget =
+        if (target == SettingsTarget.UPLOADS || connectionFallsBackToProvider || privacyFallsBackToProvider) {
+            SettingsTarget.UPLOAD_PROVIDER.name
+        } else {
+            target?.name
+        }
+    SettingsGroup(title = stringResource(R.string.settings_upload_destination)) {
+        SettingsTarget(
+            providerTarget,
+            SettingsTarget.UPLOAD_PROVIDER.name,
+        ) { modifier ->
+            SettingsNavigationRow(
+                title = stringResource(R.string.settings_upload_provider),
+                summary = backendDescription(config.backend),
+                value = attachmentBackendLabel(config.backend),
+                modifier = modifier.testTag("settings_upload_provider"),
+                onClick = { providerSheet = true },
+            )
         }
     }
 
@@ -93,134 +125,147 @@ fun UploadsSettingsContent(viewModel: AttachmentSettingsViewModel = hiltViewMode
                 UploadWarning(stringResource(io.github.trevarj.motd.R.string.settings_upload_termbin_warning))
             }
             if (backend == AttachmentBackend.CUSTOM_0X0) {
-                SettingsGroup(title = stringResource(io.github.trevarj.motd.R.string.settings_upload_endpoint)) {
-                    var usernameDraft by remember { mutableStateOf<String?>(null) }
-                    var passwordDraft by remember { mutableStateOf<String?>(null) }
-                    val endpointError = customEndpoint.isNotBlank() && validateEndpoint(customEndpoint) == null
-                    OutlinedTextField(
-                        value = customEndpoint,
-                        onValueChange = { value ->
-                            customEndpoint = value
-                            if (value.isBlank()) {
-                                usernameDraft = ""
-                                passwordDraft = ""
-                                viewModel.update {
-                                    it.copy(endpoint = "", customEndpoint = "", username = "", password = "")
-                                }
-                            } else {
-                                validateEndpoint(value)?.let { endpoint ->
-                                    val authorityChanged =
-                                        config.endpoint.isNotBlank() &&
-                                            !sameUploadAuthority(config.endpoint, endpoint)
-                                    if (authorityChanged) {
-                                        usernameDraft = ""
-                                        passwordDraft = ""
-                                    }
+                SettingsTarget(target?.name, SettingsTarget.UPLOAD_CONNECTION.name) { targetModifier ->
+                    SettingsGroup(
+                        title = stringResource(R.string.settings_upload_endpoint),
+                        modifier = targetModifier,
+                    ) {
+                        var usernameDraft by remember { mutableStateOf<String?>(null) }
+                        var passwordDraft by remember { mutableStateOf<String?>(null) }
+                        val endpointError = customEndpoint.isNotBlank() && validateEndpoint(customEndpoint) == null
+                        OutlinedTextField(
+                            value = customEndpoint,
+                            onValueChange = { value ->
+                                customEndpoint = value
+                                if (value.isBlank()) {
+                                    usernameDraft = ""
+                                    passwordDraft = ""
                                     viewModel.update {
-                                        it.copy(
-                                            endpoint = endpoint,
-                                            customEndpoint = endpoint,
-                                            username = if (authorityChanged) "" else it.username,
-                                            password = if (authorityChanged) "" else it.password,
-                                        )
+                                        it.copy(endpoint = "", customEndpoint = "", username = "", password = "")
+                                    }
+                                } else {
+                                    validateEndpoint(value)?.let { endpoint ->
+                                        val authorityChanged =
+                                            config.endpoint.isNotBlank() &&
+                                                !sameUploadAuthority(config.endpoint, endpoint)
+                                        if (authorityChanged) {
+                                            usernameDraft = ""
+                                            passwordDraft = ""
+                                        }
+                                        viewModel.update {
+                                            it.copy(
+                                                endpoint = endpoint,
+                                                customEndpoint = endpoint,
+                                                username = if (authorityChanged) "" else it.username,
+                                                password = if (authorityChanged) "" else it.password,
+                                            )
+                                        }
                                     }
                                 }
-                            }
-                        },
-                        label = { Text(stringResource(io.github.trevarj.motd.R.string.settings_upload_custom_url)) },
-                        isError = endpointError,
-                        supportingText = {
-                            Text(
-                                stringResource(
-                                    if (endpointError) {
-                                        io.github.trevarj.motd.R.string.settings_upload_custom_error
-                                    } else {
-                                        io.github.trevarj.motd.R.string.settings_upload_custom_desc
-                                    },
-                                ),
-                            )
-                        },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                        singleLine = true,
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 8.dp)
-                                .testTag("settings_upload_custom_endpoint"),
-                    )
-                    OutlinedTextField(
-                        value = usernameDraft ?: config.username,
-                        onValueChange = { value ->
-                            usernameDraft = value
-                            viewModel.update { it.copy(username = value) }
-                        },
-                        label = { Text(stringResource(io.github.trevarj.motd.R.string.settings_upload_custom_username)) },
-                        singleLine = true,
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 8.dp)
-                                .testTag("settings_upload_custom_username"),
-                    )
-                    OutlinedTextField(
-                        value = passwordDraft ?: config.password,
-                        onValueChange = { value ->
-                            passwordDraft = value
-                            viewModel.update { it.copy(password = value) }
-                        },
-                        label = { Text(stringResource(io.github.trevarj.motd.R.string.settings_upload_custom_password)) },
-                        visualTransformation =
-                            androidx.compose.ui.text.input
-                                .PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        singleLine = true,
-                        modifier =
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 8.dp)
-                                .testTag("settings_upload_custom_password"),
-                    )
+                            },
+                            label = { Text(stringResource(io.github.trevarj.motd.R.string.settings_upload_custom_url)) },
+                            isError = endpointError,
+                            supportingText = {
+                                Text(
+                                    stringResource(
+                                        if (endpointError) {
+                                            io.github.trevarj.motd.R.string.settings_upload_custom_error
+                                        } else {
+                                            io.github.trevarj.motd.R.string.settings_upload_custom_desc
+                                        },
+                                    ),
+                                )
+                            },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                            singleLine = true,
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                                    .testTag("settings_upload_custom_endpoint"),
+                        )
+                        OutlinedTextField(
+                            value = usernameDraft ?: config.username,
+                            onValueChange = { value ->
+                                usernameDraft = value
+                                viewModel.update { it.copy(username = value) }
+                            },
+                            label = { Text(stringResource(io.github.trevarj.motd.R.string.settings_upload_custom_username)) },
+                            singleLine = true,
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                                    .testTag("settings_upload_custom_username"),
+                        )
+                        OutlinedTextField(
+                            value = passwordDraft ?: config.password,
+                            onValueChange = { value ->
+                                passwordDraft = value
+                                viewModel.update { it.copy(password = value) }
+                            },
+                            label = { Text(stringResource(io.github.trevarj.motd.R.string.settings_upload_custom_password)) },
+                            visualTransformation =
+                                androidx.compose.ui.text.input
+                                    .PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            singleLine = true,
+                            modifier =
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                                    .testTag("settings_upload_custom_password"),
+                        )
+                    }
                 }
             }
 
             when (backend) {
                 AttachmentBackend.CRAFTERBIN, AttachmentBackend.ZERO_X_ZERO, AttachmentBackend.CUSTOM_0X0 -> {
-                    SettingsGroup(title = stringResource(io.github.trevarj.motd.R.string.settings_upload_privacy)) {
-                        SwitchRow(
-                            title = stringResource(io.github.trevarj.motd.R.string.settings_upload_secret),
-                            subtitle = stringResource(io.github.trevarj.motd.R.string.settings_upload_secret_desc),
-                            checked = config.secretUrl,
-                            onCheckedChange = { value -> viewModel.update { it.copy(secretUrl = value) } },
-                            switchTag = "settings_upload_secret",
-                        )
-                        val expiryDays = uploadExpiryWholeDays(config.expiry)
-                        OutlinedTextField(
-                            value =
-                                expiryDays?.let {
-                                    pluralStringResource(io.github.trevarj.motd.R.plurals.settings_upload_expiry_days, it, it)
-                                } ?: config.expiry.orEmpty(),
-                            onValueChange = { value -> viewModel.update { it.copy(expiry = uploadExpiryHours(value)) } },
-                            label = { Text(stringResource(io.github.trevarj.motd.R.string.settings_upload_expiry)) },
-                            supportingText = { Text(stringResource(io.github.trevarj.motd.R.string.settings_upload_expiry_desc)) },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                        )
+                    SettingsTarget(target?.name, SettingsTarget.UPLOAD_PRIVACY.name) { targetModifier ->
+                        SettingsGroup(
+                            title = stringResource(R.string.settings_upload_privacy),
+                            modifier = targetModifier,
+                        ) {
+                            SwitchRow(
+                                title = stringResource(io.github.trevarj.motd.R.string.settings_upload_secret),
+                                subtitle = stringResource(io.github.trevarj.motd.R.string.settings_upload_secret_desc),
+                                checked = config.secretUrl,
+                                onCheckedChange = { value -> viewModel.update { it.copy(secretUrl = value) } },
+                                switchTag = "settings_upload_secret",
+                            )
+                            val expiryDays = uploadExpiryWholeDays(config.expiry)
+                            OutlinedTextField(
+                                value =
+                                    expiryDays?.let {
+                                        pluralStringResource(io.github.trevarj.motd.R.plurals.settings_upload_expiry_days, it, it)
+                                    } ?: config.expiry.orEmpty(),
+                                onValueChange = { value -> viewModel.update { it.copy(expiry = uploadExpiryHours(value)) } },
+                                label = { Text(stringResource(io.github.trevarj.motd.R.string.settings_upload_expiry)) },
+                                supportingText = { Text(stringResource(io.github.trevarj.motd.R.string.settings_upload_expiry_desc)) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                            )
+                        }
                     }
                 }
 
                 AttachmentBackend.LITTERBOX -> {
-                    SettingsGroup(
-                        title = stringResource(io.github.trevarj.motd.R.string.settings_upload_privacy),
-                    ) {
-                        Column(Modifier.selectableGroup()) {
-                            LITTERBOX_EXPIRIES.forEach { expiry ->
-                                RadioRow(
-                                    label = litterboxExpiryLabel(expiry),
-                                    subtitle = stringResource(io.github.trevarj.motd.R.string.settings_upload_litterbox_expiry_desc),
-                                    selected = config.litterboxExpiry == expiry,
-                                    enabled = true,
-                                    onClick = { viewModel.update { it.copy(litterboxExpiry = expiry) } },
-                                )
+                    SettingsTarget(target?.name, SettingsTarget.UPLOAD_PRIVACY.name) { targetModifier ->
+                        SettingsGroup(
+                            title = stringResource(R.string.settings_upload_privacy),
+                            modifier = targetModifier,
+                        ) {
+                            Column(Modifier.selectableGroup()) {
+                                LITTERBOX_EXPIRIES.forEach { expiry ->
+                                    RadioRow(
+                                        label = litterboxExpiryLabel(expiry),
+                                        subtitle = stringResource(io.github.trevarj.motd.R.string.settings_upload_litterbox_expiry_desc),
+                                        selected = config.litterboxExpiry == expiry,
+                                        enabled = true,
+                                        onClick = { viewModel.update { it.copy(litterboxExpiry = expiry) } },
+                                    )
+                                }
                             }
                         }
                     }
@@ -263,20 +308,40 @@ fun UploadsSettingsContent(viewModel: AttachmentSettingsViewModel = hiltViewMode
         }
     }
 
-    SettingsGroup(title = stringResource(io.github.trevarj.motd.R.string.settings_upload_limits)) {
-        val maximumMiB = uploadLimitMaximumMiB(config.backend)
-        OutlinedTextField(
-            value = (config.sizeLimitBytes / MIB).toString(),
-            onValueChange = { value ->
-                value.toLongOrNull()?.coerceIn(1, maximumMiB)?.let { mib ->
-                    viewModel.update { it.copy(sizeLimitBytes = mib * MIB) }
-                }
-            },
-            label = { Text(stringResource(io.github.trevarj.motd.R.string.settings_upload_limit)) },
-            supportingText = { Text(stringResource(io.github.trevarj.motd.R.string.settings_upload_limit_desc, maximumMiB)) },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
+    SettingsTarget(target?.name, SettingsTarget.UPLOAD_LIMIT.name) { targetModifier ->
+        SettingsGroup(title = stringResource(R.string.settings_upload_limits)) {
+            val maximumMiB = uploadLimitMaximumMiB(config.backend)
+            OutlinedTextField(
+                value = (config.sizeLimitBytes / MIB).toString(),
+                onValueChange = { value ->
+                    value.toLongOrNull()?.coerceIn(1, maximumMiB)?.let { mib ->
+                        viewModel.update { it.copy(sizeLimitBytes = mib * MIB) }
+                    }
+                },
+                label = { Text(stringResource(R.string.settings_upload_limit)) },
+                supportingText = { Text(stringResource(R.string.settings_upload_limit_desc, maximumMiB)) },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                singleLine = true,
+                modifier = targetModifier.fillMaxWidth().padding(16.dp),
+            )
+        }
+    }
+    if (providerSheet) {
+        SingleChoiceSheet(
+            title = stringResource(R.string.settings_upload_provider),
+            selected = config.backend,
+            options =
+                AVAILABLE_ATTACHMENT_BACKENDS.map { backend ->
+                    ChoiceOption(
+                        value = backend,
+                        label = attachmentBackendLabel(backend),
+                        summary = backendDescription(backend),
+                        tag = "settings_upload_backend_${backend.name.lowercase()}",
+                    )
+                },
+            onSelect = { backend -> viewModel.update { it.forBackend(backend) } },
+            onDismiss = { providerSheet = false },
+            tag = "settings_upload_provider_sheet",
         )
     }
 }
@@ -337,26 +402,56 @@ internal fun uploadExpiryHours(value: String): String? {
 
 internal fun uploadLimitMaximumMiB(backend: AttachmentBackend): Long = backendMaxBytes(backend) / MIB
 
-internal fun backendDescription(backend: AttachmentBackend): String =
-    when (backend) {
-        AttachmentBackend.CRAFTERBIN -> "Files, photos, and text • configurable expiry"
-        AttachmentBackend.ZERO_X_ZERO -> "Files, photos, and text • public service"
-        AttachmentBackend.X0_AT -> "Files, photos, and text • 3–100 days by size • no deletion"
-        AttachmentBackend.CUSTOM_0X0 -> "HTTPS URL, optional username and password"
-        AttachmentBackend.CNET -> "Files, photos, and text • rolling 180 days • deletable"
-        AttachmentBackend.UGUU -> "Files, photos, and text • 3 hours"
-        AttachmentBackend.LITTERBOX -> "Files, photos, and text • 1–72 hours"
-        AttachmentBackend.CATBOX -> "Files, photos, and text • long-lived"
-        AttachmentBackend.SOJU_FILEHOST -> "Files, photos, and text • current chat's bouncer"
-        AttachmentBackend.TERMBIN -> "Text only • unencrypted TCP"
-    }
+private fun backendHasPrivacyControls(backend: AttachmentBackend): Boolean =
+    backend in
+        setOf(
+            AttachmentBackend.CRAFTERBIN,
+            AttachmentBackend.ZERO_X_ZERO,
+            AttachmentBackend.CUSTOM_0X0,
+            AttachmentBackend.LITTERBOX,
+        )
 
+@Composable
+internal fun attachmentBackendLabel(backend: AttachmentBackend): String =
+    stringResource(
+        when (backend) {
+            AttachmentBackend.CRAFTERBIN -> R.string.upload_backend_crafterbin
+            AttachmentBackend.ZERO_X_ZERO -> R.string.upload_backend_zero_x_zero
+            AttachmentBackend.X0_AT -> R.string.upload_backend_x0_at
+            AttachmentBackend.CUSTOM_0X0 -> R.string.upload_backend_custom
+            AttachmentBackend.CNET -> R.string.upload_backend_cnet
+            AttachmentBackend.UGUU -> R.string.upload_backend_uguu
+            AttachmentBackend.LITTERBOX -> R.string.upload_backend_litterbox
+            AttachmentBackend.CATBOX -> R.string.upload_backend_catbox
+            AttachmentBackend.SOJU_FILEHOST -> R.string.upload_backend_soju
+            AttachmentBackend.TERMBIN -> R.string.upload_backend_termbin
+        },
+    )
+
+@Composable
+internal fun backendDescription(backend: AttachmentBackend): String =
+    stringResource(
+        when (backend) {
+            AttachmentBackend.CRAFTERBIN -> R.string.upload_backend_crafterbin_desc
+            AttachmentBackend.ZERO_X_ZERO -> R.string.upload_backend_zero_x_zero_desc
+            AttachmentBackend.X0_AT -> R.string.upload_backend_x0_at_desc
+            AttachmentBackend.CUSTOM_0X0 -> R.string.upload_backend_custom_desc
+            AttachmentBackend.CNET -> R.string.upload_backend_cnet_desc
+            AttachmentBackend.UGUU -> R.string.upload_backend_uguu_desc
+            AttachmentBackend.LITTERBOX -> R.string.upload_backend_litterbox_desc
+            AttachmentBackend.CATBOX -> R.string.upload_backend_catbox_desc
+            AttachmentBackend.SOJU_FILEHOST -> R.string.upload_backend_soju_desc
+            AttachmentBackend.TERMBIN -> R.string.upload_backend_termbin_desc
+        },
+    )
+
+@Composable
 internal fun litterboxExpiryLabel(expiry: String): String =
     when (expiry) {
-        "1h" -> "1 hour"
-        "12h" -> "12 hours"
-        "24h" -> "24 hours"
-        "72h" -> "72 hours"
+        "1h" -> pluralStringResource(R.plurals.settings_upload_expiry_hours, 1, 1)
+        "12h" -> pluralStringResource(R.plurals.settings_upload_expiry_hours, 12, 12)
+        "24h" -> pluralStringResource(R.plurals.settings_upload_expiry_hours, 24, 24)
+        "72h" -> pluralStringResource(R.plurals.settings_upload_expiry_hours, 72, 72)
         else -> expiry
     }
 

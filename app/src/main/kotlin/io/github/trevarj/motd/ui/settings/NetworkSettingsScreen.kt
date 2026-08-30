@@ -74,6 +74,7 @@ import io.github.trevarj.motd.bouncer.ZncLoginForm
 import io.github.trevarj.motd.data.db.NetworkRole
 import io.github.trevarj.motd.data.db.ObfsMode
 import io.github.trevarj.motd.irc.event.IrcClientState
+import io.github.trevarj.motd.ui.nav.NetworkSettingsTarget
 import io.github.trevarj.motd.ui.onboarding.AuthForm
 import io.github.trevarj.motd.ui.onboarding.AuthMode
 import io.github.trevarj.motd.ui.onboarding.ServerForm
@@ -85,6 +86,7 @@ import io.github.trevarj.motd.ui.theme.MotdTheme
 @Composable
 fun NetworkSettingsScreen(
     networkId: Long,
+    target: NetworkSettingsTarget? = null,
     onBack: () -> Unit = {},
     // Round 5: soju bouncer manager + server-messages buffer.
     onOpenBouncerNetworks: (Long) -> Unit = {},
@@ -97,6 +99,7 @@ fun NetworkSettingsScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     NetworkSettingsContent(
         state = state,
+        target = target,
         onBack = onBack,
         onDisplayNameChange = viewModel::editDisplayName,
         onWsUrlChange = viewModel::editWsUrl,
@@ -131,6 +134,7 @@ fun NetworkSettingsScreen(
 @Composable
 fun NetworkSettingsContent(
     state: NetworkSettingsUiState,
+    target: NetworkSettingsTarget? = null,
     onBack: () -> Unit,
     onDisplayNameChange: (String) -> Unit = {},
     onWsUrlChange: (String) -> Unit = {},
@@ -164,209 +168,214 @@ fun NetworkSettingsContent(
     val requestBack = { if (state.hasUnsavedChanges) showDiscardConfirm = true else onBack() }
     BackHandler(enabled = state.hasUnsavedChanges) { showDiscardConfirm = true }
 
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
-        topBar = {
-            TopAppBar(
-                title = { Text(state.entity?.name ?: stringResource(R.string.network_settings_title)) },
-                navigationIcon = {
-                    IconButton(onClick = requestBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.onboarding_back))
-                    }
-                },
-                actions = {
-                    TextButton(
-                        onClick = onSave,
-                        enabled = state.canSave,
-                        modifier = Modifier.testTag("network_settings_save"),
-                    ) { Text(stringResource(R.string.network_settings_save)) }
-                },
-            )
+    SettingsScaffold(
+        title = state.entity?.name ?: stringResource(R.string.network_settings_title),
+        onBack = requestBack,
+        modifier = Modifier.testTag("screen_network_settings"),
+        topActions = {
+            TextButton(
+                onClick = onSave,
+                enabled = state.canSave,
+                modifier = Modifier.testTag("network_settings_save"),
+            ) { Text(stringResource(R.string.network_settings_save)) }
         },
-    ) { padding ->
-        Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.TopCenter) {
-            Column(
-                modifier =
-                    Modifier
-                        .fillMaxWidth()
-                        .widthIn(max = 720.dp)
-                        .verticalScroll(rememberScrollState())
-                        .imePadding()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                SettingsGroup { StatusCard(state.connState, onConnect, onDisconnect) }
-                if (state.entity?.role == NetworkRole.DIRECT && state.server.tls && state.auth.mode == AuthMode.NONE &&
-                    state.auth.nickServPassword.isBlank()
+    ) {
+        SettingsGroup { StatusCard(state.connState, onConnect, onDisconnect) }
+        if (state.entity?.role == NetworkRole.DIRECT && state.server.tls && state.auth.mode == AuthMode.NONE &&
+            state.auth.nickServPassword.isBlank()
+        ) {
+            FilledTonalButton(
+                onClick = onOpenAccountSetup,
+                modifier = Modifier.fillMaxWidth().testTag("network_account_setup"),
+            ) { Text(stringResource(R.string.account_setup_title)) }
+        }
+        SettingsGroup(title = stringResource(R.string.network_settings_general_section)) {
+            OutlinedTextField(
+                value = state.displayName,
+                onValueChange = onDisplayNameChange,
+                label = { Text(stringResource(R.string.network_settings_display_name)) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(16.dp).testTag("network_display_name"),
+            )
+            AutoConnectRow(checked = state.autoConnect, onCheckedChange = onSetAutoConnect)
+        }
+        if (state.entity?.role == NetworkRole.BOUNCER_CHILD) {
+            SettingsTarget(target?.name, NetworkSettingsTarget.CONNECTION.name) { targetModifier ->
+                SettingsGroup(
+                    title = stringResource(R.string.network_settings_connection_section),
+                    modifier = targetModifier,
                 ) {
-                    FilledTonalButton(
-                        onClick = onOpenAccountSetup,
-                        modifier = Modifier.fillMaxWidth().testTag("network_account_setup"),
-                    ) { Text(stringResource(R.string.account_setup_title)) }
-                }
-                SettingsGroup(title = stringResource(R.string.network_settings_general_section)) {
-                    OutlinedTextField(
-                        value = state.displayName,
-                        onValueChange = onDisplayNameChange,
-                        label = { Text(stringResource(R.string.network_settings_display_name)) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth().padding(16.dp).testTag("network_display_name"),
-                    )
-                    AutoConnectRow(checked = state.autoConnect, onCheckedChange = onSetAutoConnect)
-                }
-                if (state.entity?.role == NetworkRole.BOUNCER_CHILD) {
-                    SettingsGroup(title = stringResource(R.string.network_settings_connection_section)) {
-                        ListItem(
-                            headlineContent = { Text(stringResource(R.string.network_settings_managed_by, state.parentName.orEmpty())) },
-                            supportingContent = { Text(stringResource(R.string.network_settings_managed_by_desc)) },
-                            colors =
-                                androidx.compose.material3.ListItemDefaults
-                                    .colors(containerColor = Color.Transparent),
-                        )
-                        InitialAwayField(state, onInitialAwayMessageChange)
-                    }
-                } else {
-                    SettingsGroup(title = stringResource(R.string.network_settings_connection_section)) {
-                        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-                            NetworkEndpointFields(state.server, onServerChange)
-                        }
-                        androidx.compose.material3.HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-                        TransportSection(wsUrl = state.wsUrl, onWsUrlChange = onWsUrlChange)
-                        androidx.compose.material3.HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-                        ObfuscationSection(
-                            mode = state.obfsMode,
-                            proxyHost = state.proxyHost,
-                            proxyPort = state.proxyPort,
-                            obfsLink = state.obfsLink,
-                            onModeChange = onObfsModeChange,
-                            onProxyHostChange = onProxyHostChange,
-                            onProxyPortChange = onProxyPortChange,
-                            onObfsLinkChange = onObfsLinkChange,
-                        )
-                    }
-                    SettingsGroup(title = stringResource(R.string.network_settings_identity_section)) {
-                        Column(Modifier.padding(16.dp)) {
-                            if (state.isZnc) {
-                                BouncerLoginFields(
-                                    kind = BouncerKind.ZNC,
-                                    server = state.server,
-                                    sojuLogin = SojuLoginForm(),
-                                    zncLogin = state.zncLogin,
-                                    onServerChange = onServerChange,
-                                    onSojuLoginChange = {},
-                                    onZncLoginChange = onZncLoginChange,
-                                    showEndpoint = false,
-                                )
-                            } else {
-                                NetworkIdentityFields(
-                                    server = state.server,
-                                    auth = state.auth,
-                                    onServerChange = onServerChange,
-                                    onAuthChange = onAuthChange,
-                                    soju = state.entity?.role == NetworkRole.BOUNCER_ROOT,
-                                )
-                            }
-                        }
-                    }
-                    if (state.entity?.role != NetworkRole.BOUNCER_ROOT) {
-                        SettingsGroup(title = stringResource(R.string.network_settings_presence_section)) {
-                            InitialAwayField(state, onInitialAwayMessageChange)
-                        }
-                    }
-                }
-                SettingsGroup(title = stringResource(R.string.network_settings_avatar_section)) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            text = stringResource(R.string.network_settings_avatar_experimental),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        OutlinedTextField(
-                            value = state.avatarInput,
-                            onValueChange = onAvatarUrlChange,
-                            label = { Text(stringResource(R.string.network_settings_avatar_url)) },
-                            supportingText = {
-                                Text(
-                                    if (state.avatarPublishError) {
-                                        stringResource(R.string.network_settings_avatar_publish_failed)
-                                    } else if (state.avatarPublishingAvailable) {
-                                        stringResource(R.string.network_settings_avatar_url_desc)
-                                    } else {
-                                        stringResource(R.string.network_settings_avatar_unavailable)
-                                    },
-                                )
-                            },
-                            isError =
-                                state.avatarPublishError || (
-                                    state.avatarInput.isNotBlank() &&
-                                        io.github.trevarj.motd.avatar
-                                            .validateAvatarUrl(state.avatarInput) == null
-                                ),
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth().testTag("network_avatar_url"),
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(
-                                onClick = onPublishAvatar,
-                                enabled =
-                                    state.avatarPublishingAvailable &&
-                                        io.github.trevarj.motd.avatar
-                                            .validateAvatarUrl(state.avatarInput) != null,
-                            ) { Text(stringResource(R.string.network_settings_avatar_publish)) }
-                            TextButton(onClick = onClearAvatar) {
-                                Text(stringResource(R.string.network_settings_avatar_clear))
-                            }
-                            if (state.selfAvatar !is io.github.trevarj.motd.avatar.SelfAvatarSetting.Unmanaged) {
-                                TextButton(onClick = onStopManagingAvatar) {
-                                    Text(stringResource(R.string.network_settings_avatar_unmanage))
-                                }
-                            }
-                        }
-                    }
-                }
-                SettingsGroup(title = stringResource(R.string.network_settings_tools_section)) {
-                    if (state.entity?.role == NetworkRole.BOUNCER_ROOT) {
-                        ListItem(
-                            headlineContent = { Text(stringResource(R.string.network_settings_bouncer_networks)) },
-                            supportingContent = { Text(stringResource(R.string.network_settings_bouncer_networks_desc)) },
-                            modifier =
-                                Modifier
-                                    .testTag("network_settings_bouncer_networks")
-                                    .clickable { onOpenBouncerNetworks() },
-                            colors =
-                                androidx.compose.material3.ListItemDefaults
-                                    .colors(containerColor = Color.Transparent),
-                        )
-                    }
                     ListItem(
-                        headlineContent = { Text(stringResource(R.string.network_settings_server_messages)) },
-                        modifier =
-                            Modifier
-                                .testTag("network_settings_server_messages")
-                                .clickable { onOpenServerMessages() },
+                        headlineContent = { Text(stringResource(R.string.network_settings_managed_by, state.parentName.orEmpty())) },
+                        supportingContent = { Text(stringResource(R.string.network_settings_managed_by_desc)) },
                         colors =
                             androidx.compose.material3.ListItemDefaults
                                 .colors(containerColor = Color.Transparent),
                     )
-                    ListItem(
-                        headlineContent = { Text(stringResource(R.string.network_settings_network_tools)) },
-                        supportingContent = { Text(stringResource(R.string.network_settings_network_tools_desc)) },
-                        modifier =
-                            Modifier
-                                .testTag("network_settings_network_tools")
-                                .clickable { onOpenNetworkTools() },
-                        colors =
-                            androidx.compose.material3.ListItemDefaults
-                                .colors(containerColor = Color.Transparent),
-                    )
-                }
-                SettingsGroup(title = stringResource(R.string.network_settings_danger_section)) {
-                    OutlinedButton(
-                        onClick = { showDeleteConfirm = true },
-                        modifier = Modifier.fillMaxWidth().padding(16.dp),
-                    ) { Text(stringResource(R.string.network_settings_delete), color = MaterialTheme.colorScheme.error) }
+                    InitialAwayField(state, onInitialAwayMessageChange)
                 }
             }
+        } else {
+            SettingsTarget(target?.name, NetworkSettingsTarget.CONNECTION.name) { targetModifier ->
+                SettingsGroup(
+                    title = stringResource(R.string.network_settings_connection_section),
+                    modifier = targetModifier,
+                ) {
+                    Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                        NetworkEndpointFields(state.server, onServerChange)
+                    }
+                    androidx.compose.material3.HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                    TransportSection(wsUrl = state.wsUrl, onWsUrlChange = onWsUrlChange)
+                    androidx.compose.material3.HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                    ObfuscationSection(
+                        target = target,
+                        mode = state.obfsMode,
+                        proxyHost = state.proxyHost,
+                        proxyPort = state.proxyPort,
+                        obfsLink = state.obfsLink,
+                        onModeChange = onObfsModeChange,
+                        onProxyHostChange = onProxyHostChange,
+                        onProxyPortChange = onProxyPortChange,
+                        onObfsLinkChange = onObfsLinkChange,
+                    )
+                }
+            }
+            SettingsTarget(target?.name, NetworkSettingsTarget.AUTHENTICATION.name) { targetModifier ->
+                SettingsGroup(
+                    title = stringResource(R.string.network_settings_identity_section),
+                    modifier = targetModifier,
+                ) {
+                    Column(Modifier.padding(16.dp)) {
+                        if (state.isZnc) {
+                            BouncerLoginFields(
+                                kind = BouncerKind.ZNC,
+                                server = state.server,
+                                sojuLogin = SojuLoginForm(),
+                                zncLogin = state.zncLogin,
+                                onServerChange = onServerChange,
+                                onSojuLoginChange = {},
+                                onZncLoginChange = onZncLoginChange,
+                                showEndpoint = false,
+                            )
+                        } else {
+                            NetworkIdentityFields(
+                                server = state.server,
+                                auth = state.auth,
+                                onServerChange = onServerChange,
+                                onAuthChange = onAuthChange,
+                                soju = state.entity?.role == NetworkRole.BOUNCER_ROOT,
+                            )
+                        }
+                    }
+                }
+            }
+            if (state.entity?.role != NetworkRole.BOUNCER_ROOT) {
+                SettingsGroup(title = stringResource(R.string.network_settings_presence_section)) {
+                    InitialAwayField(state, onInitialAwayMessageChange)
+                }
+            }
+        }
+        SettingsTarget(target?.name, NetworkSettingsTarget.AVATAR.name) { targetModifier ->
+            SettingsGroup(
+                title = stringResource(R.string.network_settings_avatar_section),
+                modifier = targetModifier,
+            ) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = stringResource(R.string.network_settings_avatar_experimental),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    OutlinedTextField(
+                        value = state.avatarInput,
+                        onValueChange = onAvatarUrlChange,
+                        label = { Text(stringResource(R.string.network_settings_avatar_url)) },
+                        supportingText = {
+                            Text(
+                                if (state.avatarPublishError) {
+                                    stringResource(R.string.network_settings_avatar_publish_failed)
+                                } else if (state.avatarPublishingAvailable) {
+                                    stringResource(R.string.network_settings_avatar_url_desc)
+                                } else {
+                                    stringResource(R.string.network_settings_avatar_unavailable)
+                                },
+                            )
+                        },
+                        isError =
+                            state.avatarPublishError || (
+                                state.avatarInput.isNotBlank() &&
+                                    io.github.trevarj.motd.avatar
+                                        .validateAvatarUrl(state.avatarInput) == null
+                            ),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("network_avatar_url"),
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = onPublishAvatar,
+                            enabled =
+                                state.avatarPublishingAvailable &&
+                                    io.github.trevarj.motd.avatar
+                                        .validateAvatarUrl(state.avatarInput) != null,
+                        ) { Text(stringResource(R.string.network_settings_avatar_publish)) }
+                        TextButton(onClick = onClearAvatar) {
+                            Text(stringResource(R.string.network_settings_avatar_clear))
+                        }
+                        if (state.selfAvatar !is io.github.trevarj.motd.avatar.SelfAvatarSetting.Unmanaged) {
+                            TextButton(onClick = onStopManagingAvatar) {
+                                Text(stringResource(R.string.network_settings_avatar_unmanage))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        SettingsTarget(target?.name, NetworkSettingsTarget.TOOLS.name) { targetModifier ->
+            SettingsGroup(
+                title = stringResource(R.string.network_settings_tools_section),
+                modifier = targetModifier,
+            ) {
+                if (state.entity?.role == NetworkRole.BOUNCER_ROOT) {
+                    ListItem(
+                        headlineContent = { Text(stringResource(R.string.network_settings_bouncer_networks)) },
+                        supportingContent = { Text(stringResource(R.string.network_settings_bouncer_networks_desc)) },
+                        modifier =
+                            Modifier
+                                .testTag("network_settings_bouncer_networks")
+                                .clickable { onOpenBouncerNetworks() },
+                        colors =
+                            androidx.compose.material3.ListItemDefaults
+                                .colors(containerColor = Color.Transparent),
+                    )
+                }
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.network_settings_server_messages)) },
+                    modifier =
+                        Modifier
+                            .testTag("network_settings_server_messages")
+                            .clickable { onOpenServerMessages() },
+                    colors =
+                        androidx.compose.material3.ListItemDefaults
+                            .colors(containerColor = Color.Transparent),
+                )
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.network_settings_network_tools)) },
+                    supportingContent = { Text(stringResource(R.string.network_settings_network_tools_desc)) },
+                    modifier =
+                        Modifier
+                            .testTag("network_settings_network_tools")
+                            .clickable { onOpenNetworkTools() },
+                    colors =
+                        androidx.compose.material3.ListItemDefaults
+                            .colors(containerColor = Color.Transparent),
+                )
+            }
+        }
+        SettingsGroup(title = stringResource(R.string.network_settings_danger_section)) {
+            OutlinedButton(
+                onClick = { showDeleteConfirm = true },
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+            ) { Text(stringResource(R.string.network_settings_delete), color = MaterialTheme.colorScheme.error) }
         }
     }
 
@@ -431,19 +440,19 @@ fun NetworkSettingsContent(
     state.pendingBouncerIdentityChange?.let { change ->
         AlertDialog(
             onDismissRequest = onCancelBouncerIdentityChange,
-            title = { Text("Update bouncer connection?") },
+            title = { Text(stringResource(R.string.network_settings_bouncer_identity_title)) },
             text = {
                 Text(
-                    "This changes the connection or login inherited by " +
-                        "${change.localMirrorCount} local bouncer " +
-                        (if (change.localMirrorCount == 1) "mirror." else "mirrors.") +
-                        " You can keep them, or remove their local buffers and history. " +
-                        "Removing mirrors does not change anything on the bouncer.",
+                    androidx.compose.ui.res.pluralStringResource(
+                        R.plurals.network_settings_bouncer_identity_message,
+                        change.localMirrorCount,
+                        change.localMirrorCount,
+                    ),
                 )
             },
             confirmButton = {
                 TextButton(onClick = onRemoveLocalMirrors) {
-                    Text("Remove local mirrors")
+                    Text(stringResource(R.string.network_settings_remove_local_mirrors))
                 }
             },
             dismissButton = {
@@ -452,7 +461,7 @@ fun NetworkSettingsContent(
                         Text(stringResource(R.string.action_cancel))
                     }
                     TextButton(onClick = onKeepLocalMirrors) {
-                        Text("Keep local mirrors")
+                        Text(stringResource(R.string.network_settings_keep_local_mirrors))
                     }
                 }
             },
@@ -531,20 +540,13 @@ private fun AutoConnectRow(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(stringResource(R.string.network_settings_autoconnect))
-            Text(
-                stringResource(R.string.network_settings_autoconnect_desc),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
-    }
+    SwitchRow(
+        title = stringResource(R.string.network_settings_autoconnect),
+        subtitle = stringResource(R.string.network_settings_autoconnect_desc),
+        checked = checked,
+        onCheckedChange = onCheckedChange,
+        switchTag = "network_settings_autoconnect",
+    )
 }
 
 @Composable
@@ -558,7 +560,13 @@ private fun InitialAwayField(
         onValueChange = onInitialAwayMessageChange,
         label = { Text(stringResource(R.string.network_settings_initial_away)) },
         supportingText = {
-            Text(error ?: stringResource(R.string.network_settings_initial_away_desc))
+            Text(
+                if (error == null) {
+                    stringResource(R.string.network_settings_initial_away_desc)
+                } else {
+                    stringResource(R.string.network_settings_initial_away_invalid)
+                },
+            )
         },
         isError = error != null,
         singleLine = true,
@@ -578,6 +586,7 @@ private fun InitialAwayField(
  */
 @Composable
 private fun ObfuscationSection(
+    target: NetworkSettingsTarget? = null,
     mode: ObfsMode,
     proxyHost: String,
     proxyPort: String,
@@ -588,140 +597,140 @@ private fun ObfuscationSection(
     onObfsLinkChange: (String) -> Unit,
 ) {
     var expanded by rememberSaveable { mutableStateOf(mode == ObfsMode.EMBEDDED_REALITY && vlessLinkValidationError(obfsLink) != null) }
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .clickable { expanded = !expanded }
-                    .padding(horizontal = 16.dp, vertical = 14.dp)
-                    .testTag("network_obfs_header"),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(stringResource(R.string.network_settings_routing), style = MaterialTheme.typography.titleSmall)
-                Text(
-                    stringResource(R.string.network_settings_current_value, obfsModeLabel(mode)),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                if (!expanded) {
+    SettingsTarget(target?.name, NetworkSettingsTarget.OBFUSCATION.name) { targetModifier ->
+        Column(modifier = targetModifier.fillMaxWidth()) {
+            Row(
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { expanded = !expanded }
+                        .padding(horizontal = 16.dp, vertical = 14.dp)
+                        .testTag("network_obfs_header"),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(stringResource(R.string.network_settings_routing), style = MaterialTheme.typography.titleSmall)
                     Text(
-                        stringResource(R.string.network_settings_tap_configure),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
+                        stringResource(R.string.network_settings_current_value, obfsModeLabel(mode)),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    if (!expanded) {
+                        Text(
+                            stringResource(R.string.network_settings_tap_configure),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
                 }
-            }
-            Icon(
-                imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                contentDescription =
-                    stringResource(
-                        if (expanded) R.string.network_settings_collapse else R.string.network_settings_expand,
-                    ),
-            )
-        }
-        AnimatedVisibility(
-            visible = expanded,
-            enter = fadeIn(MotdMotion.microFadeIn) + expandVertically(animationSpec = MotdMotion.contentSize),
-            exit = fadeOut(MotdMotion.microFadeOut) + shrinkVertically(animationSpec = MotdMotion.contentSize),
-        ) {
-            Column(Modifier.padding(start = 8.dp, end = 16.dp, bottom = 16.dp)) {
-                Text(
-                    stringResource(R.string.network_settings_obfs_section_desc),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 8.dp, bottom = 6.dp),
+                Icon(
+                    imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription =
+                        stringResource(
+                            if (expanded) R.string.network_settings_collapse else R.string.network_settings_expand,
+                        ),
                 )
-                Column(Modifier.selectableGroup()) {
-                    ObfsOption(ObfsMode.NONE, mode, stringResource(R.string.network_settings_obfs_mode_none), onModeChange)
-                    ObfsOption(ObfsMode.SOCKS5, mode, stringResource(R.string.network_settings_obfs_mode_socks5), onModeChange)
-                    ObfsOption(ObfsMode.TOR, mode, stringResource(R.string.network_settings_obfs_mode_tor), onModeChange)
-                    ObfsOption(ObfsMode.EMBEDDED_REALITY, mode, stringResource(R.string.network_settings_obfs_mode_reality), onModeChange)
-                }
-                // Mode picks swap in sub-forms of very different heights; ease the swap so the
-                // expanded section doesn't jolt.
-                Column(Modifier.animateContentSize(animationSpec = MotdMotion.contentSize)) {
-                    when (mode) {
-                        ObfsMode.TOR -> {
-                            Text(
-                                stringResource(R.string.network_settings_obfs_tor_desc),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-
-                        ObfsMode.SOCKS5 -> {
-                            Column(
-                                verticalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                OutlinedTextField(
-                                    value = proxyHost,
-                                    onValueChange = onProxyHostChange,
-                                    label = { Text(stringResource(R.string.network_settings_obfs_proxy_host)) },
-                                    placeholder = { Text("127.0.0.1") },
-                                    singleLine = true,
-                                    keyboardOptions =
-                                        KeyboardOptions(
-                                            keyboardType = KeyboardType.Uri,
-                                            autoCorrectEnabled = false,
-                                            imeAction = ImeAction.Next,
-                                        ),
-                                    modifier = Modifier.fillMaxWidth().testTag("network_obfs_host"),
-                                )
-                                OutlinedTextField(
-                                    value = proxyPort,
-                                    onValueChange = onProxyPortChange,
-                                    label = { Text(stringResource(R.string.network_settings_obfs_proxy_port)) },
-                                    placeholder = { Text("1080") },
-                                    singleLine = true,
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
-                                    modifier = Modifier.fillMaxWidth().testTag("network_obfs_port"),
-                                )
+            }
+            AnimatedVisibility(
+                visible = expanded,
+                enter = fadeIn(MotdMotion.microFadeIn) + expandVertically(animationSpec = MotdMotion.contentSize),
+                exit = fadeOut(MotdMotion.microFadeOut) + shrinkVertically(animationSpec = MotdMotion.contentSize),
+            ) {
+                Column(Modifier.padding(start = 8.dp, end = 16.dp, bottom = 16.dp)) {
+                    Text(
+                        stringResource(R.string.network_settings_obfs_section_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 8.dp, bottom = 6.dp),
+                    )
+                    Column(Modifier.selectableGroup()) {
+                        ObfsOption(ObfsMode.NONE, mode, stringResource(R.string.network_settings_obfs_mode_none), onModeChange)
+                        ObfsOption(ObfsMode.SOCKS5, mode, stringResource(R.string.network_settings_obfs_mode_socks5), onModeChange)
+                        ObfsOption(ObfsMode.TOR, mode, stringResource(R.string.network_settings_obfs_mode_tor), onModeChange)
+                        ObfsOption(ObfsMode.EMBEDDED_REALITY, mode, stringResource(R.string.network_settings_obfs_mode_reality), onModeChange)
+                    }
+                    // Mode picks swap in sub-forms of very different heights; ease the swap so the
+                    // expanded section doesn't jolt.
+                    Column(Modifier.animateContentSize(animationSpec = MotdMotion.contentSize)) {
+                        when (mode) {
+                            ObfsMode.TOR -> {
                                 Text(
-                                    stringResource(R.string.network_settings_obfs_dns_note),
+                                    stringResource(R.string.network_settings_obfs_tor_desc),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
-                        }
 
-                        ObfsMode.EMBEDDED_REALITY -> {
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text(
-                                    "The VLESS URI's host and port are the public tunnel ingress on your VPS. " +
-                                        "The Server host and port fields below remain the bouncer destination " +
-                                        "inside that tunnel (for example Docker soju:6697), not the VPS IP.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                Text(
-                                    stringResource(R.string.network_settings_obfs_reality_desc),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                                OutlinedTextField(
-                                    value = obfsLink,
-                                    onValueChange = onObfsLinkChange,
-                                    label = { Text(stringResource(R.string.network_settings_obfs_reality_link)) },
-                                    placeholder = { Text("vless://uuid@host:443?type=tcp&security=reality&…") },
-                                    singleLine = false,
-                                    isError = vlessLinkValidationError(obfsLink) != null,
-                                    supportingText = {
-                                        vlessLinkValidationError(obfsLink)?.let { Text(it) }
-                                    },
-                                    keyboardOptions =
-                                        KeyboardOptions(
-                                            keyboardType = KeyboardType.Uri,
-                                            capitalization = KeyboardCapitalization.None,
-                                            autoCorrectEnabled = false,
-                                        ),
-                                    modifier = Modifier.fillMaxWidth().testTag("network_obfs_link"),
-                                )
+                            ObfsMode.SOCKS5 -> {
+                                Column(
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    OutlinedTextField(
+                                        value = proxyHost,
+                                        onValueChange = onProxyHostChange,
+                                        label = { Text(stringResource(R.string.network_settings_obfs_proxy_host)) },
+                                        placeholder = { Text(stringResource(R.string.network_settings_proxy_host_example)) },
+                                        singleLine = true,
+                                        keyboardOptions =
+                                            KeyboardOptions(
+                                                keyboardType = KeyboardType.Uri,
+                                                autoCorrectEnabled = false,
+                                                imeAction = ImeAction.Next,
+                                            ),
+                                        modifier = Modifier.fillMaxWidth().testTag("network_obfs_host"),
+                                    )
+                                    OutlinedTextField(
+                                        value = proxyPort,
+                                        onValueChange = onProxyPortChange,
+                                        label = { Text(stringResource(R.string.network_settings_obfs_proxy_port)) },
+                                        placeholder = { Text(stringResource(R.string.network_settings_proxy_port_example)) },
+                                        singleLine = true,
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+                                        modifier = Modifier.fillMaxWidth().testTag("network_obfs_port"),
+                                    )
+                                    Text(
+                                        stringResource(R.string.network_settings_obfs_dns_note),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
                             }
-                        }
 
-                        ObfsMode.NONE -> {}
+                            ObfsMode.EMBEDDED_REALITY -> {
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text(
+                                        stringResource(R.string.network_settings_reality_ingress_help),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    Text(
+                                        stringResource(R.string.network_settings_obfs_reality_desc),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    OutlinedTextField(
+                                        value = obfsLink,
+                                        onValueChange = onObfsLinkChange,
+                                        label = { Text(stringResource(R.string.network_settings_obfs_reality_link)) },
+                                        placeholder = { Text(stringResource(R.string.network_settings_vless_example)) },
+                                        singleLine = false,
+                                        isError = vlessLinkValidationError(obfsLink) != null,
+                                        supportingText = {
+                                            vlessLinkValidationError(obfsLink)?.let { Text(it) }
+                                        },
+                                        keyboardOptions =
+                                            KeyboardOptions(
+                                                keyboardType = KeyboardType.Uri,
+                                                capitalization = KeyboardCapitalization.None,
+                                                autoCorrectEnabled = false,
+                                            ),
+                                        modifier = Modifier.fillMaxWidth().testTag("network_obfs_link"),
+                                    )
+                                }
+                            }
+
+                            ObfsMode.NONE -> {}
+                        }
                     }
                 }
             }
@@ -803,7 +812,7 @@ private fun TransportSection(
                         value = wsUrl,
                         onValueChange = onWsUrlChange,
                         label = { Text(stringResource(R.string.network_settings_ws_url)) },
-                        placeholder = { Text("wss://bnc.example.com:443/") },
+                        placeholder = { Text(stringResource(R.string.network_settings_wss_example)) },
                         singleLine = true,
                         supportingText = { Text(stringResource(R.string.network_settings_ws_url_desc)) },
                         modifier = Modifier.fillMaxWidth().padding(start = 8.dp).testTag("network_ws_url"),

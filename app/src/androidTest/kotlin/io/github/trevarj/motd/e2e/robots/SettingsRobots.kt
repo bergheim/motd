@@ -15,11 +15,26 @@ internal class SettingsRobot(
     fun returnToRoot() {
         if (!isPresent("screen_settings")) click("settings_back")
         assertDisplayed("screen_settings")
+        if (isPresent("settings_search_field")) click("settings_search_action")
     }
 
     fun chat() {
         swipeUntilTag("screen_settings", "settings_category_chat")
         click("settings_category_chat")
+    }
+
+    fun searchPresence() {
+        click("settings_search_action")
+        replace("settings_search_field", "presence changes")
+        click("settings_search_result_presence_changes")
+        assertDisplayed("settings_target_highlight_PRESENCE")
+        assertDisplayed("settings_presence_picker")
+    }
+
+    fun returnToPresenceSearch() {
+        click("settings_back")
+        assertDisplayed("settings_search_field")
+        assertDisplayed("settings_search_result_presence_changes")
     }
 
     fun networks() = click("settings_category_networks")

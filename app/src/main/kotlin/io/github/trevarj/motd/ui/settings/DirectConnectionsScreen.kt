@@ -97,14 +97,27 @@ private fun DirectConnectionTransferRow(
             stringResource(R.string.dcc_direction_outgoing)
         }
     val protocol =
-        when (transfer.protocol) {
-            DccTransferProtocol.SEND -> "SEND"
-            DccTransferProtocol.SSEND -> "SSEND"
-        }
+        stringResource(
+            if (transfer.protocol == DccTransferProtocol.SEND) R.string.dcc_protocol_send else R.string.dcc_protocol_ssend,
+        )
+    val state =
+        stringResource(
+            when (transfer.state) {
+                DccTransferState.OFFERED -> R.string.dcc_state_offered
+                DccTransferState.ACCEPTING -> R.string.dcc_state_accepting
+                DccTransferState.ACTIVE -> R.string.dcc_state_active
+                DccTransferState.PARTIAL -> R.string.dcc_state_partial
+                DccTransferState.COMPLETED -> R.string.dcc_state_completed
+                DccTransferState.FAILED -> R.string.dcc_state_failed
+                DccTransferState.REJECTED -> R.string.dcc_state_rejected
+                DccTransferState.EXPIRED -> R.string.dcc_state_expired
+                DccTransferState.REMOVED -> R.string.dcc_state_removed
+            },
+        )
     ListItem(
         headlineContent = { Text(transfer.displayFilename) },
         supportingContent = {
-            Text("$direction · $protocol · ${transfer.state.name.lowercase().replace('_', ' ')}")
+            Text(stringResource(R.string.settings_direct_transfer_summary, direction, protocol, state))
         },
         trailingContent = {
             if (transfer.state in TERMINAL_TRANSFER_STATES) {
