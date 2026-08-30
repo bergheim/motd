@@ -660,6 +660,7 @@ class AgentwireViewModel
                 } else {
                     result.state
                 }
+            if (result.syncCompleted) listSessions(live = true)
             if (envelope.kind == "workspace.page") {
                 agentwireDirectoriesToReopen(_state.value, envelope.data?.string("parent")).forEach {
                     expandWorkspace(it.id, it.raw.bool("hasChildren") ?: true)

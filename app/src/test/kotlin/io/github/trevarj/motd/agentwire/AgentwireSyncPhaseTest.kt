@@ -48,6 +48,8 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.After
@@ -117,6 +119,33 @@ class AgentwireSyncPhaseTest {
             advanceTimeBy(1_000)
             runCurrent()
             assertTrue("retry must re-arm and send again", syncRequests(transport).size > issued)
+        }
+
+    @Test
+    fun `sync completion refreshes live sessions without loading workspace tree`() =
+        runTest(dispatcher) {
+            val transport = RecordingTransport()
+            val client = readyClient(transport)
+            val viewModel = viewModel(client)
+            advanceTimeBy(10)
+            runCurrent()
+            val syncId = syncRequests(transport).last()
+
+            transport.feed(
+                tagMessage(
+                    BACKEND_ACCOUNT,
+                    hello(syncId, setOf("session.list.request", "workspace.list.request")),
+                ),
+            )
+            transport.feed(tagMessage(BACKEND_ACCOUNT, snapshot(syncId)))
+            runCurrent()
+
+            assertEquals(AgentwireSyncState.Ready, viewModel.state.value.sync)
+            val requests = outboundEnvelopes(transport)
+            val sessionRequests = requests.filter { it.kind == "session.list.request" }
+            assertEquals(1, sessionRequests.size)
+            assertEquals("live", sessionRequests.single().data?.string("scope"))
+            assertTrue(requests.none { it.kind == "workspace.list.request" })
         }
 
     @Test
@@ -337,13 +366,14 @@ class AgentwireSyncPhaseTest {
         return client
     }
 
-    /** Ids of the `sync.request` envelopes this device actually wrote to the wire. */
-    private fun syncRequests(transport: RecordingTransport): List<String> =
+    private fun outboundEnvelopes(transport: RecordingTransport): List<AgentwireEnvelope> =
         transport.sent.mapNotNull { line ->
             val tag = runCatching { IrcMessage.parse(line) }.getOrNull()?.tags?.get(AGENTWIRE_TAG) ?: return@mapNotNull null
-            val envelope = (decodeAgentwireValue(tag).getOrNull() as? AgentwireValue.Envelope)?.value
-            envelope?.takeIf { it.kind == "sync.request" }?.id
+            (decodeAgentwireValue(tag).getOrNull() as? AgentwireValue.Envelope)?.value
         }
+
+    /** Ids of the `sync.request` envelopes this device actually wrote to the wire. */
+    private fun syncRequests(transport: RecordingTransport) = outboundEnvelopes(transport).filter { it.kind == "sync.request" }.map { it.id }
 
     /** Serialized so tag values are escaped: envelope JSON contains spaces and semicolons. */
     private fun tagMessage(
@@ -357,16 +387,34 @@ class AgentwireSyncPhaseTest {
             params = listOf(CHANNEL),
         ).serialize()
 
-    private fun hello(reply: String) =
+    private fun hello(
+        reply: String,
+        actions: Set<String> = emptySet(),
+    ) = AgentwireEnvelope(
+        kind = "agent.hello",
+        type = "event",
+        id = UUID.randomUUID().toString(),
+        at = 1,
+        instance = "bridge",
+        epoch = "epoch-1",
+        reply = reply,
+        data =
+            buildJsonObject {
+                put("epoch", "epoch-1")
+                put("actions", buildJsonArray { actions.forEach { add(JsonPrimitive(it)) } })
+            },
+    )
+
+    private fun snapshot(reply: String) =
         AgentwireEnvelope(
-            kind = "agent.hello",
+            kind = "channel.snapshot",
             type = "event",
             id = UUID.randomUUID().toString(),
-            at = 1,
+            at = 2,
             instance = "bridge",
             epoch = "epoch-1",
             reply = reply,
-            data = buildJsonObject { put("epoch", "epoch-1") },
+            data = buildJsonObject { put("binding", buildJsonObject { put("sid", "session-1") }) },
         )
 
     private fun actionFailed(
