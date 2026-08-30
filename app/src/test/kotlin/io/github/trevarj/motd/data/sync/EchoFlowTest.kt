@@ -634,6 +634,53 @@ class EchoFlowTest {
         }
 
     @Test
+    fun `labeled self echo without reply tag retains outgoing reply references`() =
+        runTest {
+            processor.process(
+                networkId,
+                IrcEvent.ChatMessage(
+                    ctx = MessageContext("parent-msgid", 600, null, null, null),
+                    kind = IrcEvent.ChatKind.PRIVMSG,
+                    source = Prefix("alice"),
+                    target = "#chan",
+                    text = "parent",
+                    isSelf = false,
+                    replyToMsgid = null,
+                ),
+            )
+            val parent = rows().single()
+            val sent =
+                processor
+                    .persistOutgoingPlan(
+                        bufferId = bufferId,
+                        sender = "me",
+                        events = listOf(OutgoingEventPlan("motd-reply", "reply", MessageKind.PRIVMSG)),
+                        replyToEventId = parent.id,
+                        replyToMsgid = parent.msgid,
+                    ).single()
+
+            processor.process(
+                networkId,
+                IrcEvent.ChatMessage(
+                    ctx = MessageContext("reply-msgid", 700, null, null, "motd-reply"),
+                    kind = IrcEvent.ChatKind.PRIVMSG,
+                    source = Prefix("me"),
+                    target = "#chan",
+                    text = "reply",
+                    isSelf = true,
+                    replyToMsgid = null,
+                ),
+            )
+
+            val timeline = rows()
+            val confirmed = timeline.single { it.id == sent.eventId }
+            assertEquals(2, timeline.size)
+            assertEquals("reply-msgid", confirmed.msgid)
+            assertEquals("parent-msgid", confirmed.replyToMsgid)
+            assertEquals(parent.id, confirmed.replyToEventId)
+        }
+
+    @Test
     fun `outgoing plan persists every chunk alias and observation in one call`() =
         runTest {
             val durable =

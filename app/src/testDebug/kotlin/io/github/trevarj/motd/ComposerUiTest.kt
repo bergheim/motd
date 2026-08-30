@@ -196,6 +196,38 @@ class ComposerUiTest {
     }
 
     @Test
+    fun replyWarning_isAboveReplyContentAndInput() {
+        compose.setContent {
+            MotdTheme {
+                Composer(
+                    value = TextFieldValue("reply"),
+                    onValueChange = {},
+                    onSend = {},
+                    enabled = true,
+                    reply = ComposerReply("alice", "original"),
+                    replyWarning = "alice isn’t currently in this channel",
+                )
+            }
+        }
+
+        val warning =
+            compose
+                .onNodeWithTag("chat_composer_reply_warning")
+                .assertIsDisplayed()
+                .fetchSemanticsNode()
+                .boundsInRoot
+        val reply =
+            compose
+                .onNodeWithText("original")
+                .assertIsDisplayed()
+                .fetchSemanticsNode()
+                .boundsInRoot
+        val input = compose.onNodeWithTag("chat_composer_input_row").fetchSemanticsNode().boundsInRoot
+        assertTrue(warning.bottom <= reply.top)
+        assertTrue(warning.bottom <= input.top)
+    }
+
+    @Test
     fun replyBanner_keepsItsContentWhileSendExitRuns() {
         val replyVisible = mutableStateOf(true)
         compose.mainClock.autoAdvance = false

@@ -373,6 +373,7 @@ fun Composer(
     modifier: Modifier = Modifier,
     reply: ComposerReply? = null,
     replyVisible: Boolean = reply != null,
+    replyWarning: String? = null,
     onCancelReply: () -> Unit = {},
     placeholder: String = stringResource(R.string.chat_composer_placeholder),
     showEmojiTool: Boolean = true,
@@ -721,7 +722,23 @@ fun Composer(
                     enter = expandVertically(animationSpec = MotdMotion.contentSize) + fadeIn(MotdMotion.fadeIn),
                     exit = shrinkVertically(animationSpec = MotdMotion.contentSize) + fadeOut(MotdMotion.microFadeOut),
                 ) {
-                    reply?.let { ReplyBar(it, onCancelReply) }
+                    Column {
+                        replyWarning?.let { warning ->
+                            Text(
+                                text = warning,
+                                modifier =
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .padding(start = 20.dp, end = 76.dp, top = 6.dp)
+                                        .testTag("chat_composer_reply_warning"),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        reply?.let { ReplyBar(it, onCancelReply) }
+                    }
                 }
 
                 AnimatedVisibility(

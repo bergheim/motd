@@ -2772,6 +2772,10 @@ fun ChatContent(
                                     flight.replyText?.let { ComposerReply(flight.replySender.orEmpty(), it) }
                                 } ?: state.replyTo?.let { ComposerReply(it.sender, it.text) },
                             replyVisible = outgoingFlight?.replyText == null,
+                            replyWarning =
+                                state.replyTo
+                                    ?.takeIf { state.replySenderNotInChannel && outgoingFlight == null }
+                                    ?.let { stringResource(R.string.chat_reply_sender_not_in_channel, it.sender) },
                             onCancelReply = { onSetReply(null) },
                             // SERVER buffers send raw commands; hint that in the placeholder.
                             // Held blank while a flight is airborne: the ghost is born over the input box

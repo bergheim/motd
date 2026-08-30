@@ -336,7 +336,7 @@ class ChatViewModelTest {
 
             assertEquals("answer", db.composerDraftDao().byRoom(channel.id)?.text)
             assertEquals(88L, db.composerDraftDao().byRoom(channel.id)?.replyToEventId)
-            assertEquals(parent, vm.state.value.replyTo)
+            assertEquals(parent, vm.state.first { it.replyTo?.id == parent.id }.replyTo)
             assertEquals("answer", vm.composerDraft.value.text)
         }
 
@@ -769,6 +769,132 @@ class ChatViewModelTest {
             vm.setReply(parent)
 
             assertEquals(ReplyPreviewData("alice", "original text"), vm.replyPreview("parent-1").value)
+        }
+
+    @Test
+    fun `reply warns when loaded channel roster excludes sender without clearing selection`() =
+        runTest {
+            val manager = FakeConnectionManager(network.id).apply { rosterStates.value = mapOf(channel.id to RosterLoadState.LOADED) }
+            val buffers = FakeBufferRepository(channel)
+            val prefs = FakeReplyPrefs(ReplyConfig(visibleChannelPrefix = true))
+            val vm = viewModel(channel, manager, buffers = buffers, replyPrefs = prefs)
+            vm.state.first { it.buffer != null }
+            vm.replyConfig.first { it.visibleChannelPrefix }
+            val parent = message(channel.id, "parent", msgid = "parent-1", sender = "alice", id = 88)
+
+            vm.setReply(parent)
+            runCurrent()
+
+            val state = vm.state.first { it.replyTo?.id == parent.id && it.replySenderNotInChannel }
+            assertEquals(parent, state.replyTo)
+
+            buffers.memberNicks.value = listOf("ALICE")
+            vm.setReply(parent)
+            runCurrent()
+
+            assertFalse(vm.state.value.replySenderNotInChannel)
+            assertTrue(manager.memberRequests.isEmpty())
+        }
+
+    @Test
+    fun `reply does not warn for unknown or non-loaded roster or later roster load`() =
+        runTest {
+            val manager = FakeConnectionManager(network.id)
+            val vm =
+                viewModel(
+                    channel,
+                    manager,
+                    replyPrefs = FakeReplyPrefs(ReplyConfig(visibleChannelPrefix = true)),
+                )
+            vm.state.first { it.buffer != null }
+            vm.replyConfig.first { it.visibleChannelPrefix }
+
+            val parent = message(channel.id, "parent", msgid = "parent-1", sender = "alice", id = 88)
+            vm.setReply(parent)
+            runCurrent()
+            manager.rosterStates.value = mapOf(channel.id to RosterLoadState.NOT_LOADED)
+            vm.setReply(parent)
+            runCurrent()
+            manager.rosterStates.value = mapOf(channel.id to RosterLoadState.LOADED)
+            runCurrent()
+
+            assertFalse(vm.state.value.replySenderNotInChannel)
+            assertTrue(manager.memberRequests.isEmpty())
+        }
+
+    @Test
+    fun `reply does not warn when prefix disabled or buffer is query or message is self`() =
+        runTest {
+            val channelManager = FakeConnectionManager(network.id).apply { rosterStates.value = mapOf(channel.id to RosterLoadState.LOADED) }
+            val disabled = viewModel(channel, channelManager)
+            disabled.state.first { it.buffer != null }
+            disabled.setReply(message(channel.id, "parent", msgid = "parent-1", sender = "alice", id = 88))
+
+            val queryManager = FakeConnectionManager(network.id).apply { rosterStates.value = mapOf(query.id to RosterLoadState.LOADED) }
+            val queryVm =
+                viewModel(
+                    query,
+                    queryManager,
+                    replyPrefs = FakeReplyPrefs(ReplyConfig(visibleChannelPrefix = true)),
+                )
+            queryVm.state.first { it.buffer != null }
+            queryVm.replyConfig.first { it.visibleChannelPrefix }
+            queryVm.setReply(message(query.id, "parent", msgid = "parent-2", sender = "alice", id = 89))
+
+            val selfVm =
+                viewModel(
+                    channel,
+                    channelManager,
+                    replyPrefs = FakeReplyPrefs(ReplyConfig(visibleChannelPrefix = true)),
+                )
+            selfVm.state.first { it.buffer != null }
+            selfVm.replyConfig.first { it.visibleChannelPrefix }
+            selfVm.setReply(
+                message(channel.id, "parent", msgid = "parent-3", sender = "me", id = 90).copy(isSelf = true),
+            )
+            runCurrent()
+
+            assertFalse(disabled.state.value.replySenderNotInChannel)
+            assertFalse(queryVm.state.value.replySenderNotInChannel)
+            assertFalse(selfVm.state.value.replySenderNotInChannel)
+        }
+
+    @Test
+    fun `cancel and replacement clear and suppress stale reply warning`() =
+        runTest {
+            val manager = FakeConnectionManager(network.id).apply { rosterStates.value = mapOf(channel.id to RosterLoadState.LOADED) }
+            val buffers = FakeBufferRepository(channel).apply { memberNicks.value = listOf("bob") }
+            val vm =
+                viewModel(
+                    channel,
+                    manager,
+                    buffers = buffers,
+                    replyPrefs = FakeReplyPrefs(ReplyConfig(visibleChannelPrefix = true)),
+                )
+            vm.state.first { it.buffer != null }
+            vm.replyConfig.first { it.visibleChannelPrefix }
+            val absent = message(channel.id, "old", msgid = "parent-1", sender = "alice", id = 88)
+            val present = message(channel.id, "new", msgid = "parent-2", sender = "bob", id = 89)
+
+            vm.setReply(absent)
+            runCurrent()
+            assertTrue(vm.state.value.replySenderNotInChannel)
+            vm.setReply(null)
+            runCurrent()
+            assertFalse(vm.state.value.replySenderNotInChannel)
+
+            vm.setReply(absent)
+            vm.setReply(null)
+            runCurrent()
+            assertFalse(vm.state.value.replySenderNotInChannel)
+
+            vm.setReply(absent)
+            vm.setReply(present)
+            runCurrent()
+
+            val state = vm.state.first { it.replyTo?.id == present.id }
+            assertEquals(present, state.replyTo)
+            assertFalse(state.replySenderNotInChannel)
         }
 
     @Test
@@ -3411,6 +3537,7 @@ class ChatViewModelTest {
         gapFiller: HistoryGapFiller = NoopHistoryGapFiller,
         // Injectable so a test can push prefills at the exact store instance the VM listens to.
         drafts: ComposerDraftStore = ComposerDraftStore(db),
+        replyPrefs: ReplyPrefs = FakeReplyPrefs(),
     ): ChatViewModel {
         val routeState = mutableMapOf<String, Any>("bufferId" to routeBufferId)
         jumpToMsgid?.let { routeState["jumpToMsgid"] = it }
@@ -3440,7 +3567,7 @@ class ChatViewModelTest {
             scrollPositionStore = scrollPositions,
             historyPageLoader = HistoryPageLoader(processor),
             settingsRepository = settings,
-            replyPrefs = FakeReplyPrefs(),
+            replyPrefs = replyPrefs,
             visibilityReader = MessageVisibilityReader(db),
             historyResyncCoordinator = history,
             userDao = db.userDao(),
@@ -3542,6 +3669,7 @@ class ChatViewModelTest {
                     historyCatchUpPending = historyPending,
                 ),
             )
+        override val rosterStates = MutableStateFlow<Map<Long, RosterLoadState>>(emptyMap())
         val messages = mutableListOf<SentMessage>()
         val reactions = mutableListOf<SentReaction>()
         val redactions = mutableListOf<Pair<Long, String>>()
@@ -3554,6 +3682,7 @@ class ChatViewModelTest {
         val readMarkers = mutableListOf<Pair<Long, TimelineAnchor>>()
         val messageStarted = CompletableDeferred<Unit>()
         val typingSent = CompletableDeferred<Unit>()
+        val memberRequests = mutableListOf<Long>()
 
         fun replaceClient(client: IrcClient?) {
             currentClient = client
@@ -3701,6 +3830,13 @@ class ChatViewModelTest {
         ) {
             readMarkers += bufferId to anchor
         }
+
+        override suspend fun requestMembers(
+            bufferId: Long,
+            force: Boolean,
+        ) {
+            memberRequests += bufferId
+        }
     }
 
     private class FakeHistoryResyncController(
@@ -3749,12 +3885,15 @@ class ChatViewModelTest {
         var layoutWriteResult = true
         val presenceWrites = mutableListOf<Pair<Long, PresenceMode?>>()
         var presenceWriteResult = true
+        val memberNicks = MutableStateFlow<List<String>>(emptyList())
 
         override fun observeChatList(): Flow<List<ChatListRow>> = chatList
 
         override fun observeBuffer(id: Long): Flow<BufferEntity?> = buffer.takeIf { id == routeId || id == current.id } ?: flowOf(null)
 
         override fun observeMembers(bufferId: Long): Flow<List<MemberEntity>> = flowOf(emptyList())
+
+        override fun observeMemberNicks(bufferId: Long): Flow<List<String>> = memberNicks
 
         override suspend fun setPinned(
             id: Long,
@@ -3968,8 +4107,10 @@ class ChatViewModelTest {
         override suspend fun setAutoAwayMessage(message: String) = Unit
     }
 
-    private class FakeReplyPrefs : ReplyPrefs {
-        override val config = MutableStateFlow(ReplyConfig())
+    private class FakeReplyPrefs(
+        initial: ReplyConfig = ReplyConfig(),
+    ) : ReplyPrefs {
+        override val config = MutableStateFlow(initial)
 
         override suspend fun setVisibleChannelPrefix(enabled: Boolean) = Unit
     }

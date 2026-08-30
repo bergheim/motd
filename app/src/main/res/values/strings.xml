@@ -497,6 +497,7 @@
     <string name="action_continue">Continue</string>
     <string name="action_more">More actions</string>
     <string name="chat_action_reply">Reply</string>
+    <string name="chat_reply_sender_not_in_channel">%1$s isn’t currently in this channel</string>
     <string name="chat_reply_target_unavailable">Original message not available</string>
     <string name="chat_reply_open">Go to replied message</string>
     <string name="chat_action_copy">Copy</string>

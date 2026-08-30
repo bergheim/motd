@@ -134,6 +134,7 @@ data class ChatState(
     val memberCount: Int? = null,
     val typingNicks: List<String> = emptyList(),
     val replyTo: MessageEntity? = null,
+    val replySenderNotInChannel: Boolean = false,
     // Null means the buffer/connection snapshot has not loaded yet. Do not use Disconnected as a
     // loading sentinel: it briefly paints a false status while entering an already-connected chat.
     val connState: IrcClientState? = null,
@@ -281,7 +282,7 @@ class ChatViewModel
                 )
         val replyConfig: StateFlow<ReplyConfig> =
             replyPrefs.config
-                .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ReplyConfig())
+                .stateIn(viewModelScope, SharingStarted.Eagerly, ReplyConfig())
 
         private val route: ChatRoute = savedStateHandle.toRoute<ChatRoute>()
         val bufferId: Long = route.bufferId
@@ -704,6 +705,7 @@ class ChatViewModel
         fun acknowledgeUiEvent(id: Long) = uiEventQueue.acknowledge(id)
 
         private val replyTo = MutableStateFlow<MessageEntity?>(null)
+        private val replySenderNotInChannel = MutableStateFlow(false)
         private val draftStateLock = Any()
         private val draftCommands = Channel<DraftCommand>(Channel.UNLIMITED)
         private val draftHydrated = CompletableDeferred<Unit>()
@@ -947,15 +949,17 @@ class ChatViewModel
                 buffer,
                 _memberCount,
                 typingNicks,
-                replyTo,
+                replyTo.combine(replySenderNotInChannel) { reply, absent -> reply to absent },
                 connState.combine(connectionManager.presenceStates) { conn, presence -> conn to presence },
-            ) { buffer, memberCount, typing, reply, connAndPresence ->
+            ) { buffer, memberCount, typing, replyAndWarning, connAndPresence ->
+                val (reply, absent) = replyAndWarning
                 val (conn, presence) = connAndPresence
                 ChatState(
                     buffer = buffer,
                     memberCount = memberCount,
                     typingNicks = typing,
                     replyTo = reply,
+                    replySenderNotInChannel = absent,
                     connState = conn,
                     presence = presence,
                     parted = buffer?.type == BufferType.CHANNEL && !buffer.joined && buffer.pendingCloseAt == null,
@@ -1266,6 +1270,7 @@ class ChatViewModel
         // --- composer actions ---
 
         fun setReply(message: MessageEntity?) {
+            replySenderNotInChannel.value = false
             // The selected parent is already in memory. Seed its lookup so the optimistic outgoing row
             // renders the real quote on its first frame instead of flashing the unresolved placeholder.
             message?.msgid?.let { msgid ->
@@ -1284,6 +1289,33 @@ class ChatViewModel
                 replyTo.value = message
                 currentReplyToEventId = message?.id
                 draftCommands.trySend(DraftCommand.Persist(advanceDraftRevisionLocked()))
+            }
+
+            val sender = message?.sender?.takeIf { it.isNotBlank() && !message.isSelf } ?: return
+            val room = buffer.value ?: return
+            val roomId = operationalBufferId.value
+            if (
+                room.type != BufferType.CHANNEL ||
+                !replyConfig.value.visibleChannelPrefix ||
+                connectionManager.rosterStates.value[roomId] != RosterLoadState.LOADED
+            ) {
+                return
+            }
+            viewModelScope.launch {
+                val memberNicks = bufferRepository.observeMemberNicks(roomId).first()
+                val rules = identityRules.value
+                val normalizedSender = rules.normalize(sender)
+                if (memberNicks.any { rules.normalize(it) == normalizedSender }) return@launch
+                if (
+                    replyTo.value?.id != message.id ||
+                    operationalBufferId.value != roomId ||
+                    buffer.value?.type != BufferType.CHANNEL ||
+                    !replyConfig.value.visibleChannelPrefix ||
+                    connectionManager.rosterStates.value[roomId] != RosterLoadState.LOADED
+                ) {
+                    return@launch
+                }
+                replySenderNotInChannel.value = true
             }
         }
 
@@ -2091,6 +2123,7 @@ class ChatViewModel
                                         currentDraftText = ""
                                         currentReplyToEventId = null
                                         replyTo.value = null
+                                        replySenderNotInChannel.value = false
                                         advanceDraftRevisionLocked(hydrated = true)
                                         true
                                     }
