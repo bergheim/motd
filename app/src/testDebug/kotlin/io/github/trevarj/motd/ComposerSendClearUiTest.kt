@@ -230,9 +230,7 @@ class ComposerSendClearUiTest {
                     ),
                 )
         }
-        compose.waitForIdle()
-        compose.mainClock.advanceTimeByFrame()
-        compose.mainClock.advanceTimeBy(2_000)
+        compose.mainClock.autoAdvance = true
         compose.waitForIdle()
 
         compose.runOnIdle { assertEquals(1, settled) }
