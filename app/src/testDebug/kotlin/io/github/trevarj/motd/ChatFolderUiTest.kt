@@ -17,8 +17,10 @@ import androidx.compose.ui.test.swipeLeft
 import io.github.trevarj.motd.data.db.BufferType
 import io.github.trevarj.motd.data.db.ChatFolderEntity
 import io.github.trevarj.motd.data.db.ChatListRow
+import io.github.trevarj.motd.data.db.InviteState
 import io.github.trevarj.motd.data.prefs.FolderDisplayMode
 import io.github.trevarj.motd.ui.chatlist.ChatListContent
+import io.github.trevarj.motd.ui.chatlist.ChatListInvitation
 import io.github.trevarj.motd.ui.chatlist.ChatListState
 import io.github.trevarj.motd.ui.theme.MotdTheme
 import org.junit.Assert.assertEquals
@@ -37,7 +39,7 @@ class ChatFolderUiTest {
 
     @Test
     fun folder_expands_and_long_press_opens_editor() {
-        val state = mutableStateOf(ChatListState(rows = listOf(row()), folders = listOf(folder()), loading = false))
+        val state = mutableStateOf(ChatListState(rows = listOf(row()), folders = listOf(folder()), showFolderChatsInAll = false, loading = false))
         var edited: Long? = null
         setContent(state) {
             onSetFolderExpanded = { id, expanded ->
@@ -76,6 +78,42 @@ class ChatFolderUiTest {
         compose.onNodeWithTag("chatlist_folder_tab_icon_7", useUnmergedTree = true).assertIsDisplayed()
         compose.onNodeWithTag("chatlist_row_1").assertIsDisplayed()
         compose.onAllNodesWithTag("chatlist_row_2").assertCountEquals(0)
+    }
+
+    @Test
+    fun tabs_all_can_hide_folder_chats_without_affecting_tabs_archives_or_invitations() {
+        val state =
+            mutableStateOf(
+                ChatListState(
+                    rows = listOf(row(1, "#dev", folderId = 7), row(2, "#other", folderId = null)),
+                    invitations = listOf(invitation()),
+                    folders = listOf(folder()),
+                    folderDisplayMode = FolderDisplayMode.TABS,
+                    showFolderChatsInAll = false,
+                    loading = false,
+                ),
+            )
+        setContent(state)
+
+        compose.onAllNodesWithTag("chatlist_row_1").assertCountEquals(0)
+        compose.onNodeWithTag("chatlist_row_2").assertIsDisplayed()
+        compose.onNodeWithTag("chatlist_invitations_folder").assertIsDisplayed()
+
+        state.value =
+            state.value.copy(
+                rows = listOf(row(1, "#dev", folderId = 7)),
+                archivedRows = listOf(row(3, "#archived", folderId = 7)),
+                invitations = emptyList(),
+            )
+        compose.onNodeWithTag("chatlist_folder_tab_7").performClick()
+        compose.onNodeWithTag("chatlist_row_1").assertIsDisplayed()
+        compose.onAllNodesWithTag("chatlist_row_2").assertCountEquals(0)
+        compose.onAllNodesWithTag("chatlist_archived_folder").assertCountEquals(0)
+        compose.onAllNodesWithTag("chatlist_invitations_folder").assertCountEquals(0)
+
+        compose.onNodeWithTag("chatlist_folder_tab_all").performClick()
+        compose.onNodeWithTag("chatlist_archived_folder").performClick()
+        compose.onNodeWithTag("chatlist_row_3").assertIsDisplayed()
     }
 
     @Test
@@ -232,6 +270,19 @@ class ChatFolderUiTest {
         var onSetFolderExpanded: (Long, Boolean) -> Unit = { _, _ -> }
         var onOpenFolderEditor: (Long) -> Unit = {}
     }
+
+    private fun invitation() =
+        ChatListInvitation(
+            messageId = 11,
+            bufferId = 1,
+            networkId = 1,
+            networkName = "net",
+            inviter = "alice",
+            channel = "#dev",
+            text = "alice invited you to #dev",
+            state = InviteState.PENDING,
+            serverTime = 1,
+        )
 
     private fun folder(
         id: Long = 7,

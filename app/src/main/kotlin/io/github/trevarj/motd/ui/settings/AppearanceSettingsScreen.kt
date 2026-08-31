@@ -130,6 +130,7 @@ fun AppearanceSettingsScreen(
         onDynamicColor = viewModel::setDynamicColor,
         onLayoutDensity = viewModel::setLayoutDensity,
         onFolderDisplayMode = viewModel::setFolderDisplayMode,
+        onShowFolderChatsInAll = viewModel::setShowFolderChatsInAll,
         onAvatarStyle = viewModel::setAvatarStyle,
         onNickColorsEnabled = viewModel::setNickColorsEnabled,
         onNickColorPalette = viewModel::setNickColorPalette,
@@ -161,6 +162,7 @@ fun AppearanceSettingsContent(
     onDynamicColor: (Boolean) -> Unit,
     onLayoutDensity: (LayoutDensity) -> Unit,
     onFolderDisplayMode: (FolderDisplayMode) -> Unit,
+    onShowFolderChatsInAll: (Boolean) -> Unit = {},
     onAvatarStyle: (AvatarStyle) -> Unit,
     onNickColorsEnabled: (Boolean) -> Unit,
     onNickColorPalette: (NickColorPalette) -> Unit,
@@ -343,6 +345,18 @@ fun AppearanceSettingsContent(
                     value = folderDisplayModeLabel(settings.folderDisplayMode),
                     modifier = targetModifier.testTag("settings_folder_layout_picker"),
                     onClick = { choiceSheet = AppearanceChoice.FOLDER_LAYOUT },
+                )
+            }
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            SettingsTarget(target?.name, SettingsTarget.SHOW_FOLDER_CHATS_IN_ALL.name) { targetModifier ->
+                SwitchRow(
+                    title = stringResource(R.string.settings_show_folder_chats_in_all),
+                    subtitle = stringResource(R.string.settings_show_folder_chats_in_all_desc),
+                    checked = settings.showFolderChatsInAll,
+                    onCheckedChange = onShowFolderChatsInAll,
+                    switchTag = "settings_switch_show_folder_chats_in_all",
+                    enabled = settings.folderDisplayMode == FolderDisplayMode.TABS,
+                    modifier = targetModifier,
                 )
             }
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))

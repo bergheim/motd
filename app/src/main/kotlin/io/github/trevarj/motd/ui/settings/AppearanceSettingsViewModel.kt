@@ -66,6 +66,8 @@ class AppearanceSettingsViewModel
 
         fun setFolderDisplayMode(value: FolderDisplayMode) = launch { settingsRepository.setFolderDisplayMode(value) }
 
+        fun setShowFolderChatsInAll(value: Boolean) = launch { settingsRepository.setShowFolderChatsInAll(value) }
+
         fun setAvatarStyle(value: AvatarStyle) = launch { settingsRepository.setAvatarStyle(value) }
 
         fun setNickColorsEnabled(value: Boolean) = launch { settingsRepository.setNickColorsEnabled(value) }

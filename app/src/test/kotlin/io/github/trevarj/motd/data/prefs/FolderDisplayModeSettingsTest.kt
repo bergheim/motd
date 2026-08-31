@@ -16,13 +16,17 @@ class FolderDisplayModeSettingsTest {
         DataStoreSettingsRepository(ApplicationProvider.getApplicationContext<Context>())
 
     @Test
-    fun freshAndOldSettingsDefaultInline() =
+    fun freshAndOldSettingsPreserveFolderDefaults() =
         runTest {
             repository.setFolderDisplayMode(FolderDisplayMode.INLINE)
+            repository.setShowFolderChatsInAll(true)
 
             assertEquals(FolderDisplayMode.INLINE, Settings().folderDisplayMode)
             assertEquals(FolderDisplayMode.INLINE, repository.settings.first().folderDisplayMode)
             assertEquals(FolderDisplayMode.INLINE, Json.decodeFromString<Settings>("{}").folderDisplayMode)
+            assertEquals(true, Settings().showFolderChatsInAll)
+            assertEquals(true, repository.settings.first().showFolderChatsInAll)
+            assertEquals(true, Json.decodeFromString<Settings>("{}").showFolderChatsInAll)
         }
 
     @Test
@@ -33,6 +37,17 @@ class FolderDisplayModeSettingsTest {
                 assertEquals(FolderDisplayMode.TABS, repository.settings.first().folderDisplayMode)
             } finally {
                 repository.setFolderDisplayMode(FolderDisplayMode.INLINE)
+            }
+        }
+
+    @Test
+    fun showFolderChatsInAllPreferenceRoundTrips() =
+        runTest {
+            try {
+                repository.setShowFolderChatsInAll(false)
+                assertEquals(false, repository.settings.first().showFolderChatsInAll)
+            } finally {
+                repository.setShowFolderChatsInAll(true)
             }
         }
 

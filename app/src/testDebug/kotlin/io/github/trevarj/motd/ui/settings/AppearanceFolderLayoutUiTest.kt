@@ -22,12 +22,13 @@ class AppearanceFolderLayoutUiTest {
     @get:Rule val compose = createComposeRule()
 
     @Test
-    fun folderLayoutSheetInvokesTabsCallback() {
+    fun folderLayoutControlsInvokeCallbacks() {
         var selected: FolderDisplayMode? = null
+        var showFolderChatsInAll: Boolean? = null
         compose.setContent {
             MotdTheme(dynamicColor = false) {
                 AppearanceSettingsContent(
-                    settings = Settings(),
+                    settings = Settings(folderDisplayMode = FolderDisplayMode.TABS),
                     appearance = AppearanceConfig(),
                     onBack = {},
                     onOpenNickColors = {},
@@ -37,6 +38,7 @@ class AppearanceFolderLayoutUiTest {
                     onDynamicColor = {},
                     onLayoutDensity = {},
                     onFolderDisplayMode = { selected = it },
+                    onShowFolderChatsInAll = { showFolderChatsInAll = it },
                     onAvatarStyle = {},
                     onNickColorsEnabled = {},
                     onNickColorPalette = {},
@@ -57,7 +59,9 @@ class AppearanceFolderLayoutUiTest {
         compose.onNodeWithTag("settings_folder_layout_picker").performScrollTo().performClick()
         compose.onNodeWithTag("settings_folder_layout_sheet").assertIsDisplayed()
         compose.onNodeWithTag("settings_folder_layout_tabs").performClick()
+        compose.onNodeWithTag("settings_switch_show_folder_chats_in_all", useUnmergedTree = true).performScrollTo().performClick()
 
         assertEquals(FolderDisplayMode.TABS, selected)
+        assertEquals(false, showFolderChatsInAll)
     }
 }

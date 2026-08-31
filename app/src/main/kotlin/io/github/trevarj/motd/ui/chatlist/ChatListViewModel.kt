@@ -120,6 +120,7 @@ data class ChatListState(
     val invitations: List<ChatListInvitation> = emptyList(),
     val folders: List<ChatFolderEntity> = emptyList(),
     val folderDisplayMode: FolderDisplayMode = FolderDisplayMode.INLINE,
+    val showFolderChatsInAll: Boolean = true,
     val connection: Map<Long, IrcClientState> = emptyMap(),
     val queryPresence: Map<Long, PresenceState> = emptyMap(),
     val networks: List<NetworkEntity> = emptyList(),
@@ -317,6 +318,7 @@ class ChatListViewModel
                             .mapNotNull(::toChatListInvitation),
                     folders = folders,
                     folderDisplayMode = settings.folderDisplayMode,
+                    showFolderChatsInAll = settings.showFolderChatsInAll,
                     connection = connection,
                     queryPresence =
                         scopedRows

@@ -333,25 +333,34 @@ class ConfigurationBackupRepositoryTest {
         }
 
     @Test
-    fun folderDisplayModeRoundTripsThroughSettingsBackup() =
+    fun folderTabSettingsRoundTripThroughSettingsBackup() =
         runTest {
             val context = ApplicationProvider.getApplicationContext<Context>()
             val settings = DataStoreSettingsRepository(context)
             val backup = repository(inMemoryDb())
             try {
                 settings.setFolderDisplayMode(FolderDisplayMode.TABS)
+                settings.setShowFolderChatsInAll(false)
                 val raw = backup.exportToString(mode = BackupExportMode.CREDENTIALS_EXCLUDED, nowEpochMillis = 1_000L)
 
                 settings.setFolderDisplayMode(FolderDisplayMode.INLINE)
+                settings.setShowFolderChatsInAll(true)
                 backup.import(raw, importMode = BackupImportMode.MERGE)
                 assertEquals(FolderDisplayMode.TABS, settings.settings.first().folderDisplayMode)
+                assertFalse(settings.settings.first().showFolderChatsInAll)
 
-                val oldRaw = raw.replace(Regex(",\\s*\"folderDisplayMode\"\\s*:\\s*\"TABS\""), "")
+                val oldRaw =
+                    raw
+                        .replace(Regex(",\\s*\"folderDisplayMode\"\\s*:\\s*\"TABS\""), "")
+                        .replace(Regex(",\\s*\"showFolderChatsInAll\"\\s*:\\s*false"), "")
                 assertFalse(oldRaw.contains("folderDisplayMode"))
+                assertFalse(oldRaw.contains("showFolderChatsInAll"))
                 backup.import(oldRaw, importMode = BackupImportMode.MERGE)
                 assertEquals(FolderDisplayMode.INLINE, settings.settings.first().folderDisplayMode)
+                assertTrue(settings.settings.first().showFolderChatsInAll)
             } finally {
                 settings.setFolderDisplayMode(FolderDisplayMode.INLINE)
+                settings.setShowFolderChatsInAll(true)
             }
         }
 

@@ -170,6 +170,8 @@ data class Settings(
     val autoAwayMessage: String = "",
     /** Present chat folders as expandable inline sections or a tab strip. */
     val folderDisplayMode: FolderDisplayMode = FolderDisplayMode.INLINE,
+    /** Include chats assigned to folders in the All tab. */
+    val showFolderChatsInAll: Boolean = true,
 )
 
 /** Canonical key for friends/fools/override lookups: trimmed + lowercased.
@@ -199,6 +201,8 @@ interface SettingsRepository {
     suspend fun setLayoutDensity(d: LayoutDensity)
 
     suspend fun setFolderDisplayMode(mode: FolderDisplayMode) {}
+
+    suspend fun setShowFolderChatsInAll(enabled: Boolean) {}
 
     suspend fun setNickColorsEnabled(enabled: Boolean)
 

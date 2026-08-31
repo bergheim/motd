@@ -179,6 +179,8 @@
     <string name="settings_folder_layout_inline_desc">Show folders as expandable sections.</string>
     <string name="settings_folder_layout_tabs">Tabs</string>
     <string name="settings_folder_layout_tabs_desc">Show folders in a tab strip.</string>
+    <string name="settings_show_folder_chats_in_all">Show folder chats in All</string>
+    <string name="settings_show_folder_chats_in_all_desc">Include chats assigned to folders in the All tab.</string>
     <string name="settings_delivery">Message delivery</string>
     <string name="settings_delivery_method">Delivery method</string>
     <string name="settings_background_reliability">Background reliability</string>

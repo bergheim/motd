@@ -373,6 +373,7 @@ fun ChatListContent(
     val showNetworkChip = state.networks.size > 1 && state.selectedNetworkId == null
     val visibleRows = if (archiveMode) state.archivedRows else state.rows
     val folderTabs = if (state.folderDisplayMode == FolderDisplayMode.TABS) presentFolderTabs(state.rows, state.folders) else emptyList()
+    val allTabRows = state.rows.filter { state.showFolderChatsInAll || it.folderId == null }
     var selectedFolderId by rememberSaveable { mutableStateOf<Long?>(null) }
     val effectiveFolderId = selectedFolderId?.takeIf { id -> folderTabs.any { it.folder.id == id } }
     LaunchedEffect(state.loading, state.folderDisplayMode, selectedFolderId, folderTabs.map { it.folder.id }) {
@@ -382,7 +383,9 @@ fun ChatListContent(
     }
     val displayedRows =
         if (!archiveMode && !invitationMode && state.folderDisplayMode == FolderDisplayMode.TABS) {
-            effectiveFolderId?.let { id -> state.rows.filter { it.folderId == id } } ?: state.rows
+            effectiveFolderId?.let { id ->
+                state.rows.filter { it.folderId == id }
+            } ?: allTabRows
         } else {
             visibleRows
         }
@@ -779,7 +782,7 @@ fun ChatListContent(
                     if (!archiveMode && !invitationMode && folderTabs.isNotEmpty()) {
                         FolderTabStrip(
                             folders = folderTabs,
-                            allSummary = summarizeFolder(state.rows),
+                            allSummary = summarizeFolder(allTabRows),
                             selectedFolderId = effectiveFolderId,
                             onSelect = { folderId ->
                                 if (folderId != effectiveFolderId) {

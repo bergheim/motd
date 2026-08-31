@@ -34,11 +34,16 @@ class SettingsSearchTest {
         val encrypted = searchSettings("encrypted", entries).single().destination as SettingsSearchDestination.Page
         val folderLayout = searchSettings("tabs", entries).single()
         val folderDestination = folderLayout.destination as SettingsSearchDestination.Page
+        val folderAll = searchSettings("unassigned", entries).single()
+        val folderAllDestination = folderAll.destination as SettingsSearchDestination.Page
 
         assertEquals("Folder layout", folderLayout.title)
         assertEquals("Choose how folders appear in the chat list.", folderLayout.summary)
         assertEquals(SettingsSearchPage.APPEARANCE, folderDestination.page)
         assertEquals(SettingsTarget.FOLDER_LAYOUT, folderDestination.target)
+        assertEquals("Show folder chats in All", folderAll.title)
+        assertEquals(SettingsSearchPage.APPEARANCE, folderAllDestination.page)
+        assertEquals(SettingsTarget.SHOW_FOLDER_CHATS_IN_ALL, folderAllDestination.target)
         assertEquals(SettingsSearchPage.CHAT, composer.page)
         assertEquals(SettingsTarget.COMPOSER_FORMATTING, composer.target)
         assertEquals(SettingsSearchPage.BACKUP, encrypted.page)
@@ -120,6 +125,8 @@ class SettingsSearchTest {
             R.string.settings_search_network_summary -> "Open this network section"
             R.string.settings_folder_layout -> "Folder layout"
             R.string.settings_folder_layout_desc -> "Choose how folders appear in the chat list."
+            R.string.settings_show_folder_chats_in_all -> "Show folder chats in All"
+            R.string.settings_show_folder_chats_in_all_desc -> "Include chats assigned to folders in the All tab."
             else -> "resource-$id"
         }
 
