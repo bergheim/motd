@@ -1813,6 +1813,38 @@ internal fun agentwireQuestionAnswers(
     }
 
 @SuppressLint("HardcodedText")
+@Composable
+internal fun AgentwireCloseChannel(onClose: () -> Unit) {
+    var confirming by remember { mutableStateOf(false) }
+    TextButton(
+        onClick = { confirming = true },
+        modifier = Modifier.testTag("agentwire_close_channel"),
+    ) { Text("Close channel") }
+    if (confirming) {
+        AlertDialog(
+            onDismissRequest = { confirming = false },
+            title = { Text("Close channel?") },
+            text = { Text("Owned Pi process stops. Session remains resumable from saved history.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirming = false
+                        onClose()
+                    },
+                    modifier = Modifier.testTag("agentwire_close_confirm"),
+                ) { Text("Close") }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { confirming = false },
+                    modifier = Modifier.testTag("agentwire_close_cancel"),
+                ) { Text("Cancel") }
+            },
+        )
+    }
+}
+
+@SuppressLint("HardcodedText")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AgentwireStatusSheet(
@@ -1898,7 +1930,15 @@ private fun AgentwireStatusSheet(
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text(state.cwd ?: "No workspace selected", modifier = Modifier.weight(1f), fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         TextButton(onClick = viewModel::refreshSessionBrowser) { Text("Refresh") }
-                        if (state.activeSid != null) TextButton(onClick = viewModel::detachSession) { Text("Detach") }
+                        if (state.activeSid != null && "session.detach" in state.actions) {
+                            TextButton(onClick = viewModel::detachSession) { Text("Detach") }
+                        }
+                        if (state.activeSid != null && "session.close" in state.actions) {
+                            AgentwireCloseChannel {
+                                viewModel.closeSession()
+                                dismiss()
+                            }
+                        }
                     }
                 }
                 item {

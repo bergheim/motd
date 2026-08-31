@@ -53,6 +53,7 @@ val AGENTWIRE_ACTION_KINDS =
         "session.list.request",
         "history.request",
         "session.create",
+        "session.close",
         "session.attach",
         "session.detach",
         "session.rename",

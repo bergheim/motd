@@ -25,6 +25,26 @@ class AgentwireLiveSessionsUiTest {
     val compose = createComposeRule()
 
     @Test
+    fun closeChannel_requiresConfirmation() {
+        var closes = 0
+        compose.setContent {
+            MotdTheme(dynamicColor = false) {
+                AgentwireCloseChannel { closes++ }
+            }
+        }
+
+        compose.onNodeWithTag("agentwire_close_channel").performClick()
+        compose.onNodeWithText("Owned Pi process stops. Session remains resumable from saved history.").assertIsDisplayed()
+        compose.onNodeWithTag("agentwire_close_cancel").performClick()
+        compose.onNodeWithTag("agentwire_close_confirm").assertDoesNotExist()
+        compose.runOnIdle { assertEquals(0, closes) }
+
+        compose.onNodeWithTag("agentwire_close_channel").performClick()
+        compose.onNodeWithTag("agentwire_close_confirm").performClick()
+        compose.runOnIdle { assertEquals(1, closes) }
+    }
+
+    @Test
     fun desktopTui_isVisibleAndRemainsManualToAttach() {
         var attached: Pair<String, String?>? = null
         compose.setContent {

@@ -352,6 +352,8 @@ class AgentwireViewModel
 
         fun createSession(cwd: String) = sendAction("session.create", buildJsonObject { put("cwd", cwd) })
 
+        fun closeSession() = sendAction("session.close", sid = _state.value.activeSid)
+
         fun attachSession(
             sid: String,
             cwd: String? = null,

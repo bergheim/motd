@@ -213,7 +213,7 @@ class AgentwireProtocolTest {
 
     @Test
     fun `copied canonical resources match upstream content hashes`() {
-        assertEquals("ccaf9de2a571952036abbfd48e29f0c8f50a05f08edde12056903a30b86718a7", sha(resourceBytes("agentwire/agentwire-v1.schema.json")))
+        assertEquals("5bd092183028c0596b1f032b425814a20105c7d153d4674f9bcae4069359c009", sha(resourceBytes("agentwire/agentwire-v1.schema.json")))
         assertEquals("966305fc7e635122c98c3b272666bf1e425c9d2a09f17fe12a7f2de959d52e7a", sha(resourceBytes("agentwire/fixtures/hello.json")))
         assertEquals("81d2de30a1eb81f391ce003ba529555a3ba0b9aaf6556f115d3e7b232933d42b", sha(resourceBytes("agentwire/fixtures/claude-hello.json")))
         assertEquals("2b37531bcf2780315f1735d7d35995580e2a32983fcbee07691a8d3fe0f11db4", sha(resourceBytes("agentwire/fixtures/pi-hello.json")))

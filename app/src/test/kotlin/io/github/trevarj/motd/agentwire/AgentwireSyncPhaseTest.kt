@@ -149,6 +149,29 @@ class AgentwireSyncPhaseTest {
         }
 
     @Test
+    fun `close session sends the active managed session id`() =
+        runTest(dispatcher) {
+            val transport = RecordingTransport()
+            val client = readyClient(transport)
+            val viewModel = viewModel(client)
+            advanceTimeBy(10)
+            runCurrent()
+            val syncId = syncRequests(transport).last()
+
+            transport.feed(tagMessage(BACKEND_ACCOUNT, hello(syncId, setOf("session.close"))))
+            transport.feed(tagMessage(BACKEND_ACCOUNT, snapshot(syncId)))
+            runCurrent()
+            transport.sent.clear()
+
+            viewModel.closeSession()
+            runCurrent()
+
+            val close = outboundEnvelopes(transport).single()
+            assertEquals("session.close", close.kind)
+            assertEquals("session-1", close.sid)
+        }
+
+    @Test
     fun `action failed replying to the live sync id becomes a rejection and stops retrying`() =
         runTest(dispatcher) {
             val transport = RecordingTransport()
