@@ -338,8 +338,8 @@ dependencies {
 
 // Generated JUnit cases are deterministic only for the selected profile/seed/replay inputs.
 tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
-    // Native Compose state degrades paging after roughly ten shared Robolectric classes.
-    if (name == "testDebugUnitTest") forkEvery = 10
+    // Native Compose state degrades paging within ten shared Robolectric classes.
+    if (name == "testDebugUnitTest") forkEvery = 5
     listOf(
         "MOTD_FUZZ_PROFILE",
         "MOTD_FUZZ_SEED",
