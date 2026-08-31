@@ -23,6 +23,8 @@ import io.github.trevarj.motd.data.prefs.AvatarStyle
 fun inviteQrBitmap(
     text: String,
     size: Int = 768,
+    foreground: Int = Color.BLACK,
+    background: Int = Color.WHITE,
 ): Bitmap {
     require(size > 0) { "QR size must be positive" }
     val matrix =
@@ -39,7 +41,7 @@ fun inviteQrBitmap(
         )
     val pixels = IntArray(size * size)
     for (y in 0 until size) {
-        for (x in 0 until size) pixels[y * size + x] = if (matrix[x, y]) 0xFF000000.toInt() else 0xFFFFFFFF.toInt()
+        for (x in 0 until size) pixels[y * size + x] = if (matrix[x, y]) foreground else background
     }
     return Bitmap.createBitmap(pixels, size, size, Bitmap.Config.ARGB_8888)
 }
@@ -63,7 +65,10 @@ fun brandedInviteQrBitmap(
 
     val inset = (size * 0.06f).toInt()
     val qrSize = size - inset * 2
-    canvas.drawBitmap(inviteQrBitmap(text, qrSize), inset.toFloat(), inset.toFloat(), paint)
+    val qrBounds = RectF(inset.toFloat(), inset.toFloat(), (inset + qrSize).toFloat(), (inset + qrSize).toFloat())
+    paint.color = Color.WHITE
+    canvas.drawRoundRect(qrBounds, qrSize * 0.04f, qrSize * 0.04f, paint)
+    canvas.drawBitmap(inviteQrBitmap(text, qrSize, background = Color.TRANSPARENT), inset.toFloat(), inset.toFloat(), paint)
     val qrCenter = size / 2f
     val logoRadius = qrSize * 0.09f
     paint.color = Color.WHITE

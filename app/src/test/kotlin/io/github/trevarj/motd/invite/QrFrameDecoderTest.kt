@@ -1,13 +1,16 @@
 package io.github.trevarj.motd.invite
 
+import android.graphics.Color
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.GraphicsMode
 
 @RunWith(RobolectricTestRunner::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class QrFrameDecoderTest {
     @Test
     fun `generated invitation decodes from padded luminance frame`() {
@@ -40,6 +43,8 @@ class QrFrameDecoderTest {
                 ),
             )
         val bitmap = brandedInviteQrBitmap(context, text, "inviter[mobile]", "inviter[mobile]", size = 512)
+        val qrInset = (bitmap.width * 0.06f).toInt()
+        assertEquals(Color.rgb(0, 122, 124), bitmap.getPixel(qrInset, qrInset))
         val bytes = ByteArray(bitmap.width * bitmap.height)
         for (y in 0 until bitmap.height) {
             for (x in 0 until bitmap.width) {
