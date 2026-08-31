@@ -356,6 +356,7 @@ fun AppearanceSettingsContent(
                     onCheckedChange = onShowFolderChatsInAll,
                     switchTag = "settings_switch_show_folder_chats_in_all",
                     enabled = settings.folderDisplayMode == FolderDisplayMode.TABS,
+                    disabledExplanation = stringResource(R.string.settings_show_folder_chats_in_all_disabled_explanation),
                     modifier = targetModifier,
                 )
             }

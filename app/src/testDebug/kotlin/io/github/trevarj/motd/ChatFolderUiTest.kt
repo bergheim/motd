@@ -81,11 +81,52 @@ class ChatFolderUiTest {
     }
 
     @Test
-    fun tabs_all_can_hide_folder_chats_without_affecting_tabs_archives_or_invitations() {
+    fun tabs_all_only_shows_unassigned_chats_when_folder_chats_hidden() {
         val state =
             mutableStateOf(
                 ChatListState(
-                    rows = listOf(row(1, "#dev", folderId = 7), row(2, "#other", folderId = null)),
+                    rows = listOf(row(), row(2, "#other", folderId = null)),
+                    folders = listOf(folder()),
+                    folderDisplayMode = FolderDisplayMode.TABS,
+                    showFolderChatsInAll = false,
+                    loading = false,
+                ),
+            )
+        setContent(state)
+
+        compose.onNodeWithTag("chatlist_folder_tab_all").assertIsSelected()
+        compose.onAllNodesWithTag("chatlist_row_1").assertCountEquals(0)
+        compose.onNodeWithTag("chatlist_row_2").assertIsDisplayed()
+        compose.onNodeWithTag("chatlist_folder_tab_7").performClick()
+        compose.onNodeWithTag("chatlist_row_1").assertIsDisplayed()
+        compose.onAllNodesWithTag("chatlist_row_2").assertCountEquals(0)
+    }
+
+    @Test
+    fun tabs_omit_empty_all_and_select_first_folder() {
+        val state =
+            mutableStateOf(
+                ChatListState(
+                    rows = listOf(row()),
+                    folders = listOf(folder()),
+                    folderDisplayMode = FolderDisplayMode.TABS,
+                    showFolderChatsInAll = false,
+                    loading = false,
+                ),
+            )
+        setContent(state)
+
+        compose.onAllNodesWithTag("chatlist_folder_tab_all").assertCountEquals(0)
+        compose.onNodeWithTag("chatlist_folder_tab_7").assertIsSelected()
+        compose.onNodeWithTag("chatlist_row_1").assertIsDisplayed()
+    }
+
+    @Test
+    fun tabs_all_routes_remain_for_archives_and_invitations() {
+        val state =
+            mutableStateOf(
+                ChatListState(
+                    rows = listOf(row()),
                     invitations = listOf(invitation()),
                     folders = listOf(folder()),
                     folderDisplayMode = FolderDisplayMode.TABS,
@@ -95,23 +136,21 @@ class ChatFolderUiTest {
             )
         setContent(state)
 
+        compose.onNodeWithTag("chatlist_folder_tab_all").assertIsSelected()
         compose.onAllNodesWithTag("chatlist_row_1").assertCountEquals(0)
-        compose.onNodeWithTag("chatlist_row_2").assertIsDisplayed()
         compose.onNodeWithTag("chatlist_invitations_folder").assertIsDisplayed()
+
+        compose.onNodeWithTag("chatlist_folder_tab_7").performClick()
+        compose.onNodeWithTag("chatlist_row_1").assertIsDisplayed()
+        compose.onAllNodesWithTag("chatlist_invitations_folder").assertCountEquals(0)
+        compose.onNodeWithTag("chatlist_folder_tab_all").performClick()
 
         state.value =
             state.value.copy(
-                rows = listOf(row(1, "#dev", folderId = 7)),
                 archivedRows = listOf(row(3, "#archived", folderId = 7)),
                 invitations = emptyList(),
             )
-        compose.onNodeWithTag("chatlist_folder_tab_7").performClick()
-        compose.onNodeWithTag("chatlist_row_1").assertIsDisplayed()
-        compose.onAllNodesWithTag("chatlist_row_2").assertCountEquals(0)
-        compose.onAllNodesWithTag("chatlist_archived_folder").assertCountEquals(0)
-        compose.onAllNodesWithTag("chatlist_invitations_folder").assertCountEquals(0)
-
-        compose.onNodeWithTag("chatlist_folder_tab_all").performClick()
+        compose.onNodeWithTag("chatlist_folder_tab_all").assertIsSelected()
         compose.onNodeWithTag("chatlist_archived_folder").performClick()
         compose.onNodeWithTag("chatlist_row_3").assertIsDisplayed()
     }

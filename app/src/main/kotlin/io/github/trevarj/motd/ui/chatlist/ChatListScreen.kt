@@ -374,11 +374,19 @@ fun ChatListContent(
     val visibleRows = if (archiveMode) state.archivedRows else state.rows
     val folderTabs = if (state.folderDisplayMode == FolderDisplayMode.TABS) presentFolderTabs(state.rows, state.folders) else emptyList()
     val allTabRows = state.rows.filter { state.showFolderChatsInAll || it.folderId == null }
+    val showAllTab = allTabRows.isNotEmpty() || state.archivedRows.isNotEmpty() || state.invitations.any(ChatListInvitation::actionable) || folderTabs.isEmpty()
     var selectedFolderId by rememberSaveable { mutableStateOf<Long?>(null) }
-    val effectiveFolderId = selectedFolderId?.takeIf { id -> folderTabs.any { it.folder.id == id } }
-    LaunchedEffect(state.loading, state.folderDisplayMode, selectedFolderId, folderTabs.map { it.folder.id }) {
+    val effectiveFolderId =
+        selectedFolderId
+            ?.takeIf { id -> folderTabs.any { it.folder.id == id } }
+            ?: folderTabs
+                .firstOrNull()
+                ?.folder
+                ?.id
+                ?.takeUnless { showAllTab }
+    LaunchedEffect(state.loading, state.folderDisplayMode, selectedFolderId, effectiveFolderId, folderTabs.map { it.folder.id }) {
         if (!state.loading && state.folderDisplayMode == FolderDisplayMode.TABS && selectedFolderId != effectiveFolderId) {
-            selectedFolderId = null
+            selectedFolderId = effectiveFolderId
         }
     }
     val displayedRows =
@@ -783,6 +791,7 @@ fun ChatListContent(
                         FolderTabStrip(
                             folders = folderTabs,
                             allSummary = summarizeFolder(allTabRows),
+                            showAllTab = showAllTab,
                             selectedFolderId = effectiveFolderId,
                             onSelect = { folderId ->
                                 if (folderId != effectiveFolderId) {
@@ -1014,27 +1023,30 @@ private fun ScopeChip(
 private fun FolderTabStrip(
     folders: List<PresentedChatFolder>,
     allSummary: ChatFolderSummary,
+    showAllTab: Boolean,
     selectedFolderId: Long?,
     onSelect: (Long?) -> Unit,
 ) {
-    val selectedIndex = folders.indexOfFirst { it.folder.id == selectedFolderId }.let { if (it < 0) 0 else it + 1 }
+    val selectedIndex = folders.indexOfFirst { it.folder.id == selectedFolderId }.let { if (it < 0) 0 else it + if (showAllTab) 1 else 0 }
     PrimaryScrollableTabRow(
         selectedTabIndex = selectedIndex,
         edgePadding = 0.dp,
         modifier = Modifier.fillMaxWidth().testTag("chatlist_folder_tabs"),
     ) {
-        Tab(
-            selected = selectedFolderId == null,
-            onClick = { onSelect(null) },
-            modifier = Modifier.testTag("chatlist_folder_tab_all"),
-            text = {
-                FolderTabLabel(
-                    name = stringResource(R.string.folders_all),
-                    summary = allSummary,
-                    icon = { Icon(Icons.Outlined.Forum, contentDescription = null, modifier = Modifier.size(20.dp)) },
-                )
-            },
-        )
+        if (showAllTab) {
+            Tab(
+                selected = selectedFolderId == null,
+                onClick = { onSelect(null) },
+                modifier = Modifier.testTag("chatlist_folder_tab_all"),
+                text = {
+                    FolderTabLabel(
+                        name = stringResource(R.string.folders_all),
+                        summary = allSummary,
+                        icon = { Icon(Icons.Outlined.Forum, contentDescription = null, modifier = Modifier.size(20.dp)) },
+                    )
+                },
+            )
+        }
         folders.forEach { folder ->
             val tint = remember(folder.folder.displayName) { Color.hsv((folderColorSeed(folder.folder.displayName).toUInt() % 360u).toFloat(), .55f, .72f) }
             Tab(
