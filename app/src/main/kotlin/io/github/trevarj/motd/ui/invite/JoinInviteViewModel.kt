@@ -11,8 +11,10 @@ import io.github.trevarj.motd.data.prefs.OnboardingPrefs
 import io.github.trevarj.motd.data.repo.BufferRepository
 import io.github.trevarj.motd.data.repo.NetworkRepository
 import io.github.trevarj.motd.data.repo.normalizeHost
+import io.github.trevarj.motd.invite.JoinInvite
 import io.github.trevarj.motd.invite.JoinInviteCodec
 import io.github.trevarj.motd.invite.JoinInviteV1
+import io.github.trevarj.motd.invite.JoinInviteV2
 import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.irc.proto.IrcIdentityRules
 import io.github.trevarj.motd.service.ChannelJoinOutcome
@@ -47,7 +49,7 @@ private const val JOIN_TIMEOUT_MS = 20_000L
 enum class JoinInvitePhase { REVIEW, IDENTITY, CONNECTING, JOINING, READY, FAILED }
 
 data class JoinInviteUiState(
-    val invite: JoinInviteV1? = null,
+    val invite: JoinInvite? = null,
     val phase: JoinInvitePhase = JoinInvitePhase.REVIEW,
     val nick: String = "",
     val actualNick: String? = null,
@@ -66,7 +68,7 @@ sealed interface JoinInviteEvent {
 
     data class OpenAccountSetup(
         val networkId: Long,
-        val channel: String,
+        val channel: String?,
     ) : JoinInviteEvent
 }
 
@@ -137,13 +139,13 @@ class JoinInviteViewModel
         }
 
         fun editChannelKey(value: String) {
-            _state.value.invite?.let { invite ->
+            (_state.value.invite as? JoinInviteV1)?.let { invite ->
                 _state.value = _state.value.copy(invite = invite.copy(channelKey = value.takeIf(String::isNotBlank)), error = null)
             }
         }
 
         fun setupAccount() {
-            val invite = _state.value.invite ?: return
+            val invite = _state.value.invite as? JoinInviteV1 ?: return
             val id = _state.value.networkId ?: return
             _events.tryEmit(JoinInviteEvent.OpenAccountSetup(id, invite.channel))
         }
@@ -168,7 +170,7 @@ class JoinInviteViewModel
         }
 
         private fun launchJoin(
-            invite: JoinInviteV1,
+            invite: JoinInvite,
             nick: String,
         ) {
             work?.cancel()
@@ -220,21 +222,28 @@ class JoinInviteViewModel
                                 fail("Connection timed out")
                                 return@launch
                             }
+                        _state.value = _state.value.copy(phase = JoinInvitePhase.JOINING, actualNick = connected.nick)
+                        if (invite is JoinInviteV2) {
+                            val bufferId = connections.ensureQueryBuffer(networkId, invite.contactNick)
+                            complete(networkId, bufferId)
+                            return@launch
+                        }
+
+                        val channelInvite = invite as JoinInviteV1
                         val client = connections.clientFor(networkId)
                         val normalize: (String) -> String = client?.isupport?.let { support -> support::normalize } ?: IrcIdentityRules()::normalize
-                        val normalized = normalize(invite.channel)
+                        val normalized = normalize(channelInvite.channel)
                         buffers.joinedBufferId(networkId, normalized)?.let {
                             complete(networkId, it)
                             return@launch
                         }
 
-                        _state.value = _state.value.copy(phase = JoinInvitePhase.JOINING, actualNick = connected.nick)
-                        if (invite.channelKey != null) enrollment.prepareChannelKeyBackup(networkId, normalized)
-                        if (!connections.joinChannel(networkId, invite.channel, invite.channelKey)) {
+                        if (channelInvite.channelKey != null) enrollment.prepareChannelKeyBackup(networkId, normalized)
+                        if (!connections.joinChannel(networkId, channelInvite.channel, channelInvite.channelKey)) {
                             fail("Connection closed before channel join")
                             return@launch
                         }
-                        awaitJoin(networkId, invite, normalize)
+                        awaitJoin(networkId, channelInvite, normalize)
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (error: Exception) {
@@ -289,7 +298,7 @@ class JoinInviteViewModel
             ) ?: fail("Channel join timed out")
         }
 
-        private suspend fun checkPin(invite: JoinInviteV1) {
+        private suspend fun checkPin(invite: JoinInvite) {
             val incoming = invite.certSha256 ?: return
             val existing = certs.pinnedFor(invite.host, invite.port)
             if (existing != null && !existing.equals(incoming, ignoreCase = true)) {
@@ -302,7 +311,7 @@ class JoinInviteViewModel
         }
 
         private suspend fun createNetwork(
-            invite: JoinInviteV1,
+            invite: JoinInvite,
             nick: String,
         ): Long =
             networks.addNetwork(
@@ -362,7 +371,7 @@ private class JoinRejected(
 
 internal fun compatibleInviteNetwork(
     network: NetworkEntity,
-    invite: JoinInviteV1,
+    invite: JoinInvite,
 ): Boolean =
     network.role == NetworkRole.DIRECT &&
         normalizeHost(network.host) == normalizeHost(invite.host) && network.port == invite.port && network.tls == invite.tls &&

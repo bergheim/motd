@@ -14,6 +14,7 @@ import io.github.trevarj.motd.data.repo.BufferRepository
 import io.github.trevarj.motd.data.repo.NetworkRepository
 import io.github.trevarj.motd.invite.JoinInviteCodec
 import io.github.trevarj.motd.invite.JoinInviteV1
+import io.github.trevarj.motd.irc.client.BouncerNetwork
 import io.github.trevarj.motd.service.ConnectionManager
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,10 +22,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 
 private const val DEFAULT_TLS_PORT = 6697
 private const val DEFAULT_PLAIN_PORT = 6667
+private const val INVITE_ENDPOINT_TIMEOUT_MS = 10_000L
 
 data class CreateInviteUiState(
     val loading: Boolean = true,
@@ -42,7 +45,7 @@ class CreateInviteViewModel
         private val buffers: BufferRepository,
         private val networks: NetworkRepository,
         private val connections: ConnectionManager,
-        private val bouncerKinds: BouncerKindPrefs,
+        private val endpointResolver: InviteEndpointResolver,
         private val certs: CertTrustStore,
         private val enrollment: InviteEnrollmentStore,
     ) : ViewModel() {
@@ -58,7 +61,7 @@ class CreateInviteViewModel
                     val buffer = buffers.observeBuffer(bufferId).first() ?: error("Conversation no longer exists")
                     if (buffer.type != BufferType.CHANNEL) error("Only channels can be invited to")
                     val network = networks.networkById(buffer.networkId) ?: error("Network no longer exists")
-                    val endpoint = resolveEndpoint(network)
+                    val endpoint = endpointResolver.resolve(network)
                     val normalize = connections.clientFor(network.id)?.isupport?.let { support -> support::normalize } ?: { value: String -> value.lowercase() }
                     val storedKey = enrollment.channelKey(network.id, normalize(buffer.ircTarget)).orEmpty()
                     val pin = if (network.role == NetworkRole.DIRECT) certs.pinnedFor(endpoint.host, endpoint.port) else null
@@ -113,8 +116,15 @@ class CreateInviteViewModel
                     )
             }.onFailure { _state.value = state.copy(qrText = null, error = it.message) }
         }
+    }
 
-        private suspend fun resolveEndpoint(network: NetworkEntity): InviteEndpoint =
+class InviteEndpointResolver
+    @Inject
+    constructor(
+        private val connections: ConnectionManager,
+        private val bouncerKinds: BouncerKindPrefs,
+    ) {
+        internal suspend fun resolve(network: NetworkEntity): InviteEndpoint =
             when (network.role) {
                 NetworkRole.BOUNCER_ROOT -> error("Bouncer control connections cannot be shared")
                 NetworkRole.DIRECT -> resolveDirectInviteEndpoint(network, network.id in bouncerKinds.zncNetworkIds.first())
@@ -125,7 +135,9 @@ class CreateInviteViewModel
             val rootId = child.parentId ?: error("Bouncer network has no root connection")
             val netId = child.bouncerNetId ?: error("Bouncer network has no upstream identifier")
             val client = connections.clientFor(rootId) ?: error("Connect the bouncer before creating an invitation")
-            val attrs = client.bouncerListNetworks().firstOrNull { it.netId == netId }?.attrs ?: error("Bouncer did not return upstream details")
+            val attrs =
+                resolveBouncerInviteAttrs(client.bouncerNetworks.value, netId, client::bouncerListNetworks)
+                    ?: error("Bouncer did not return upstream details")
             if (!attrs["pass"].isNullOrBlank()) error("This upstream requires a password that invitations do not share")
             val host = attrs["host"]?.takeIf(String::isNotBlank) ?: error("Bouncer did not return an upstream host")
             if (host.startsWith("/", true) || host.startsWith("irc+unix", true)) error("Unix IRC endpoints cannot be shared")
@@ -141,6 +153,16 @@ class CreateInviteViewModel
             return InviteEndpoint(host, port, tls)
         }
     }
+
+internal suspend fun resolveBouncerInviteAttrs(
+    cached: Map<String, Map<String, String>>,
+    netId: String,
+    refresh: suspend () -> List<BouncerNetwork>,
+): Map<String, String>? =
+    cached[netId]
+        ?: withTimeoutOrNull(INVITE_ENDPOINT_TIMEOUT_MS) {
+            refresh().firstOrNull { it.netId == netId }?.attrs
+        }
 
 internal data class InviteEndpoint(
     val host: String,

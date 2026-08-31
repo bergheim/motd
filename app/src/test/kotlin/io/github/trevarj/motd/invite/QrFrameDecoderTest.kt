@@ -27,6 +27,30 @@ class QrFrameDecoderTest {
     }
 
     @Test
+    fun `high correction QR survives Signal style card branding`() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val text =
+            JoinInviteCodec.installUri(
+                JoinInviteV2(
+                    networkName = "Example Network",
+                    host = "irc.example.test",
+                    port = 6697,
+                    contactNick = "inviter[mobile]",
+                    certSha256 = "ab".repeat(32),
+                ),
+            )
+        val bitmap = brandedInviteQrBitmap(context, text, "inviter[mobile]", "inviter[mobile]", size = 512)
+        val bytes = ByteArray(bitmap.width * bitmap.height)
+        for (y in 0 until bitmap.height) {
+            for (x in 0 until bitmap.width) {
+                bytes[y * bitmap.width + x] = if ((bitmap.getPixel(x, y) and 0xFF) < 128) 0 else 0xFF.toByte()
+            }
+        }
+
+        assertEquals(text, decodeQrFrame(bytes, bitmap.width, bitmap.height, bitmap.width, 0))
+    }
+
+    @Test
     fun `empty frame is ignored`() {
         assertNull(decodeQrFrame(ByteArray(100), 10, 10, 10, 0))
     }

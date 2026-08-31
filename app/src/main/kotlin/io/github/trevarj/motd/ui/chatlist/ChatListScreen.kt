@@ -195,6 +195,7 @@ fun ChatListScreen(
     // Round 5: drawer/network-management pass-throughs.
     onOpenNetworkSettings: (Long) -> Unit = {},
     onOpenAddNetwork: () -> Unit = {},
+    onCreateContactInvite: (Long?) -> Unit = {},
     onScanInvite: () -> Unit = {},
     onOpenChannelList: (Long) -> Unit = {},
     selectedBufferId: Long? = null,
@@ -269,6 +270,7 @@ fun ChatListScreen(
         onServerMessages = { networkId -> viewModel.openServerBuffer(networkId, onOpenBuffer) },
         onOpenNetworkSettings = onOpenNetworkSettings,
         onOpenAddNetwork = onOpenAddNetwork,
+        onCreateContactInvite = onCreateContactInvite,
         onScanInvite = onScanInvite,
         onOpenChannelList = onOpenChannelList,
         onMarkAllRead = viewModel::markCurrentScopeRead,
@@ -350,6 +352,7 @@ fun ChatListContent(
     onServerMessages: (Long) -> Unit = {},
     onOpenNetworkSettings: (Long) -> Unit = {},
     onOpenAddNetwork: () -> Unit = {},
+    onCreateContactInvite: (Long?) -> Unit = {},
     onScanInvite: () -> Unit = {},
     onOpenChannelList: (Long) -> Unit = {},
     onMarkAllRead: () -> Unit = {},
@@ -492,6 +495,10 @@ fun ChatListContent(
                 },
                 onAddNetwork = {
                     onOpenAddNetwork()
+                    scope.launch { drawerState.close() }
+                },
+                onCreateContactInvite = { preferredNetworkId ->
+                    onCreateContactInvite(preferredNetworkId)
                     scope.launch { drawerState.close() }
                 },
                 onScanInvite = {

@@ -3,7 +3,9 @@ package io.github.trevarj.motd.ui.invite
 import io.github.trevarj.motd.data.db.NetworkEntity
 import io.github.trevarj.motd.data.db.NetworkRole
 import io.github.trevarj.motd.service.isDirectOftcEndpoint
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -31,6 +33,22 @@ class InviteEndpointTest {
         assertTrue(direct.copy(host = "IRC.OFTC.NET.").isDirectOftcEndpoint())
         assertEquals(false, direct.copy(host = "irc.oftc.net", tls = false).isDirectOftcEndpoint())
     }
+
+    @Test
+    fun `cached soju details avoid a blocking network refresh`() =
+        runTest {
+            var refreshed = false
+            val attrs = mapOf("host" to "irc.example", "port" to "6697", "tls" to "1")
+
+            assertEquals(
+                attrs,
+                resolveBouncerInviteAttrs(mapOf("7" to attrs), "7") {
+                    refreshed = true
+                    emptyList()
+                },
+            )
+            assertFalse(refreshed)
+        }
 
     @Test
     fun `znc cloak and server pass endpoints are refused`() {

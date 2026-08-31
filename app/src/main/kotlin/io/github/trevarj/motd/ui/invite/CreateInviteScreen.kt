@@ -5,6 +5,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -22,6 +23,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -36,17 +38,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.trevarj.motd.R
-import io.github.trevarj.motd.invite.inviteQrBitmap
+import io.github.trevarj.motd.invite.brandedInviteQrBitmap
 import io.github.trevarj.motd.ui.settings.PasswordField
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -82,11 +83,20 @@ fun CreateInviteContent(
     val shareBody = state.qrText?.let { stringResource(R.string.invite_share_body, it) }
     val shareTitle = stringResource(R.string.invite_share)
     val copyLabel = stringResource(R.string.invite_copy_uri)
+    val qrAccent = MaterialTheme.colorScheme.primary.toArgb()
+    val qrOnAccent = MaterialTheme.colorScheme.onPrimary.toArgb()
     var showKeyWarning by remember { mutableStateOf(false) }
     var showChannelKey by rememberSaveable { mutableStateOf(false) }
     val qr by
-        produceState<android.graphics.Bitmap?>(null, state.qrText) {
-            value = state.qrText?.let { withContext(Dispatchers.Default) { inviteQrBitmap(it) } }
+        produceState<android.graphics.Bitmap?>(null, state.qrText, state.invite?.channel, qrAccent, qrOnAccent) {
+            val text = state.qrText
+            val channel = state.invite?.channel
+            value =
+                if (text != null && channel != null) {
+                    withContext(Dispatchers.Default) { brandedInviteQrBitmap(context, text, channel, accent = qrAccent, onAccent = qrOnAccent) }
+                } else {
+                    null
+                }
         }
 
     Scaffold(
@@ -149,15 +159,10 @@ fun CreateInviteContent(
                         }
                     }
                     qr?.let { bitmap ->
-                        Image(
-                            bitmap = bitmap.asImageBitmap(),
-                            contentDescription = null,
-                            modifier =
-                                Modifier
-                                    .fillMaxWidth()
-                                    .sizeIn(maxWidth = 420.dp, maxHeight = 420.dp)
-                                    .semantics { contentDescription = qrDescription }
-                                    .testTag("invite_qr"),
+                        ChannelInviteQr(
+                            bitmap = bitmap,
+                            description = qrDescription,
+                            modifier = Modifier.fillMaxWidth(),
                         )
                     }
                     if (state.qrText != null) {
@@ -219,7 +224,51 @@ fun CreateInviteContent(
 }
 
 @Composable
-private fun NumberedInstruction(
+internal fun ContactInviteQr(
+    bitmap: android.graphics.Bitmap,
+    description: String,
+    modifier: Modifier = Modifier,
+) {
+    InviteQrCard(bitmap, description, "contact_invite_qr", modifier)
+}
+
+@Composable
+private fun ChannelInviteQr(
+    bitmap: android.graphics.Bitmap,
+    description: String,
+    modifier: Modifier = Modifier,
+) {
+    InviteQrCard(bitmap, description, "invite_qr", modifier)
+}
+
+@Composable
+private fun InviteQrCard(
+    bitmap: android.graphics.Bitmap,
+    description: String,
+    qrTag: String,
+    modifier: Modifier,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.primaryContainer,
+        shape = MaterialTheme.shapes.extraLarge,
+        tonalElevation = 4.dp,
+        modifier = modifier.sizeIn(maxWidth = 420.dp),
+    ) {
+        Image(
+            bitmap = bitmap.asImageBitmap(),
+            contentDescription = description,
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(bitmap.width.toFloat() / bitmap.height)
+                    .padding(12.dp)
+                    .testTag(qrTag),
+        )
+    }
+}
+
+@Composable
+internal fun NumberedInstruction(
     number: Int,
     text: String,
 ) {

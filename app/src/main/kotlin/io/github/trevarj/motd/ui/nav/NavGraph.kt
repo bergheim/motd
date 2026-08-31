@@ -32,6 +32,7 @@ import io.github.trevarj.motd.ui.chatlist.ManageFoldersScreen
 import io.github.trevarj.motd.ui.feed.GlobalFeedScreen
 import io.github.trevarj.motd.ui.imageviewer.ImageViewerScreen
 import io.github.trevarj.motd.ui.invite.AccountSetupScreen
+import io.github.trevarj.motd.ui.invite.CreateContactInviteScreen
 import io.github.trevarj.motd.ui.invite.CreateInviteScreen
 import io.github.trevarj.motd.ui.invite.JoinInviteScreen
 import io.github.trevarj.motd.ui.invite.QrInviteScannerScreen
@@ -428,6 +429,13 @@ fun MotdNavGraph(
                 onBack = { navController.popBackStack() },
             )
         }
+        composable<CreateContactInviteRoute> { entry ->
+            val route = entry.toRoute<CreateContactInviteRoute>()
+            CreateContactInviteScreen(
+                preferredNetworkId = route.preferredNetworkId,
+                onBack = { navController.popBackStack() },
+            )
+        }
         composable<ImageViewerRoute>(
             // Full-screen image reads better appearing/dismissing in place than sliding sideways.
             enterTransition = { fadeIn(MotdMotion.navigationFade) },
@@ -517,6 +525,7 @@ private fun ChatListPane(
         onOpenOnboarding = { navController.navigate(OnboardingRoute) },
         onOpenNetworkSettings = { navController.navigate(NetworkSettingsRoute(it)) },
         onOpenAddNetwork = { navController.navigate(AddNetworkRoute) },
+        onCreateContactInvite = { navController.navigate(CreateContactInviteRoute(it)) },
         onScanInvite = { navController.navigate(QrInviteScannerRoute) },
         onOpenChannelList = { navController.navigate(ChannelListRoute(it)) },
         selectedBufferId = selectedBufferId,

@@ -16,6 +16,7 @@ import io.github.trevarj.motd.data.repo.BufferRepository
 import io.github.trevarj.motd.data.repo.NetworkRepository
 import io.github.trevarj.motd.invite.JoinInviteCodec
 import io.github.trevarj.motd.invite.JoinInviteV1
+import io.github.trevarj.motd.invite.JoinInviteV2
 import io.github.trevarj.motd.irc.event.IrcClientState
 import io.github.trevarj.motd.testing.NoopConnectionManager
 import kotlinx.coroutines.CompletableDeferred
@@ -83,6 +84,76 @@ class JoinInviteViewModelTest {
         }
 
     @Test
+    fun `v2 creates network and opens contact query without joining a channel`() =
+        runTest {
+            val networkRepo = FakeNetworks()
+            val bufferRepo = FakeBuffers()
+            val connections = FakeConnections(bufferRepo)
+            val onboarding = FakeOnboarding()
+            val vm =
+                JoinInviteViewModel(
+                    networkRepo,
+                    bufferRepo,
+                    connections,
+                    FakeCerts(),
+                    InviteEnrollmentStore(ApplicationProvider.getApplicationContext()),
+                    onboarding,
+                )
+            val event = async(start = CoroutineStart.UNDISPATCHED) { vm.events.first() }
+            vm.init(
+                JoinInviteCodec.encode(
+                    JoinInviteV2(networkName = "Ergo", host = "irc.example", port = 6697, contactNick = "inviter"),
+                ),
+            )
+            vm.continueToIdentity()
+            vm.editNick("new-user")
+            vm.connect()
+
+            assertEquals(
+                JoinInviteEvent.OpenBuffer(77),
+                withContext(Dispatchers.Default) { withTimeout(5_000) { event.await() } },
+            )
+            assertEquals(listOf(42L to "inviter"), connections.queries)
+            assertEquals(0, connections.joins)
+            assertEquals(1, networkRepo.rows.value.size)
+            assertTrue(onboarding.completedState.value)
+        }
+
+    @Test
+    fun `v2 reuses compatible network and opens contact query without channel lookup`() =
+        runTest {
+            val networkRepo = FakeNetworks(listOf(direct(id = 7)))
+            val bufferRepo = FakeBuffers(joinedId = 99, joinedNames = setOf("#friends"))
+            val connections = FakeConnections(bufferRepo)
+            val vm =
+                JoinInviteViewModel(
+                    networkRepo,
+                    bufferRepo,
+                    connections,
+                    FakeCerts(),
+                    InviteEnrollmentStore(ApplicationProvider.getApplicationContext()),
+                    FakeOnboarding(),
+                )
+            val event = async(start = CoroutineStart.UNDISPATCHED) { vm.events.first() }
+            vm.init(
+                JoinInviteCodec.encode(
+                    JoinInviteV2(networkName = "Ergo", host = "irc.example", port = 6697, contactNick = "inviter"),
+                ),
+            )
+            vm.continueToIdentity()
+            vm.editNick("ignored")
+            vm.connect()
+
+            assertEquals(
+                JoinInviteEvent.OpenBuffer(77),
+                withContext(Dispatchers.Default) { withTimeout(5_000) { event.await() } },
+            )
+            assertEquals(listOf(7L to "inviter"), connections.queries)
+            assertEquals(0, connections.joins)
+            assertEquals(1, networkRepo.rows.value.size)
+        }
+
+    @Test
     fun `cancel after failed connection removes only provisional network`() =
         runTest {
             val networkRepo = FakeNetworks()
@@ -144,6 +215,7 @@ class JoinInviteViewModelTest {
         override val channelJoinOutcomes = MutableSharedFlow<io.github.trevarj.motd.service.ChannelJoinOutcome>()
         var joins = 0
         var lastKey: String? = null
+        val queries = mutableListOf<Pair<Long, String>>()
 
         override suspend fun connect(networkId: Long) {
             states.value =
@@ -156,6 +228,14 @@ class JoinInviteViewModelTest {
                             IrcClientState.Ready("alice", emptySet(), emptyMap())
                         }
                 )
+        }
+
+        override suspend fun ensureQueryBuffer(
+            networkId: Long,
+            nick: String,
+        ): Long {
+            queries += networkId to nick
+            return 77
         }
 
         override suspend fun joinChannel(

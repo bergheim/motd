@@ -24,6 +24,10 @@ import kotlinx.serialization.Serializable
     val bufferId: Long,
 )
 
+@Serializable data class CreateContactInviteRoute(
+    val preferredNetworkId: Long? = null,
+)
+
 @Serializable data class AccountSetupRoute(
     val networkId: Long,
     val returnChannel: String? = null,

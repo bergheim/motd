@@ -32,6 +32,7 @@ class ServerDrawerUiTest {
     @Test
     fun ircNetworkIcons_remainVisibleAcrossConnectionStates() {
         var scanned = false
+        var contactInviteNetworkId: Long? = null
         compose.setContent {
             MotdTheme(dynamicColor = false) {
                 ServerDrawerContent(
@@ -41,7 +42,7 @@ class ServerDrawerUiTest {
                             drawerRow(2, IrcClientState.Connecting),
                             drawerRow(3, IrcClientState.Disconnected),
                         ),
-                    selectedNetworkId = null,
+                    selectedNetworkId = 1,
                     allUnread = 0,
                     allMentions = 0,
                     scopedUnreadCount = 0,
@@ -56,12 +57,18 @@ class ServerDrawerUiTest {
                     onOpenSettings = {},
                     globalFeedEnabled = true,
                     onMarkAllRead = {},
+                    onCreateContactInvite = { contactInviteNetworkId = it },
                     onScanInvite = { scanned = true },
                 )
             }
         }
 
-        compose.onNodeWithTag("drawer_scan_invite").assertIsDisplayed().performClick()
+        val createInvite = compose.onNodeWithTag("drawer_create_contact_invite").assertIsDisplayed()
+        val scanInvite = compose.onNodeWithTag("drawer_scan_invite").assertIsDisplayed()
+        assertTrue(createInvite.fetchSemanticsNode().boundsInRoot.top < scanInvite.fetchSemanticsNode().boundsInRoot.top)
+        createInvite.performClick()
+        assertTrue(contactInviteNetworkId == 1L)
+        scanInvite.performClick()
         assertTrue(scanned)
 
         val context = ApplicationProvider.getApplicationContext<Context>()

@@ -1455,6 +1455,19 @@
     <string name="settings_font_custom_invalid">Couldn\'t load that font file</string>
 
     <!-- QR friend onboarding -->
+    <string name="contact_invite_create_title">Share contact invite</string>
+    <string name="contact_invite_no_connected_networks">Connect to an IRC network before creating a contact invite.</string>
+    <string name="contact_invite_network_label">Connected network</string>
+    <string name="contact_invite_network_option">%1$s — %2$s</string>
+    <string name="contact_invite_current_nick">Current connected nick on %1$s</string>
+    <string name="contact_invite_create_explanation">Your friend will connect to this network and open a private message addressed to your current nick.</string>
+    <string name="contact_invite_scan_compact">Scan once to install or open motd, then scan again to accept the invite.</string>
+    <string name="contact_invite_qr_description">QR contact invitation for %1$s on %2$s</string>
+    <string name="contact_invite_sprite_description">IRC sprite for %1$s</string>
+    <string name="contact_invite_share_qr">Share QR</string>
+    <string name="contact_invite_review_title">Connect with</string>
+    <string name="contact_invite_review_explanation">This will connect to the network and open a private message with %1$s. This invitation does not verify who owns that nickname.</string>
+    <string name="contact_invite_opening">Opening a private message with %1$s…</string>
     <string name="invite_scan_title">Scan invite</string>
     <string name="invite_scan_permission_help">Allow camera access to scan the invite. Frames stay on this device and are never recorded, stored, or uploaded.</string>
     <string name="invite_scan_no_camera">No camera is available. Paste a motd invite link below.</string>

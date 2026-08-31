@@ -41,6 +41,8 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.github.trevarj.motd.R
+import io.github.trevarj.motd.invite.JoinInviteV1
+import io.github.trevarj.motd.invite.JoinInviteV2
 import io.github.trevarj.motd.service.ChannelJoinRejectionKind
 import io.github.trevarj.motd.ui.settings.PasswordField
 
@@ -51,7 +53,7 @@ fun JoinInviteScreen(
     onAccountSetupCompleteHandled: () -> Unit = {},
     onBack: () -> Unit,
     onOpenBuffer: (Long) -> Unit,
-    onOpenAccountSetup: (Long, String) -> Unit,
+    onOpenAccountSetup: (Long, String?) -> Unit,
     viewModel: JoinInviteViewModel = hiltViewModel(),
 ) {
     LaunchedEffect(payload) { viewModel.init(payload) }
@@ -122,14 +124,24 @@ fun JoinInviteContent(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             val invite = state.invite
+            val channelInvite = invite as? JoinInviteV1
+            val contactInvite = invite as? JoinInviteV2
             when (state.phase) {
                 JoinInvitePhase.REVIEW -> {
                     if (invite != null) {
                         Text(stringResource(R.string.invite_step, 1, 2), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-                        Text(stringResource(R.string.invite_review_title), style = MaterialTheme.typography.titleMedium)
-                        Text(invite.channel, style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
+                        Text(
+                            stringResource(if (contactInvite != null) R.string.contact_invite_review_title else R.string.invite_review_title),
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        Text(
+                            contactInvite?.contactNick ?: channelInvite?.channel.orEmpty(),
+                            style = MaterialTheme.typography.headlineLarge,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.testTag(if (contactInvite != null) "contact_invite_review_nick" else "invite_review_channel"),
+                        )
                         Text(stringResource(R.string.invite_on_network, invite.networkName), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        if (invite.channelKey != null) {
+                        if (channelInvite?.channelKey != null) {
                             Text(stringResource(R.string.invite_contains_key), color = MaterialTheme.colorScheme.tertiary)
                         }
                         if (!invite.tls) {
@@ -146,9 +158,20 @@ fun JoinInviteContent(
                             )
                         }
                         if (detailsExpanded) {
-                            InviteDetails(invite.networkName, invite.host, invite.port, invite.tls, invite.channelKey != null)
+                            InviteDetails(invite.networkName, invite.host, invite.port, invite.tls, channelInvite?.channelKey != null)
                         }
-                        Text(stringResource(R.string.invite_review_warning), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (contactInvite != null) {
+                            Text(
+                                stringResource(R.string.contact_invite_review_explanation, contactInvite.contactNick),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.testTag("contact_invite_review_copy"),
+                            )
+                        }
+                        Text(
+                            stringResource(R.string.invite_review_warning),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.testTag("invite_review_warning"),
+                        )
                         Button(onClick = onContinue, modifier = Modifier.fillMaxWidth().testTag("invite_review_continue")) {
                             Text(stringResource(R.string.invite_review_continue))
                         }
@@ -178,10 +201,22 @@ fun JoinInviteContent(
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator()
                         Text(
-                            stringResource(
-                                if (state.phase == JoinInvitePhase.CONNECTING) R.string.invite_connecting else R.string.invite_joining,
-                                invite?.channel.orEmpty(),
-                            ),
+                            when {
+                                state.phase == JoinInvitePhase.CONNECTING -> {
+                                    stringResource(
+                                        R.string.invite_connecting,
+                                        contactInvite?.networkName ?: channelInvite?.channel.orEmpty(),
+                                    )
+                                }
+
+                                contactInvite != null -> {
+                                    stringResource(R.string.contact_invite_opening, contactInvite.contactNick)
+                                }
+
+                                else -> {
+                                    stringResource(R.string.invite_joining, channelInvite?.channel.orEmpty())
+                                }
+                            },
                         )
                     }
                     state.actualNick?.let { Text(stringResource(R.string.invite_connected_as, it)) }
@@ -200,15 +235,15 @@ fun JoinInviteContent(
                             Text(stringResource(R.string.invite_ask_sender, nick))
                         }
                     }
-                    if (state.rejectionKind == ChannelJoinRejectionKind.BAD_KEY) {
+                    if (state.rejectionKind == ChannelJoinRejectionKind.BAD_KEY && channelInvite != null) {
                         PasswordField(
-                            value = state.invite?.channelKey.orEmpty(),
+                            value = channelInvite.channelKey.orEmpty(),
                             onValueChange = onChannelKeyChange,
                             label = stringResource(R.string.invite_channel_key_optional),
                             modifier = Modifier.fillMaxWidth().testTag("invite_retry_key"),
                         )
                     }
-                    if (state.rejectionKind == ChannelJoinRejectionKind.ACCOUNT_REQUIRED) {
+                    if (state.rejectionKind == ChannelJoinRejectionKind.ACCOUNT_REQUIRED && channelInvite != null) {
                         if (state.accountSetupAvailable) {
                             Button(onClick = onSetupAccount, modifier = Modifier.fillMaxWidth().testTag("invite_setup_account")) {
                                 Text(stringResource(R.string.account_setup_title))

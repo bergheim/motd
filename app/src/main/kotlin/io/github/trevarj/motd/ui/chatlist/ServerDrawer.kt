@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.CloudOff
@@ -120,6 +121,7 @@ fun ServerDrawerContent(
     /** Global Feed lab flag; the feed row exists only while the lab is on. */
     globalFeedEnabled: Boolean = false,
     onMarkAllRead: () -> Unit,
+    onCreateContactInvite: (Long?) -> Unit = {},
     onScanInvite: () -> Unit = {},
     // Manual ordering. onMoveNetwork is one finished intent (persisted immediately);
     // onCommitNetworkOrder receives the arrangement a drag terminated on, exactly once per drag.
@@ -301,6 +303,13 @@ fun ServerDrawerContent(
                 selected = false,
                 onClick = onAddNetwork,
                 modifier = Modifier.padding(horizontal = 12.dp),
+            )
+            NavigationDrawerItem(
+                icon = { Icon(Icons.Filled.QrCode2, contentDescription = null) },
+                label = { Text(stringResource(R.string.contact_invite_create_title)) },
+                selected = false,
+                onClick = { onCreateContactInvite(selectedNetworkId) },
+                modifier = Modifier.padding(horizontal = 12.dp).testTag("drawer_create_contact_invite"),
             )
             NavigationDrawerItem(
                 icon = { Icon(Icons.Filled.QrCodeScanner, contentDescription = null) },
