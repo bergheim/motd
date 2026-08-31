@@ -1241,6 +1241,9 @@
     <string name="chatlist_more_actions">More actions</string>
     <string name="chatlist_archive">Archive</string>
     <string name="chatlist_unarchive">Unarchive</string>
+    <string name="chatlist_archived_snackbar">Chat archived</string>
+    <string name="chatlist_unarchived_snackbar">Chat unarchived</string>
+    <string name="chatlist_archive_undo">Undo</string>
 
     <!-- Local flat chat folders and reviewed Auto-group. -->
     <string name="folders_all">All</string>

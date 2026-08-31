@@ -84,8 +84,10 @@ import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Tab
@@ -109,6 +111,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -175,6 +178,7 @@ import io.github.trevarj.motd.ui.theme.MotdMotion
 import io.github.trevarj.motd.ui.theme.MotdTheme
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
@@ -400,6 +404,10 @@ fun ChatListContent(
     state.selectedNetworkName?.let { lastScopeName = it }
     var confirmRemoval by remember { mutableStateOf(false) }
     var archiveRevealSignal by rememberSaveable(state.selectedNetworkId) { mutableStateOf(0) }
+    var archiveSwipeUndoJob by remember { mutableStateOf<Job?>(null) }
+    val archivedSnackbarMessage = stringResource(R.string.chatlist_archived_snackbar)
+    val unarchivedSnackbarMessage = stringResource(R.string.chatlist_unarchived_snackbar)
+    val undoLabel = stringResource(R.string.chatlist_archive_undo)
 
     fun setArchivedWithReveal(
         ids: Collection<Long>,
@@ -407,6 +415,26 @@ fun ChatListContent(
     ) {
         onSetArchived(ids, archived)
         if (!archiveMode && archived && ids.isNotEmpty()) archiveRevealSignal += 1
+    }
+
+    fun setArchivedFromSwipe(
+        ids: Collection<Long>,
+        archived: Boolean,
+    ) {
+        val exactIds = ids.toList()
+        setArchivedWithReveal(exactIds, archived)
+        snackbarHostState.currentSnackbarData?.dismiss()
+        archiveSwipeUndoJob?.cancel()
+        archiveSwipeUndoJob =
+            scope.launch {
+                val result =
+                    snackbarHostState.showSnackbar(
+                        message = if (archived) archivedSnackbarMessage else unarchivedSnackbarMessage,
+                        actionLabel = undoLabel,
+                        duration = SnackbarDuration.Long,
+                    )
+                if (result == SnackbarResult.ActionPerformed) setArchivedWithReveal(exactIds, !archived)
+            }
     }
 
     LaunchedEffect(displayedRows) {
@@ -828,7 +856,7 @@ fun ChatListContent(
                             onOpenBuffer = onOpenBuffer,
                             onSetPinned = onSetPinned,
                             onSetMuted = onSetMuted,
-                            onSetArchived = ::setArchivedWithReveal,
+                            onSetArchived = ::setArchivedFromSwipe,
                             onDeleteBuffers = onDeleteBuffers,
                             onSetFolderExpanded = onSetFolderExpanded,
                             onOpenFolderEditor = onOpenFolderEditor,
@@ -2047,6 +2075,16 @@ private fun ArchiveFolderPullOverlay(
     }
 }
 
+internal const val CHAT_LIST_ARCHIVE_SWIPE_THRESHOLD_FRACTION = 0.65f
+
+internal fun archiveSwipePositionalThreshold(totalDistance: Float): Float = totalDistance * CHAT_LIST_ARCHIVE_SWIPE_THRESHOLD_FRACTION
+
+internal fun shouldPerformArchiveSwipeHaptic(
+    previous: SwipeToDismissBoxValue,
+    current: SwipeToDismissBoxValue,
+    enabled: Boolean,
+): Boolean = enabled && previous != SwipeToDismissBoxValue.EndToStart && current == SwipeToDismissBoxValue.EndToStart
+
 /** Use the action-specific compat effect while honoring the user's touch-feedback preference. */
 private fun View.performArchiveThresholdHaptic() {
     ViewCompat.performHapticFeedback(
@@ -2194,8 +2232,18 @@ private fun SelectableChatListRow(
     syncIndicator: ChatListSyncIndicator = ChatListSyncIndicator.NONE,
 ) {
     val currentArchive by rememberUpdatedState(onArchive)
-    val dismissState = rememberSwipeToDismissBoxState()
+    val dismissState = rememberSwipeToDismissBoxState(positionalThreshold = ::archiveSwipePositionalThreshold)
     val scope = rememberCoroutineScope()
+    val view = LocalView.current
+    LaunchedEffect(dismissState, selectionActive) {
+        var previous = dismissState.targetValue
+        snapshotFlow { dismissState.targetValue }.collect { current ->
+            if (shouldPerformArchiveSwipeHaptic(previous, current, enabled = !selectionActive)) {
+                view.performArchiveThresholdHaptic()
+            }
+            previous = current
+        }
+    }
     SwipeToDismissBox(
         state = dismissState,
         enableDismissFromStartToEnd = false,

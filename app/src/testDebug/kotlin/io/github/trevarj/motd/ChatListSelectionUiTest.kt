@@ -1,5 +1,6 @@
 package io.github.trevarj.motd
 
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.SemanticsActions
@@ -208,7 +209,7 @@ class ChatListSelectionUiTest {
         )
     }
 
-    @Test fun end_to_start_swipe_archives_once() {
+    @Test fun end_to_start_swipe_archives_once_and_undo_reverses_once() {
         val archiveCalls = mutableListOf<Pair<List<Long>, Boolean>>()
         compose.setContent {
             MotdTheme(dynamicColor = false) {
@@ -227,10 +228,41 @@ class ChatListSelectionUiTest {
         }
 
         compose.onNodeWithTag("chatlist_row_surface_1").performTouchInput { swipeLeft() }
+        compose.onNodeWithText("Chat archived").assertIsDisplayed()
+        compose.runOnIdle { assertEquals(listOf(listOf(1L) to true), archiveCalls) }
+
+        compose.onNodeWithText("Undo").performClick()
 
         compose.runOnIdle {
-            assertEquals(listOf(listOf(1L) to true), archiveCalls)
+            assertEquals(listOf(listOf(1L) to true, listOf(1L) to false), archiveCalls)
         }
+    }
+
+    @Test fun dismissing_swipe_undo_leaves_archive_unchanged() {
+        val archiveCalls = mutableListOf<Pair<List<Long>, Boolean>>()
+        val snackbarHostState = SnackbarHostState()
+        compose.setContent {
+            MotdTheme(dynamicColor = false) {
+                ChatListContent(
+                    state = ChatListState(rows = listOf(row()), loading = false),
+                    snackbarHostState = snackbarHostState,
+                    onOpenBuffer = {},
+                    onOpenSettings = {},
+                    onOpenSearch = {},
+                    onSetPinned = { _, _ -> },
+                    onSetMuted = { _, _ -> },
+                    onSetArchived = { ids, archived -> archiveCalls += ids.toList() to archived },
+                    onJoinChannel = { _, _, _ -> },
+                    onMessageUser = { _, _ -> },
+                )
+            }
+        }
+
+        compose.onNodeWithTag("chatlist_row_surface_1").performTouchInput { swipeLeft() }
+        compose.onNodeWithText("Chat archived").assertIsDisplayed()
+        compose.runOnIdle { snackbarHostState.currentSnackbarData?.dismiss() }
+
+        compose.runOnIdle { assertEquals(listOf(listOf(1L) to true), archiveCalls) }
     }
 
     @Test fun archiving_query_round_trip_moves_the_same_row_once_each_way() {
@@ -294,8 +326,13 @@ class ChatListSelectionUiTest {
                     onSetPinned = { _, _ -> },
                     onSetMuted = { _, _ -> },
                     onSetArchived = { ids, archivedFlag ->
-                        if (ids == listOf(archived.bufferId) && !archivedFlag) {
-                            state.value = state.value.copy(rows = listOf(restored, active), archivedRows = emptyList())
+                        if (ids == listOf(archived.bufferId)) {
+                            state.value =
+                                if (archivedFlag) {
+                                    state.value.copy(rows = listOf(active), archivedRows = listOf(archived))
+                                } else {
+                                    state.value.copy(rows = listOf(restored, active), archivedRows = emptyList())
+                                }
                         }
                     },
                     onJoinChannel = { _, _, _ -> },
@@ -316,9 +353,13 @@ class ChatListSelectionUiTest {
 
         compose.onNodeWithText("Archived Chats").assertIsDisplayed()
         compose.onNodeWithText("No archived chats yet").assertIsDisplayed()
+        compose.onNodeWithText("Chat unarchived").assertIsDisplayed()
+        compose.onNodeWithText("Undo").performClick()
+        compose.onNodeWithTag("chatlist_row_1").assertIsDisplayed()
         compose.onNodeWithTag("chatlist_selection_close").performClick()
 
-        compose.onNodeWithTag("chatlist_row_1").assertIsDisplayed()
+        compose.onNodeWithTag("chatlist_row_2").assertIsDisplayed()
+        assertEquals(0, compose.onAllNodesWithTag("chatlist_row_1").fetchSemanticsNodes().size)
         assertEquals(0, compose.onAllNodesWithText("No archived chats yet").fetchSemanticsNodes().size)
     }
 
@@ -345,6 +386,33 @@ class ChatListSelectionUiTest {
         compose.onNodeWithTag("chatlist_row_surface_1").performTouchInput { swipeLeft() }
 
         compose.runOnIdle { assertEquals(emptyList<Pair<List<Long>, Boolean>>(), archiveCalls) }
+        assertEquals(0, compose.onAllNodesWithText("Chat archived").fetchSemanticsNodes().size)
+    }
+
+    @Test fun selection_menu_archive_does_not_offer_swipe_undo() {
+        val archiveCalls = mutableListOf<Pair<List<Long>, Boolean>>()
+        compose.setContent {
+            MotdTheme(dynamicColor = false) {
+                ChatListContent(
+                    state = ChatListState(rows = listOf(row()), loading = false),
+                    onOpenBuffer = {},
+                    onOpenSettings = {},
+                    onOpenSearch = {},
+                    onSetPinned = { _, _ -> },
+                    onSetMuted = { _, _ -> },
+                    onSetArchived = { ids, archived -> archiveCalls += ids.toList() to archived },
+                    onJoinChannel = { _, _, _ -> },
+                    onMessageUser = { _, _ -> },
+                )
+            }
+        }
+
+        compose.onNodeWithTag("chatlist_row_1").performTouchInput { longClick() }
+        compose.onNodeWithTag("chatlist_selection_more").performClick()
+        compose.onNodeWithTag("chatlist_selection_archive").performClick()
+
+        compose.runOnIdle { assertEquals(listOf(listOf(1L) to true), archiveCalls) }
+        assertEquals(0, compose.onAllNodesWithText("Chat archived").fetchSemanticsNodes().size)
     }
 
     @Test fun archive_announcement_uses_a_polite_live_region() {
