@@ -323,6 +323,7 @@ private fun AgentwireScreen(
             AgentwireSessionDrawer(
                 rows = agentwireDrawerRows(state),
                 attached = state.activeSid != null,
+                actions = state.actions,
                 onSelect = { row ->
                     viewModel.attachSession(row.sid, row.cwd)
                     scope.launch { drawerState.close() }
@@ -496,7 +497,12 @@ private fun AgentwireScreen(
                                     }
                                 }
                                 items(state.requests, key = AgentwireRequest::rid) { request ->
-                                    AgentwireRequestCard(request, request.sid == null || request.sid == state.activeSid, viewModel) {
+                                    AgentwireRequestCard(
+                                        request,
+                                        request.sid == null || request.sid == state.activeSid,
+                                        "session.attach" in state.actions,
+                                        viewModel,
+                                    ) {
                                         questionRequestId = request.rid
                                         sheet = AgentwireSheet.QUESTION
                                     }
@@ -574,6 +580,7 @@ private fun AgentwireScreen(
 internal fun AgentwireSessionDrawer(
     rows: List<AgentwireDrawerRow>,
     attached: Boolean,
+    actions: Set<String>,
     onSelect: (AgentwireDrawerRow) -> Unit,
     onDetach: () -> Unit,
     onNewSession: () -> Unit,
@@ -613,7 +620,7 @@ internal fun AgentwireSessionDrawer(
                         )
                     }
                     items(sectionRows, key = { "row:${it.sid}" }) { row ->
-                        AgentwireDrawerRowItem(row, onSelect)
+                        AgentwireDrawerRowItem(row, "session.attach" in actions, onSelect)
                     }
                 }
             }
@@ -622,13 +629,15 @@ internal fun AgentwireSessionDrawer(
                 Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                if (attached) {
+                if (attached && "session.detach" in actions) {
                     TextButton(onClick = onDetach, modifier = Modifier.testTag("agentwire_drawer_detach")) {
                         Text("Detach")
                     }
                 }
-                TextButton(onClick = onNewSession, modifier = Modifier.testTag("agentwire_drawer_new_session")) {
-                    Text("New session…")
+                if ("session.create" in actions) {
+                    TextButton(onClick = onNewSession, modifier = Modifier.testTag("agentwire_drawer_new_session")) {
+                        Text("New session…")
+                    }
                 }
             }
         }
@@ -639,6 +648,7 @@ internal fun AgentwireSessionDrawer(
 @Composable
 private fun AgentwireDrawerRowItem(
     row: AgentwireDrawerRow,
+    selectable: Boolean,
     onSelect: (AgentwireDrawerRow) -> Unit,
 ) {
     Surface(
@@ -653,7 +663,7 @@ private fun AgentwireDrawerRowItem(
             Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 2.dp)
-                .clickable(enabled = !row.attached) { onSelect(row) }
+                .then(if (selectable && !row.attached) Modifier.clickable { onSelect(row) } else Modifier)
                 .testTag("agentwire_drawer_row_${row.sid}"),
     ) {
         Row(
@@ -1491,6 +1501,7 @@ private fun AgentwireDiffLines(
 private fun AgentwireRequestCard(
     request: AgentwireRequest,
     canRespond: Boolean,
+    canAttach: Boolean,
     viewModel: AgentwireViewModel,
     openQuestions: () -> Unit,
 ) {
@@ -1520,7 +1531,7 @@ private fun AgentwireRequestCard(
                     Button(onClick = openQuestions, enabled = canRespond) { Text("Answer") }
                 }
                 if (request.canSkip) TextButton(onClick = { viewModel.skipRequest(request.rid) }, enabled = canRespond) { Text("Skip") }
-                if (request.inactive && request.sid != null) {
+                if (canAttach && request.inactive && request.sid != null) {
                     TextButton(onClick = { viewModel.attachSession(request.sid) }) { Text("Reattach") }
                 }
             }
@@ -2015,13 +2026,14 @@ private fun AgentwireStatusSheet(
                                                 .testTag("agentwire_browser_count_${directory.id}"),
                                     )
                                 }
-                                TextButton(
-                                    onClick = {
-                                        viewModel.createSession(directory.id)
-                                        dismiss()
-                                    },
-                                    enabled = "session.create" in state.actions,
-                                ) { Text("Start") }
+                                if ("session.create" in state.actions) {
+                                    TextButton(
+                                        onClick = {
+                                            viewModel.createSession(directory.id)
+                                            dismiss()
+                                        },
+                                    ) { Text("Start") }
+                                }
                             }
                         }
                     }
@@ -2282,7 +2294,7 @@ private fun AgentwireSessionRow(
                 if (runtimeStatus != null) {
                     Text(runtimeStatus, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 8.dp))
                 }
-                if (!active) {
+                if (!active && "session.attach" in actions) {
                     TextButton(onClick = { onAttach(session.id, session.subtitle) }) { Text("Attach") }
                 }
             }

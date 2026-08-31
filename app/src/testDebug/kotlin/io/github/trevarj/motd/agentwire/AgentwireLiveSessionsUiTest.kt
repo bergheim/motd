@@ -1,5 +1,8 @@
 package io.github.trevarj.motd.agentwire
 
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -45,6 +48,92 @@ class AgentwireLiveSessionsUiTest {
     }
 
     @Test
+    fun managedSession_isVisibleWithoutAttach() {
+        compose.setContent {
+            MotdTheme(dynamicColor = false) {
+                AgentwireLiveSessions(
+                    sessions =
+                        listOf(
+                            AgentwireListItem(
+                                id = "thread-managed",
+                                title = "Managed Pi",
+                                subtitle = "/work/motd",
+                                raw = buildJsonObject {},
+                            ),
+                        ),
+                    activeSid = null,
+                    actions = emptySet(),
+                    onAttach = { _, _ -> error("Attach must not be offered") },
+                )
+            }
+        }
+
+        compose.onNodeWithText("Managed Pi").assertIsDisplayed()
+        compose.onNodeWithText("Attach").assertDoesNotExist()
+    }
+
+    @Test
+    fun drawerActions_followAdvertisedCapabilities() {
+        val actions = mutableStateOf(emptySet<String>())
+        var selected: String? = null
+        var detaches = 0
+        var creates = 0
+        compose.setContent {
+            MotdTheme(dynamicColor = false) {
+                AgentwireSessionDrawer(
+                    rows =
+                        listOf(
+                            AgentwireDrawerRow(
+                                sid = "bound",
+                                title = "Bound",
+                                backend = "pi",
+                                cwd = "/work/motd",
+                                directory = "motd",
+                                status = AgentwireDrawerStatus.IDLE,
+                                tuiAttached = false,
+                                attached = true,
+                                section = AgentwireDrawerSection.BOUND,
+                            ),
+                            AgentwireDrawerRow(
+                                sid = "other",
+                                title = "Other",
+                                backend = "pi",
+                                cwd = "/work/other",
+                                directory = "other",
+                                status = AgentwireDrawerStatus.IDLE,
+                                tuiAttached = false,
+                                attached = false,
+                                section = AgentwireDrawerSection.LIVE,
+                            ),
+                        ),
+                    attached = true,
+                    actions = actions.value,
+                    onSelect = { selected = it.sid },
+                    onDetach = { detaches++ },
+                    onNewSession = { creates++ },
+                )
+            }
+        }
+
+        compose.onNodeWithText("Other").assertIsDisplayed()
+        compose.onNodeWithTag("agentwire_drawer_row_other").assertHasNoClickAction()
+        compose.onNodeWithTag("agentwire_drawer_detach").assertDoesNotExist()
+        compose.onNodeWithTag("agentwire_drawer_new_session").assertDoesNotExist()
+
+        compose.runOnIdle {
+            actions.value = setOf("session.attach", "session.detach", "session.create")
+        }
+        compose.onNodeWithTag("agentwire_drawer_row_other").assertHasClickAction().performClick()
+        compose.onNodeWithTag("agentwire_drawer_detach").performClick()
+        compose.onNodeWithTag("agentwire_drawer_new_session").performClick()
+        compose.runOnIdle {
+            assertEquals("other", selected)
+            assertEquals(1, detaches)
+            assertEquals(1, creates)
+        }
+    }
+
+    @Test
     fun desktopTui_isVisibleAndRemainsManualToAttach() {
         var attached: Pair<String, String?>? = null
         compose.setContent {
@@ -64,7 +153,7 @@ class AgentwireLiveSessionsUiTest {
                             ),
                         ),
                     activeSid = null,
-                    actions = emptySet(),
+                    actions = setOf("session.attach"),
                     onAttach = { sid, cwd -> attached = sid to cwd },
                 )
             }
