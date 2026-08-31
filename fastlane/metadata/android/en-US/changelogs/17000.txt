@@ -1,0 +1,5 @@
+- Redesigned settings make sections, search, and common controls easier to navigate.
+- Chat folders can use tabs, and All can optionally show only unassigned chats.
+- Contact QR invites can onboard a friend directly into a private conversation.
+- New-conversation and archive interactions are clearer.
+- Agentwire sessions sync and close more reliably.
