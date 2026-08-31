@@ -14,6 +14,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -31,17 +32,19 @@ fun AutocompletePanel(
     modifier: Modifier = Modifier,
     isCommand: Boolean = false,
     networkId: Long? = null,
+    tagPrefix: String = "autocomplete",
 ) {
     if (candidates.isEmpty()) return
     Surface(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth().testTag("${tagPrefix}_panel"),
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         tonalElevation = 3.dp,
         shadowElevation = 3.dp,
         shape = RoundedCornerShape(18.dp),
     ) {
         LazyColumn(modifier = Modifier.heightIn(max = 180.dp)) {
-            items(candidates, key = { it }) { candidate ->
+            items(candidates.size, key = { candidates[it] }) { index ->
+                val candidate = candidates[index]
                 Row(
                     modifier =
                         Modifier
@@ -49,6 +52,7 @@ fun AutocompletePanel(
                             // >=48dp touch target for autocomplete rows.
                             .heightIn(min = 48.dp)
                             .clickable { onPick(candidate) }
+                            .testTag("${tagPrefix}_item_$index")
                             .padding(horizontal = 16.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {

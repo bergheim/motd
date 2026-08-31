@@ -1777,6 +1777,38 @@ interface MemberDao {
     suspend fun allNow(bufferId: Long): List<MemberEntity>
 
     @Query(
+        """WITH candidates(nick) AS (
+               SELECT m.nick FROM members m
+               JOIN buffers b ON b.id = m.bufferId
+               WHERE b.networkId = :networkId AND b.redirectToRoomId IS NULL
+               UNION ALL
+               SELECT b.displayName FROM buffers b
+               WHERE b.networkId = :networkId AND b.type = 'QUERY'
+                 AND b.pendingCloseAt IS NULL AND b.redirectToRoomId IS NULL
+           ), normalized(nick, identityKey) AS (
+               SELECT nick,
+                   CASE :caseMapping
+                       WHEN 'rfc1459' THEN lower(replace(replace(replace(replace(nick, '[', '{'), ']', '}'), '\', '|'), '^', '~'))
+                       WHEN 'rfc1459-strict' THEN lower(replace(replace(replace(nick, '[', '{'), ']', '}'), '\', '|'))
+                       ELSE lower(nick)
+                   END
+               FROM candidates
+           )
+           SELECT MIN(nick) AS nick FROM normalized
+           WHERE identityKey LIKE :pattern ESCAPE '\' AND identityKey != :selfKey
+           GROUP BY identityKey
+           ORDER BY identityKey, nick
+           LIMIT :limit""",
+    )
+    fun observeNickSuggestions(
+        networkId: Long,
+        pattern: String,
+        selfKey: String,
+        caseMapping: String,
+        limit: Int,
+    ): Flow<List<String>>
+
+    @Query(
         """SELECT m.bufferId FROM members m
            JOIN buffers b ON b.id = m.bufferId
            WHERE b.networkId = :networkId AND m.nick = :nick""",

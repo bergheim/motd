@@ -42,6 +42,8 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
@@ -96,6 +98,19 @@ internal fun chatListSyncIndicators(
                 }
             (bufferId to indicator).takeIf { indicator != ChatListSyncIndicator.NONE }
         }.toMap()
+
+/** Identity-bearing local nickname results; mismatched network/prefix results are never rendered. */
+data class NickSuggestions(
+    val networkId: Long? = null,
+    val prefix: String = "",
+    val candidates: List<String> = emptyList(),
+)
+
+private data class NickSuggestionRequest(
+    val networkId: Long,
+    val prefix: String,
+    val selfNick: String,
+)
 
 /** Single UI state for the chat list screen. */
 data class ChatListState(
@@ -154,6 +169,7 @@ data class ChatListInvitation(
         get() = state == InviteState.PENDING || state == InviteState.JOINING || state == InviteState.FAILED
 }
 
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class ChatListViewModel
     @Inject
@@ -206,6 +222,19 @@ class ChatListViewModel
 
         // Scope selection survives config changes; null = unified list (default).
         private val selection = MutableStateFlow(savedStateHandle.get<Long?>(KEY_SELECTED))
+
+        private val nickSuggestionRequest = MutableStateFlow<NickSuggestionRequest?>(null)
+        val nickSuggestions: StateFlow<NickSuggestions> =
+            nickSuggestionRequest
+                .flatMapLatest { request ->
+                    if (request == null) {
+                        flowOf(NickSuggestions())
+                    } else {
+                        bufferRepository
+                            .observeNickSuggestions(request.networkId, request.prefix, request.selfNick)
+                            .map { candidates -> NickSuggestions(request.networkId, request.prefix, candidates) }
+                    }
+                }.stateIn(viewModelScope, WhileSubscribed(5_000), NickSuggestions())
 
         // Title-bar connectivity cue, kept out of the [state] combine like the sync flows above so a
         // socket transition never rebuilds the row list. connectionStates republishes on every caps/
@@ -477,6 +506,25 @@ class ChatListViewModel
         ) = viewModelScope.launch {
             val bufferId = connectionManager.ensureQueryBuffer(networkId, nick)
             onOpen(bufferId)
+        }
+
+        /** Starts or clears the bounded local nickname query used only while the message tab is active. */
+        fun queryNickSuggestions(
+            networkId: Long?,
+            prefix: String,
+        ) {
+            val trimmed = prefix.trim()
+            val network = networkId?.let { id -> state.value.networks.firstOrNull { it.id == id } }
+            nickSuggestionRequest.value =
+                if (network == null || trimmed.isEmpty()) {
+                    null
+                } else {
+                    NickSuggestionRequest(
+                        network.id,
+                        trimmed,
+                        (connectionManager.connectionStates.value[network.id] as? IrcClientState.Ready)?.nick ?: network.nick,
+                    )
+                }
         }
 
         // -- Round 5: drawer selection + per-network / global connectivity --

@@ -111,6 +111,14 @@ interface BufferRepository {
      */
     fun observeQueryConversations(): Flow<List<MonitorQueryRow>> = flowOf(emptyList())
 
+    /** Bounded local nickname matches for starting a QUERY; lightweight fakes stay source-compatible. */
+    fun observeNickSuggestions(
+        networkId: Long,
+        prefix: String,
+        selfNick: String,
+        limit: Int = 10,
+    ): Flow<List<String>> = flowOf(emptyList())
+
     /**
      * Winner id for [id] after durable room redirects, or null when the room is gone.
      *

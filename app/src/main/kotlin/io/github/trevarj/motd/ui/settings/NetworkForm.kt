@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Visibility
@@ -477,8 +478,10 @@ fun PasswordField(
     label: String,
     modifier: Modifier = Modifier,
     imeAction: ImeAction = ImeAction.Done,
+    keyboardActions: KeyboardActions = KeyboardActions.Default,
     supportingText: String? = null,
     isError: Boolean = false,
+    enabled: Boolean = true,
 ) {
     var visible by remember { mutableStateOf(false) }
     OutlinedTextField(
@@ -487,11 +490,13 @@ fun PasswordField(
         label = { Text(label) },
         supportingText = supportingText?.let { text -> ({ Text(text) }) },
         isError = isError,
+        enabled = enabled,
         singleLine = true,
         visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = imeAction),
+        keyboardActions = keyboardActions,
         trailingIcon = {
-            IconButton(onClick = { visible = !visible }) {
+            IconButton(onClick = { visible = !visible }, enabled = enabled) {
                 Icon(
                     imageVector = if (visible) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
                     contentDescription =

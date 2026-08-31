@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -129,16 +130,17 @@ class FolderManagementViewModel
 fun ManageFoldersScreen(
     onBack: () -> Unit,
     onEdit: (Long) -> Unit,
+    onAutoGroup: () -> Unit,
     viewModel: FolderManagementViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     Scaffold(
         modifier = Modifier.testTag("screen_manage_folders"),
         topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.folders_manage)) },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back)) } },
-                actions = { IconButton(onClick = { onEdit(0) }, modifier = Modifier.testTag("folders_create")) { Icon(Icons.Filled.Add, stringResource(R.string.folders_create)) } },
+            FolderManagementTopBar(
+                onBack = onBack,
+                onAutoGroup = onAutoGroup,
+                onCreate = { onEdit(0) },
             )
         },
     ) { padding ->
@@ -192,6 +194,31 @@ fun ManageFoldersScreen(
             }
         }
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun FolderManagementTopBar(
+    onBack: () -> Unit,
+    onAutoGroup: () -> Unit,
+    onCreate: () -> Unit,
+) {
+    TopAppBar(
+        title = { Text(stringResource(R.string.folders_manage)) },
+        navigationIcon = {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
+            }
+        },
+        actions = {
+            IconButton(onClick = onAutoGroup, modifier = Modifier.testTag("folders_auto_group")) {
+                Icon(Icons.Outlined.AutoAwesome, stringResource(R.string.folders_auto_group))
+            }
+            IconButton(onClick = onCreate, modifier = Modifier.testTag("folders_create")) {
+                Icon(Icons.Filled.Add, stringResource(R.string.folders_create))
+            }
+        },
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

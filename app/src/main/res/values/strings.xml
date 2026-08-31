@@ -34,15 +34,24 @@
     <string name="chat_parted_banner_text">You\'re not in %1$s</string>
 
     <!-- New-conversation bottom sheet (WP6) -->
+    <string name="new_sheet_title">New conversation</string>
+    <string name="new_sheet_supporting">Join a channel or start a direct message on one of your networks.</string>
     <string name="new_sheet_join_channel">Join channel</string>
+    <string name="new_sheet_join_description">Enter channel details or browse channels on the selected network.</string>
     <string name="new_sheet_message_user">Message user</string>
+    <string name="new_sheet_message_description">Start a direct conversation with a nickname on the selected network.</string>
     <string name="new_sheet_network">Network</string>
+    <string name="new_sheet_network_selected">Network: %1$s</string>
+    <string name="new_sheet_no_networks">No eligible networks are available. Add a network before starting a conversation.</string>
     <string name="new_sheet_channel_prefix">#</string>
     <string name="new_sheet_channel_hint">Channel name</string>
+    <string name="new_sheet_channel_guidance">Enter a name without #. Include # to join a ## channel.</string>
     <string name="new_sheet_channel_password">Channel password (optional)</string>
-    <string name="new_sheet_channel_password_expand">Add channel password</string>
-    <string name="new_sheet_channel_password_collapse">Remove channel password</string>
+    <string name="new_sheet_channel_password_guidance">Used only for keyed channels.</string>
+    <string name="new_sheet_expanded">Expanded</string>
+    <string name="new_sheet_collapsed">Collapsed</string>
     <string name="new_sheet_nick_hint">Nickname</string>
+    <string name="new_sheet_nick_guidance">Type a nickname. Known nicks appear as suggestions.</string>
     <string name="new_sheet_join">Join</string>
     <string name="new_sheet_message">Message</string>
     <string name="new_sheet_browse">Browse channels…</string>

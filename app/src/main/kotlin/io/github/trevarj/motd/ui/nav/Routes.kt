@@ -140,7 +140,9 @@ enum class NetworkSettingsTarget { CONNECTION, AUTHENTICATION, OBFUSCATION, AVAT
     val target: SettingsTarget? = null,
 )
 
-@Serializable data object ManageFoldersRoute
+@Serializable data class ManageFoldersRoute(
+    val networkId: Long? = null,
+)
 
 @Serializable data class FolderEditorRoute(
     val folderId: Long = 0,

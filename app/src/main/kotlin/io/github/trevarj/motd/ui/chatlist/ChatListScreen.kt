@@ -52,7 +52,6 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.outlined.Archive
-import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DoneAll
 import androidx.compose.material.icons.outlined.DynamicFeed
@@ -190,9 +189,8 @@ fun ChatListScreen(
     onOpenSettings: () -> Unit = {},
     onOpenSearch: () -> Unit = {},
     onOpenFeed: () -> Unit = {},
-    onOpenManageFolders: () -> Unit = {},
+    onOpenManageFolders: (Long?) -> Unit = {},
     onOpenFolderEditor: (Long) -> Unit = {},
-    onOpenAutoGroup: (Long?) -> Unit = {},
     onOpenOnboarding: () -> Unit = {},
     // Round 5: drawer/network-management pass-throughs.
     onOpenNetworkSettings: (Long) -> Unit = {},
@@ -212,6 +210,7 @@ fun ChatListScreen(
     val syncIndicators by viewModel.syncIndicators.collectAsStateWithLifecycle()
     val syncChrome by viewModel.syncChrome.collectAsStateWithLifecycle()
     val titleConnecting by viewModel.titleConnecting.collectAsStateWithLifecycle()
+    val nickSuggestions by viewModel.nickSuggestions.collectAsStateWithLifecycle()
 
     // Fresh installs enter onboarding once state is loaded; a durable skip keeps the empty main UI.
     LaunchedEffect(state.loading, state.networks.isEmpty(), state.onboardingComplete, suppressOnboarding) {
@@ -250,7 +249,6 @@ fun ChatListScreen(
         onOpenFeed = onOpenFeed,
         onOpenManageFolders = onOpenManageFolders,
         onOpenFolderEditor = onOpenFolderEditor,
-        onOpenAutoGroup = onOpenAutoGroup,
         onAssignFolder = viewModel::assignFolder,
         onCreateFolderAndAssign = viewModel::createFolderAndAssign,
         onSetFolderExpanded = viewModel::setFolderExpanded,
@@ -278,6 +276,8 @@ fun ChatListScreen(
         onMoveNetwork = viewModel::moveNetwork,
         onCommitNetworkOrder = viewModel::commitNetworkOrder,
         selectedBufferId = selectedBufferId,
+        nickSuggestions = nickSuggestions,
+        onNickSuggestionQuery = viewModel::queryNickSuggestions,
     )
 }
 
@@ -328,9 +328,8 @@ fun ChatListContent(
     onOpenSettings: () -> Unit,
     onOpenSearch: () -> Unit,
     onOpenFeed: () -> Unit = {},
-    onOpenManageFolders: () -> Unit = {},
+    onOpenManageFolders: (Long?) -> Unit = {},
     onOpenFolderEditor: (Long) -> Unit = {},
-    onOpenAutoGroup: (Long?) -> Unit = {},
     onAssignFolder: (Collection<Long>, Long?, (Boolean) -> Unit) -> Unit = { _, _, done -> done(false) },
     onCreateFolderAndAssign: (String, FolderIconRef, Collection<Long>, (Boolean) -> Unit) -> Unit = { _, _, _, done -> done(false) },
     onSetFolderExpanded: (Long, Boolean) -> Unit = { _, _ -> },
@@ -359,6 +358,8 @@ fun ChatListContent(
     onMoveNetwork: (Long, Int) -> Unit = { _, _ -> },
     onCommitNetworkOrder: (List<Long>) -> Unit = {},
     selectedBufferId: Long? = null,
+    nickSuggestions: NickSuggestions = NickSuggestions(),
+    onNickSuggestionQuery: (Long?, String) -> Unit = { _, _ -> },
 ) {
     var archiveMode by rememberSaveable { mutableStateOf(false) }
     var invitationMode by rememberSaveable { mutableStateOf(false) }
@@ -699,18 +700,9 @@ fun ChatListContent(
                                                     leadingIcon = { Icon(Icons.Outlined.FolderOpen, contentDescription = null) },
                                                     onClick = {
                                                         moreOpen = false
-                                                        onOpenManageFolders()
+                                                        onOpenManageFolders(state.selectedNetworkId)
                                                     },
                                                     modifier = Modifier.testTag("chatlist_manage_folders"),
-                                                )
-                                                DropdownMenuItem(
-                                                    text = { Text(stringResource(R.string.folders_auto_group)) },
-                                                    leadingIcon = { Icon(Icons.Outlined.AutoAwesome, contentDescription = null) },
-                                                    onClick = {
-                                                        moreOpen = false
-                                                        onOpenAutoGroup(state.selectedNetworkId)
-                                                    },
-                                                    modifier = Modifier.testTag("chatlist_auto_group"),
                                                 )
                                                 if (state.globalFeedEnabled) {
                                                     DropdownMenuItem(
@@ -930,6 +922,8 @@ fun ChatListContent(
                 onOpenChannelList(networkId)
                 scope.launch { sheetState.hide() }.invokeOnCompletion { showSheet = false }
             },
+            nickSuggestions = nickSuggestions,
+            onNickSuggestionQuery = onNickSuggestionQuery,
         )
     }
 

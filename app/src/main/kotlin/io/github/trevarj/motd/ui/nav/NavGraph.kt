@@ -331,10 +331,12 @@ fun MotdNavGraph(
                 onReviewNetworks = { navController.navigate(NetworksSettingsRoute()) },
             )
         }
-        composable<ManageFoldersRoute> {
+        composable<ManageFoldersRoute> { entry ->
+            val networkId = entry.toRoute<ManageFoldersRoute>().networkId
             ManageFoldersScreen(
                 onBack = { navController.popBackStack() },
                 onEdit = { navController.navigate(FolderEditorRoute(it)) },
+                onAutoGroup = { navController.navigate(AutoGroupRoute(networkId)) },
             )
         }
         composable<FolderEditorRoute> { entry ->
@@ -510,9 +512,8 @@ private fun ChatListPane(
         onOpenSettings = { navController.navigate(SettingsRoute()) },
         onOpenSearch = { navController.navigate(SearchRoute()) },
         onOpenFeed = { navController.navigate(GlobalFeedRoute) },
-        onOpenManageFolders = { navController.navigate(ManageFoldersRoute) },
+        onOpenManageFolders = { navController.navigate(ManageFoldersRoute(it)) },
         onOpenFolderEditor = { navController.navigate(FolderEditorRoute(it)) },
-        onOpenAutoGroup = { navController.navigate(AutoGroupRoute(it)) },
         onOpenOnboarding = { navController.navigate(OnboardingRoute) },
         onOpenNetworkSettings = { navController.navigate(NetworkSettingsRoute(it)) },
         onOpenAddNetwork = { navController.navigate(AddNetworkRoute) },
