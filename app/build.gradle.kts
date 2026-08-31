@@ -338,8 +338,8 @@ dependencies {
 
 // Generated JUnit cases are deterministic only for the selected profile/seed/replay inputs.
 tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
-    // ponytail: recycle every 50 Robolectric classes; tune only if CI profiling shows a better boundary.
-    if (name == "testDebugUnitTest") forkEvery = 50
+    // Native Compose state degrades paging after roughly ten shared Robolectric classes.
+    if (name == "testDebugUnitTest") forkEvery = 10
     listOf(
         "MOTD_FUZZ_PROFILE",
         "MOTD_FUZZ_SEED",

@@ -176,9 +176,6 @@ class MessageTimelineUiTest {
         assertTrue(bounds(messageTag(24)).top < after.top)
 
         scrollTo("chat_system_pill")
-        compose.waitUntil(10_000) {
-            compose.onAllNodesWithText("carol quit", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
-        }
         compose.onNodeWithText("alice joined", useUnmergedTree = true).assertIsDisplayed()
         compose.onNodeWithText("bob left", useUnmergedTree = true).assertIsDisplayed()
         compose.onNodeWithText("carol quit", useUnmergedTree = true).assertIsDisplayed()
@@ -224,11 +221,7 @@ class MessageTimelineUiTest {
     }
 
     private fun scrollTo(tag: String) {
-        compose.waitUntil(10_000) {
-            runCatching {
-                compose.onNodeWithTag("chat_timeline", useUnmergedTree = true).performScrollToNode(hasTestTag(tag))
-            }.isSuccess
-        }
+        compose.onNodeWithTag("chat_timeline", useUnmergedTree = true).performScrollToNode(hasTestTag(tag))
         compose.onNodeWithTag(tag, useUnmergedTree = true).assertIsDisplayed()
     }
 
