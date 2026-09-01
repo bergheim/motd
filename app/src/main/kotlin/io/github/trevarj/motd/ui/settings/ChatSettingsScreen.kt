@@ -1,6 +1,7 @@
 package io.github.trevarj.motd.ui.settings
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -160,12 +161,14 @@ fun ChatSettingsContent(
                 if (target == SettingsTarget.CHAT) SettingsTarget.PRESENCE.name else target?.name,
                 SettingsTarget.PRESENCE.name,
             ) { targetModifier ->
-                SettingsNavigationRow(
-                    title = stringResource(R.string.settings_presence_title),
-                    value = stringResource(presenceModeLabel(settings.presenceMode)),
-                    modifier = targetModifier.testTag("settings_presence_picker"),
-                    onClick = { presenceSheetOpen = true },
-                )
+                Box(modifier = targetModifier) {
+                    SettingsNavigationRow(
+                        title = stringResource(R.string.settings_presence_title),
+                        value = stringResource(presenceModeLabel(settings.presenceMode)),
+                        modifier = Modifier.testTag("settings_presence_picker"),
+                        onClick = { presenceSheetOpen = true },
+                    )
+                }
             }
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             SwitchRow(

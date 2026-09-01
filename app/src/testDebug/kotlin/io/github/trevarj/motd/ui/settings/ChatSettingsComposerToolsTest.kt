@@ -13,6 +13,7 @@ import io.github.trevarj.motd.avatar.AvatarConfig
 import io.github.trevarj.motd.data.prefs.ContentPreviewConfig
 import io.github.trevarj.motd.data.prefs.ReplyConfig
 import io.github.trevarj.motd.data.prefs.Settings
+import io.github.trevarj.motd.ui.nav.SettingsTarget
 import io.github.trevarj.motd.ui.theme.MotdTheme
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -63,10 +64,13 @@ class ChatSettingsComposerToolsTest {
                     onVoiceQuality = {},
                     onVoiceNoiseReduction = {},
                     onClearAudioCache = {},
+                    target = SettingsTarget.PRESENCE,
                 )
             }
         }
 
+        compose.onNodeWithTag("settings_target_highlight_PRESENCE", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithTag("settings_presence_picker", useUnmergedTree = true).assertIsDisplayed()
         compose
             .onNodeWithText("Automatically load remote media on unmetered networks")
             .performScrollTo()
