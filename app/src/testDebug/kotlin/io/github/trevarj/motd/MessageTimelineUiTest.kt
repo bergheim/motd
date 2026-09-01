@@ -23,6 +23,7 @@ import io.github.trevarj.motd.data.sync.InvitePayloadV1
 import io.github.trevarj.motd.data.sync.NetworkBatchPayloadV1
 import io.github.trevarj.motd.ui.chat.MessageList
 import io.github.trevarj.motd.ui.theme.MotdTheme
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
@@ -190,7 +191,7 @@ class MessageTimelineUiTest {
         compose.setContent {
             MotdTheme(dynamicColor = false) {
                 MessageList(
-                    items = pages.collectAsLazyPagingItems(),
+                    items = pages.collectAsLazyPagingItems(context = Dispatchers.Unconfined),
                     listState = rememberLazyListState(),
                     networkId = 1,
                     readMarkerTime = marker,
