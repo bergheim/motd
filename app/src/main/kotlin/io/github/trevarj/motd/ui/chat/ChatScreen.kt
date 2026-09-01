@@ -2967,6 +2967,7 @@ fun ChatContent(
             // Pass the whole target: the VM queues the react when target.msgid is still null (own
             // pending message) instead of silently dropping it.
             onReact = { emoji -> hideThen { onReact(target, emoji) } },
+            reactions = target.msgid?.let(reactionChips).orEmpty(),
             reactionEnabled = { emoji ->
                 val ready = state.connState as? IrcClientState.Ready
                 val mine =

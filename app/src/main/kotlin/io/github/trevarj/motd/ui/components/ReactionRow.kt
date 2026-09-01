@@ -53,11 +53,12 @@ import io.github.trevarj.motd.ui.theme.MotdMotion
 import io.github.trevarj.motd.ui.theme.MotdTheme
 import io.github.trevarj.motd.ui.theme.lottieFillColor
 
-/** One aggregated reaction: an emoji, its count, and whether the current user reacted. */
+/** One aggregated reaction, including the first-seen display spelling of each reactor nick. */
 data class ReactionChip(
     val emoji: String,
     val count: Int,
     val mine: Boolean,
+    val reactorDisplayNames: List<String> = emptyList(),
 )
 
 /**

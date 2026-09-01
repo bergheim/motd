@@ -1745,8 +1745,9 @@ internal class HistoryReadyRetryGate {
 }
 
 /**
- * Aggregate raw [ReactionEntity] rows into per-msgid chip lists: one chip per emoji with its count
- * and whether [myNick] is among the reactors. Ordered by first appearance for stability.
+ * Aggregate raw [ReactionEntity] rows into per-msgid chip lists: one chip per emoji with its count,
+ * ownership, and first-seen display spelling for each deduplicated reactor. Ordered by first
+ * appearance for stability.
  *
  * Ownership compares persisted actor keys. The authenticated account wins when known; otherwise
  * the supplied network rules produce the same casemapped nick key as EventProcessor.
@@ -1766,31 +1767,38 @@ fun aggregateReactions(
             }
         }
     val myNormalizedNick = myNick?.let(identityRules::normalize)
-    // msgid -> emoji -> (count, mine)
+    // msgid -> emoji -> aggregated ownership and display nicks
     val byMsg = LinkedHashMap<String, LinkedHashMap<String, MutableReactionAgg>>()
     for (r in reactions) {
         val emojiMap = byMsg.getOrPut(r.targetMsgid) { LinkedHashMap() }
         val agg = emojiMap.getOrPut(r.emoji) { MutableReactionAgg() }
+        val normalizedSender = identityRules.normalize(r.sender)
         // Account-tag availability can differ between live, push, and history copies of one event.
-        // Count its account and nick rows once by the actor spelling shown to the user.
-        if (agg.senders.add(identityRules.normalize(r.sender))) agg.count++
+        // Keep one first-seen display spelling for account/nick aliases of the same casemapped nick.
+        agg.reactorDisplayNames.putIfAbsent(normalizedSender, r.sender)
         if (
             r.actorKey in myActorKeys ||
             (
                 myAccount == null && myNormalizedNick != null &&
-                    identityRules.normalize(r.sender) == myNormalizedNick
+                    normalizedSender == myNormalizedNick
             )
         ) {
             agg.mine = true
         }
     }
     return byMsg.mapValues { (_, emojiMap) ->
-        emojiMap.map { (emoji, agg) -> ReactionChip(emoji, agg.count, agg.mine) }
+        emojiMap.map { (emoji, agg) ->
+            ReactionChip(
+                emoji = emoji,
+                count = agg.reactorDisplayNames.size,
+                mine = agg.mine,
+                reactorDisplayNames = agg.reactorDisplayNames.values.toList(),
+            )
+        }
     }
 }
 
 private class MutableReactionAgg(
-    var count: Int = 0,
     var mine: Boolean = false,
-    val senders: MutableSet<String> = mutableSetOf(),
+    val reactorDisplayNames: LinkedHashMap<String, String> = LinkedHashMap(),
 )

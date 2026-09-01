@@ -224,7 +224,24 @@ class ChatModelsTest {
             ).getValue("m1").single()
 
         assertEquals(1, chip.count)
+        assertEquals(listOf("Alice"), chip.reactorDisplayNames)
         assertTrue(chip.mine)
+    }
+
+    @Test fun `reactor display names use casemap dedupe and preserve first spelling`() {
+        val chip =
+            aggregateReactions(
+                listOf(
+                    react("m1", "Nick[]", "👍"),
+                    react("m1", "nick{}", "👍"),
+                    react("m1", "BOB", "👍"),
+                    react("m1", "bob", "👍"),
+                ),
+                myNick = "someoneElse",
+            ).getValue("m1").single()
+
+        assertEquals(2, chip.count)
+        assertEquals(listOf("Nick[]", "BOB"), chip.reactorDisplayNames)
     }
 
     @Test fun `counts aggregate per emoji preserving first-appearance order`() {

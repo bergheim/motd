@@ -520,6 +520,9 @@
     <string name="chat_action_share">Share</string>
     <string name="chat_action_share_chooser">Share message</string>
     <string name="chat_action_more_reactions">More reactions</string>
+    <string name="chat_action_tab_actions">Actions</string>
+    <string name="chat_action_tab_reactions">Reactions</string>
+    <string name="chat_reaction_reactors_description">%1$s reacted: %2$s</string>
     <string name="chat_action_delete_message">Delete message</string>
     <string name="chat_redaction_confirm_title">Delete this message?</string>
     <string name="chat_redaction_confirm_body">This asks the server to delete it for everyone. The server may refuse, and other clients may retain copies.</string>
