@@ -11,6 +11,7 @@ import android.graphics.Typeface
 import android.text.TextPaint
 import android.text.TextUtils
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.createBitmap
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.QRCodeWriter
@@ -58,7 +59,7 @@ fun brandedInviteQrBitmap(
 ): Bitmap {
     require(size > 0) { "QR size must be positive" }
     val height = (size * 1.18f).toInt()
-    val bitmap = Bitmap.createBitmap(size, height, Bitmap.Config.ARGB_8888)
+    val bitmap = createBitmap(size, height)
     val canvas = Canvas(bitmap)
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = accent }
     canvas.drawRoundRect(RectF(0f, 0f, size.toFloat(), height.toFloat()), size * 0.08f, size * 0.08f, paint)
