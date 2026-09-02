@@ -1,0 +1,2 @@
+- See who reacted to a message.
+- Agentwire sessions recover automatically when the live epoch changes.
