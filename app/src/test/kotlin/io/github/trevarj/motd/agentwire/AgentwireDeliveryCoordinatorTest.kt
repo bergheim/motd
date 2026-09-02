@@ -10,6 +10,7 @@ import io.github.trevarj.motd.irc.client.SequencedIrcEvent
 import io.github.trevarj.motd.irc.event.IrcEvent
 import io.github.trevarj.motd.irc.proto.IrcMessage
 import io.github.trevarj.motd.irc.proto.Isupport
+import io.github.trevarj.motd.irc.proto.Prefix
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -194,6 +195,60 @@ class AgentwireDeliveryCoordinatorTest {
         assertFalse(state.busy)
     }
 
+    @Test
+    fun `stale live epoch failure starts replacement sync`() {
+        val session = AgentwireSessionOrchestrator()
+        val state =
+            baseState().copy(
+                epoch = "epoch-old",
+                botAccount = "agent",
+                activeSid = "session-old",
+            )
+        val unrelated =
+            session.ingest(
+                state,
+                SequencedIrcEvent(
+                    1,
+                    inbound(
+                        event(
+                            "action.failed",
+                            "epoch-new",
+                            reply = "list-1",
+                            data = buildJsonObject { put("message", "ordinary failure") },
+                        ),
+                    ),
+                ),
+            )
+        assertTrue(unrelated is AgentwireDeliveryCoordinator.Result.Ignored)
+
+        val observed =
+            session.ingest(
+                state,
+                SequencedIrcEvent(
+                    2,
+                    inbound(
+                        event(
+                            "action.failed",
+                            "epoch-new",
+                            reply = "list-2",
+                            data =
+                                buildJsonObject {
+                                    put("message", "stale or missing live epoch")
+                                },
+                        ),
+                    ),
+                ),
+            )
+        assertTrue(observed.toString(), observed is AgentwireDeliveryCoordinator.Result.ResyncRequired)
+        val result = observed as AgentwireDeliveryCoordinator.Result.ResyncRequired
+
+        assertEquals(AgentwireResyncCause.EPOCH, result.cause)
+        assertEquals("Agentwire epoch changed; resynchronizing", result.reason)
+        assertTrue(session.awaitingSync)
+        assertEquals(null, result.state.epoch)
+        assertEquals(null, result.state.activeSid)
+    }
+
     private fun incompressibleText(): String = Base64.getEncoder().encodeToString(Random(0).nextBytes(10_000))
 
     private fun baseState() =
@@ -261,7 +316,14 @@ class AgentwireDeliveryCoordinatorTest {
     private fun inboundRaw(raw: String): IrcEvent =
         checkNotNull(
             EventMapper({ "me" }, { Isupport() }).map(
-                IrcMessage.parse("@account=agent;$AGENTWIRE_TAG=$raw :agent!u@h TAGMSG #codex"),
+                IrcMessage.parse(
+                    IrcMessage(
+                        tags = mapOf("account" to "agent", AGENTWIRE_TAG to raw),
+                        source = Prefix("agent", "u", "h"),
+                        command = "TAGMSG",
+                        params = listOf("#codex"),
+                    ).serialize(),
+                ),
             ),
         )
 }

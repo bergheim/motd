@@ -124,6 +124,7 @@ enum class AgentwireSyncTrigger(
     IDENTITY("identity"),
     RESYNC_GAP("resync_gap"),
     RESYNC_FRAGMENT("resync_fragment"),
+    RESYNC_EPOCH("resync_epoch"),
 }
 
 /** Why the coordinator abandoned the current epoch. */
@@ -132,6 +133,7 @@ enum class AgentwireResyncCause(
 ) {
     GAP("gap"),
     FRAGMENT_EXPIRY("fragment_expiry"),
+    EPOCH("epoch"),
 }
 
 /**

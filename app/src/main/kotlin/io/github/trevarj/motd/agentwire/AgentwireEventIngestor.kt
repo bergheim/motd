@@ -12,6 +12,10 @@ import io.github.trevarj.motd.irc.event.messageContextOrNull
 /** Envelope validation failures inside one handshake before it is called a protocol mismatch. */
 internal const val AGENTWIRE_PROTOCOL_FAILURE_LIMIT = 3
 
+private const val AGENTWIRE_STALE_EPOCH = "stale or missing live epoch"
+
+private fun AgentwireEnvelope.isStaleEpochFailure(): Boolean = kind == "action.failed" && data?.string("message") == AGENTWIRE_STALE_EPOCH
+
 internal fun acceptsAgentwireEpoch(
     envelope: AgentwireEnvelope,
     currentEpoch: String?,
@@ -127,9 +131,10 @@ internal class AgentwireEventIngestor(
             } else {
                 state
             }
-        // A correlated `action.failed` answers a request sent before any epoch existed, so it is
-        // epoch-exempt exactly like `agent.hello`.
-        val epochExempt = correlated && envelope.kind == "action.failed"
+        // A correlated sync failure and the bridge's explicit stale-epoch rejection must cross
+        // the epoch gate: the former has no live epoch, and the latter carries its replacement.
+        val epochExempt =
+            (correlated && envelope.kind == "action.failed") || envelope.isStaleEpochFailure()
         if (!epochExempt && !acceptsAgentwireEpoch(envelope, candidate.epoch)) {
             return Result.Ignored(IgnoreReason.EPOCH_MISMATCH)
         }
@@ -328,6 +333,14 @@ internal class AgentwireDeliveryCoordinator(
         result: AgentwireEventIngestor.Result.Applied,
     ): Result {
         val envelope = result.envelope
+        if (!awaitingSync && envelope.isStaleEpochFailure()) {
+            return resync(
+                result.state,
+                "Agentwire epoch changed; resynchronizing",
+                AgentwireResyncCause.EPOCH,
+                null,
+            )
+        }
         val correlated = envelope.reply != null && envelope.reply == syncId
         if (awaitingSync && envelope.kind == "action.failed" && correlated) {
             awaitingSync = false

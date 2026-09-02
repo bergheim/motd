@@ -643,6 +643,7 @@ class AgentwireViewModel
                     when (result.cause) {
                         AgentwireResyncCause.GAP -> AgentwireSyncTrigger.RESYNC_GAP
                         AgentwireResyncCause.FRAGMENT_EXPIRY -> AgentwireSyncTrigger.RESYNC_FRAGMENT
+                        AgentwireResyncCause.EPOCH -> AgentwireSyncTrigger.RESYNC_EPOCH
                     },
                 )
                 startSyncRetry()
