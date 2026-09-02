@@ -27,6 +27,7 @@ import io.github.trevarj.motd.data.db.MessageKind
 import io.github.trevarj.motd.data.db.SearchHit
 import io.github.trevarj.motd.ui.theme.LocalLottieMotionEnabled
 import io.github.trevarj.motd.ui.theme.MotdTheme
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import org.junit.Assert.assertEquals
@@ -100,7 +101,7 @@ class GlobalFeedScreenTest {
             CompositionLocalProvider(LocalLottieMotionEnabled provides false) {
                 MotdTheme(dynamicColor = false) {
                     GlobalFeedContent(
-                        rows = stream.collectAsLazyPagingItems(),
+                        rows = stream.collectAsLazyPagingItems(context = Dispatchers.Unconfined),
                         showNetwork = showNetwork(),
                         onOpenMessage = { bufferId, eventId, serverTime ->
                             opened = Triple(bufferId, eventId, serverTime)
