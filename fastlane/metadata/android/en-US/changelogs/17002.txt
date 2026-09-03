@@ -1,0 +1,1 @@
+- Fixed a crash when adding an IRC network with a server password.
