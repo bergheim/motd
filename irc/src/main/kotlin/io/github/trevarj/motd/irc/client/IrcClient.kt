@@ -1105,15 +1105,26 @@ class IrcClient(
         label: String,
         forceLegacy: Boolean = false,
         channelContext: String? = null,
+        clientTags: Map<String, String> = emptyMap(),
     ): Boolean {
         requireValidChatLabel(label)
         val t = transport ?: return false
-        val labelTag = label.takeIf { hasCap("labeled-response") }
+        val caps = ackedCaps.get()
+        val labelTag = label.takeIf { caps.any { it.substringBefore('=') == "labeled-response" } }
+        val isupport = _isupport.get()
+        val isupportMap = isupportToMap(isupport)
         val contextTag =
             channelContext?.takeIf {
-                !_isupport.get().isChannel(target) && _isupport.get().isChannel(it) &&
-                    canSendClientTag(ackedCaps.get(), isupportToMap(_isupport.get()), "+channel-context")
+                !isupport.isChannel(target) && isupport.isChannel(it) &&
+                    canSendClientTag(caps, isupportMap, "+channel-context")
             }
+        val requestedTags =
+            if (clientTags.isEmpty()) {
+                emptyMap()
+            } else {
+                clientTags.filter { (key) -> key.startsWith('+') && canSendClientTag(caps, isupportMap, key) }
+            }
+        val protocolTags = contextTag?.let { requestedTags + ("+channel-context" to it) } ?: requestedTags
         val plan =
             planChatMessage(
                 target = target,
@@ -1122,7 +1133,7 @@ class IrcClient(
                 label = labelTag,
                 multilineLimits = if (hasMultilineWireSupport() && !forceLegacy) multilineLimits else null,
                 forceLegacy = forceLegacy,
-                protocolTags = contextTag?.let { mapOf("+channel-context" to it) }.orEmpty(),
+                protocolTags = protocolTags,
             ) ?: return false
         // Do NOT register a correlator deferred: the labeled echo must flow through as a normal
         // self ChatMessage event (carrying label in ctx) so the app can dedup the pending row.

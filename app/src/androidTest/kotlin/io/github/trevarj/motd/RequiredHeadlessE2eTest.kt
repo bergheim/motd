@@ -32,6 +32,7 @@ import io.github.trevarj.motd.e2e.robots.OnboardingRobot
 import io.github.trevarj.motd.e2e.robots.SettingsRobot
 import io.github.trevarj.motd.e2e.robots.ThemeSheetRobot
 import io.github.trevarj.motd.e2e.robots.TimelineRobot
+import io.github.trevarj.motd.irc.event.IrcEvent
 import io.github.trevarj.motd.service.MotdNotifications
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -181,24 +182,43 @@ class RequiredHeadlessE2eTest {
         fixture.delete()
         assertTrue(fixture.createNewFile())
         try {
-            val upload =
+            val client = checkNotNull(bootstrap.seams.connections().clientFor(network.childId))
+            val (upload, echo) =
                 runBlocking {
-                    bootstrap.seams
-                        .voiceMessages()
-                        .send(
-                            VoiceSendRequest(
-                                bufferId = bufferId,
-                                file = fixture,
-                                durationMs = 1_000,
-                                mimeType = "audio/ogg",
-                                extension = ".ogg",
-                                sizeBytes = 0,
-                                encrypt = false,
-                            ),
-                        ).filterIsInstance<VoiceSendProgress.Complete>()
-                        .first()
+                    coroutineScope {
+                        val echoed =
+                            async(start = CoroutineStart.UNDISPATCHED) {
+                                client.broadcastEvents
+                                    .filterIsInstance<IrcEvent.ChatMessage>()
+                                    .first {
+                                        it.isSelf &&
+                                            it.ctx.clientTags["+trevarj.github.io/audio"] == "1"
+                                    }
+                            }
+                        val uploaded =
+                            bootstrap.seams
+                                .voiceMessages()
+                                .send(
+                                    VoiceSendRequest(
+                                        bufferId = bufferId,
+                                        file = fixture,
+                                        durationMs = 1_000,
+                                        mimeType = "audio/ogg",
+                                        extension = ".ogg",
+                                        sizeBytes = 0,
+                                        encrypt = false,
+                                    ),
+                                ).filterIsInstance<VoiceSendProgress.Complete>()
+                                .first()
+                        uploaded to echoed.await()
+                    }
                 }
+            val expectedBody = "[voice 0:01 audio/ogg] ${upload.url}"
+            assertEquals("1", echo.ctx.clientTags["+trevarj.github.io/audio"])
+            assertEquals(expectedBody, echo.text)
+            assertTrue("expires=" !in echo.text)
             val voice = runBlocking { probe.awaitCanonicalContaining("voice", upload.url, bufferId) }
+            assertEquals(echo.text, voice.text)
             // This is the journey's historically opaque failure: the row is provably in Room, yet
             // the timeline neither composes it nor resolves its Paging key. Snapshot the presented
             // list, the key map, Room, and the history window on both outcomes so the next run

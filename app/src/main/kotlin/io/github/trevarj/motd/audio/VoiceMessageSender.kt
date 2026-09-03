@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.onEach
 import java.io.File
 import java.io.IOException
 import java.nio.charset.StandardCharsets
+import java.time.Instant
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -152,7 +153,7 @@ class VoiceMessageSenderImpl
                 (result as? UploadProgress.Complete)?.record
                     ?: throw VoiceSendException("Upload did not complete.")
             attachmentPrefs.addUpload(record)
-            return VoiceUploadRecord(record.url, voiceExpiryFor(selected))
+            return VoiceUploadRecord(record.url, voiceExpiryFor(selected, record.uploadedAt))
         }
 
         private data class VoiceUploadRecord(
@@ -191,15 +192,6 @@ class VoiceMessageSenderImpl
                 append(url)
             }
 
-        private fun voiceExpiryFor(config: PasteBackendConfig): String? =
-            when (config.backend.name) {
-                "UGUU" -> "3h"
-                "LITTERBOX" -> config.litterboxExpiry
-                "CRAFTERBIN", "ZERO_X_ZERO", "CUSTOM_0X0" -> config.expiry
-                "X0_AT" -> "3-100d"
-                else -> null
-            }
-
         private fun wireBytes(
             target: String,
             text: String,
@@ -209,6 +201,37 @@ class VoiceMessageSenderImpl
             const val MAX_IRC_WIRE_BYTES = 480
         }
     }
+
+internal fun voiceExpiryFor(
+    config: PasteBackendConfig,
+    uploadedAt: Long,
+): String? {
+    val hours =
+        when (config.backend) {
+            AttachmentBackend.UGUU -> {
+                3L
+            }
+
+            AttachmentBackend.LITTERBOX -> {
+                when (config.litterboxExpiry) {
+                    "1h" -> 1L
+                    "12h" -> 12L
+                    "24h" -> 24L
+                    "72h" -> 72L
+                    else -> null
+                }
+            }
+
+            else -> {
+                null
+            }
+        } ?: return null
+    return try {
+        Instant.ofEpochMilli(Math.addExact(uploadedAt, Math.multiplyExact(hours, 3_600_000L))).toString()
+    } catch (_: ArithmeticException) {
+        null
+    }
+}
 
 class VoiceSendException(
     message: String,

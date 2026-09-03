@@ -13,6 +13,7 @@ import io.github.trevarj.motd.irc.event.IrcEvent
 import io.github.trevarj.motd.irc.event.MessageContext
 import io.github.trevarj.motd.irc.event.ServerTimeSource
 import io.github.trevarj.motd.irc.proto.Prefix
+import io.github.trevarj.motd.service.outgoingClientTags
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -791,6 +792,47 @@ class EchoFlowTest {
             assertEquals(eventId, confirmed.id)
             assertEquals("late-msgid", confirmed.msgid)
             assertNull(confirmed.pendingLabel)
+        }
+
+    @Test
+    fun retryRebuildsAudioMarkerFromCanonicalBody() =
+        runTest {
+            val body = "[voice 0:01 audio/ogg] https://files.example/voice.ogg"
+            val plan =
+                OutgoingEventPlan(
+                    label = "motd-audio-old",
+                    text = body,
+                    kind = MessageKind.PRIVMSG,
+                    ircFormattedText = body,
+                )
+            val durable =
+                processor
+                    .persistOutgoingPlan(
+                        bufferId = bufferId,
+                        sender = "me",
+                        events = listOf(plan),
+                        replyToEventId = null,
+                        replyToMsgid = null,
+                    ).single()
+            val marker = mapOf("+trevarj.github.io/audio" to "1")
+
+            assertEquals(marker, outgoingClientTags(plan.kind, plan.ircFormattedText ?: plan.text))
+            processor.failPendingEvents(listOf(durable.eventId))
+            val retry = checkNotNull(processor.beginRetry(durable.eventId, "motd-audio-new"))
+            val retryBody = retry.ircFormattedText ?: retry.text
+
+            assertEquals(durable.eventId, retry.id)
+            assertEquals(body, retryBody)
+            assertEquals(MessageKind.PRIVMSG, retry.kind)
+            assertEquals(marker, outgoingClientTags(retry.kind, retryBody))
+            assertEquals(
+                emptyMap<String, String>(),
+                outgoingClientTags(
+                    MessageKind.PRIVMSG,
+                    "[voice 0:01 audio/ogg expires=72h] https://files.example/voice.ogg",
+                ),
+            )
+            assertEquals(emptyMap<String, String>(), outgoingClientTags(MessageKind.ACTION, body))
         }
 
     @Test

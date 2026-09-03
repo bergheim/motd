@@ -21,18 +21,64 @@ class AudioModelsTest {
         assertEquals("audio/ogg", attachments[1].mimeType)
     }
 
-    @Test fun parsesVoiceFallbackMetadata() {
-        val attachment =
-            parseAudioAttachments(
-                "[voice encrypted 1:02 audio/ogg expires=72h] https://files.example/voice.motdvoice#motd-key=abc",
-            ).single()
+    @Test fun parsesCanonicalVoiceFallbackMetadata() {
+        assertEquals(
+            listOf(0L, 3_599_000L, 3_600_000L),
+            listOf("0:00", "59:59", "1:00:00").map(::parseAudioDuration),
+        )
 
+        val waveform = AudioWaveform.fromAmplitudes(List(96) { it * 100 })
+        val url =
+            appendAudioWaveform(
+                "https://files.example/voice.motdvoice#motd-key=abc",
+                waveform,
+            )
+        val text = "[voice encrypted 1:00:00 audio/ogg expires=2026-08-28T12:00:00.123Z] $url"
+        val attachment = parseAudioAttachments(text).single()
+
+        assertTrue(isCanonicalVoiceFallback(text))
         assertTrue(attachment.voice)
         assertTrue(attachment.encrypted)
-        assertEquals(62_000L, attachment.durationMs)
+        assertEquals(3_600_000L, attachment.durationMs)
         assertEquals("audio/ogg", attachment.mimeType)
-        assertEquals("72h", attachment.expiry)
+        assertEquals("2026-08-28T12:00:00.123Z", attachment.expiry)
+        assertEquals(url, attachment.url)
+        assertEquals(waveform, attachment.waveform)
         assertEquals("Voice message", attachment.title)
+    }
+
+    @Test fun keepsLegacyVoiceExpiryReadable() {
+        listOf("72h", "3-100d").forEach { expiry ->
+            val text = "[VOICE  0:01 audio/ogg expires=$expiry]  http://files.example/voice.ogg"
+            val attachment = parseAudioAttachments(text).single()
+
+            assertTrue(attachment.voice)
+            assertEquals(expiry, attachment.expiry)
+            assertFalse(isCanonicalVoiceFallback(text))
+        }
+    }
+
+    @Test fun rejectsMalformedVoiceFallbackMetadata() {
+        val malformed =
+            listOf(
+                "1:99 audio/ogg",
+                "1:2 audio/ogg",
+                "7 audio/ogg",
+                "0:59:59 audio/ogg",
+                "60:00 audio/ogg",
+                "1:no:02 audio/ogg",
+                "9223372036854775808:00 audio/ogg",
+                "2562047788016:00:00 audio/ogg",
+                "1:02 audio/ogg;",
+                "1:02 audio/",
+                "1:02 text/plain",
+            ).map { metadata -> "[voice $metadata] https://files.example/voice.ogg" }
+
+        malformed.forEach { text ->
+            assertFalse(isCanonicalVoiceFallback(text))
+            assertFalse(parseAudioAttachments(text).single().voice)
+        }
+        assertFalse(isCanonicalVoiceFallback("before [voice 0:01 audio/ogg] https://files.example/voice.ogg"))
     }
 
     @Test fun hidesPureVoiceFallbackText() {

@@ -7,6 +7,9 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.room.withTransaction
 import dagger.hilt.android.qualifiers.ApplicationContext
+import io.github.trevarj.motd.audio.AUDIO_MESSAGE_TAG
+import io.github.trevarj.motd.audio.AUDIO_MESSAGE_TAG_VERSION
+import io.github.trevarj.motd.audio.isCanonicalVoiceFallback
 import io.github.trevarj.motd.avatar.AvatarCoordinator
 import io.github.trevarj.motd.bouncer.isBouncerConsole
 import io.github.trevarj.motd.bouncer.redactBouncerServCommand
@@ -110,6 +113,16 @@ internal data class OutgoingMessageChunk(
     val kind: MessageKind,
     val ircFormattedText: String? = null,
 )
+
+internal fun outgoingClientTags(
+    kind: MessageKind,
+    wireText: String,
+): Map<String, String> =
+    if (kind == MessageKind.PRIVMSG && isCanonicalVoiceFallback(wireText)) {
+        mapOf(AUDIO_MESSAGE_TAG to AUDIO_MESSAGE_TAG_VERSION)
+    } else {
+        emptyMap()
+    }
 
 /**
  * Convert composer text into safe, independently sendable IRC payloads.
@@ -2501,12 +2514,13 @@ class ConnectionManagerImpl
                     val item = planned[index]
                     if (
                         client.sendMessage(
-                            buffer.ircTarget,
-                            item.chunk.wireText,
-                            replyToMsgid,
-                            item.label,
-                            forceLegacy,
-                            channelContext,
+                            target = buffer.ircTarget,
+                            text = item.chunk.wireText,
+                            replyToMsgid = replyToMsgid,
+                            label = item.label,
+                            forceLegacy = forceLegacy,
+                            channelContext = channelContext,
+                            clientTags = outgoingClientTags(item.chunk.kind, item.chunk.wireText),
                         )
                     ) {
                         ImmediateWireAcceptance.ACCEPTED

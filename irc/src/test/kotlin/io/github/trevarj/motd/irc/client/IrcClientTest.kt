@@ -6,6 +6,7 @@ import io.github.trevarj.motd.irc.event.ServerTimeSource
 import io.github.trevarj.motd.irc.ext.SearchRequest
 import io.github.trevarj.motd.irc.ext.SearchResultKind
 import io.github.trevarj.motd.irc.ext.SearchResultMessage
+import io.github.trevarj.motd.irc.proto.IrcMessage
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -471,6 +472,39 @@ class IrcClientTest {
             assertTrue(chat.isSelf)
             assertEquals(label, chat.ctx.label)
             assertEquals("abc", chat.ctx.msgid)
+        }
+
+    @Test
+    fun clientTagsRespectNegotiationAndClientTagDeny() =
+        runTest {
+            val body = "[voice 0:01 audio/ogg] https://files.example/voice.ogg"
+            val marker = mapOf("+trevarj.github.io/audio" to "1")
+            val label = "motd-audio"
+
+            val allowedTransport = FakeTransport()
+            val allowed = registered(allowedTransport)
+            assertTrue(allowed.sendMessage("#chan", body, null, label, clientTags = marker))
+
+            val deniedTransport = FakeTransport()
+            val denied = registered(deniedTransport)
+            deniedTransport.feed(":srv 005 motd CLIENTTAGDENY=trevarj.github.io/audio :are supported")
+            runCurrent()
+            assertTrue(denied.sendMessage("#chan", body, null, label, clientTags = marker))
+
+            val noTagsTransport = FakeTransport()
+            val noTags = registeredWithCaps(noTagsTransport, fullLs.replace("message-tags ", ""))
+            assertTrue(noTags.sendMessage("#chan", body, null, label, clientTags = marker))
+            runCurrent()
+
+            val messages =
+                listOf(allowedTransport, deniedTransport, noTagsTransport).map { transport ->
+                    IrcMessage.parse(transport.sent.last { it.contains("PRIVMSG #chan") })
+                }
+            assertEquals("1", messages[0].tags["+trevarj.github.io/audio"])
+            assertFalse("+trevarj.github.io/audio" in messages[1].tags)
+            assertFalse("+trevarj.github.io/audio" in messages[2].tags)
+            assertEquals(List(3) { label }, messages.map { it.tags["label"] })
+            assertEquals(List(3) { listOf("#chan", body) }, messages.map(IrcMessage::params))
         }
 
     @Test
