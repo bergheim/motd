@@ -109,5 +109,5 @@ internal fun networkIdentityKey(n: NetworkEntity): String =
 /** Extract a relay's `network` or `user/network` selector without retaining its password. */
 private fun serverPasswordSelector(password: String): String? {
     val colon = password.indexOf(':')
-    return password.substring(0, colon).takeIf { colon > 0 }
+    return if (colon > 0) password.substring(0, colon) else null
 }

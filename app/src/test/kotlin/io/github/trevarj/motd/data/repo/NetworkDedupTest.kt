@@ -249,6 +249,20 @@ class NetworkDedupTest {
         }
 
     @Test
+    fun `plain server password does not crash or affect identity`() =
+        runBlocking {
+            val dao = InMemoryNetworkDao()
+            val repo = NetworkRepositoryImpl(dao)
+            val seed = direct("irc.example.org").copy(serverPassword = "old-secret")
+            val first = repo.addNetwork(seed)
+            val second = repo.addNetwork(seed.copy(serverPassword = "new-secret"))
+            assertEquals(first, second)
+            assertEquals(1, dao.rows.size)
+            repo.addNetwork(direct("irc.other.org"))
+            assertEquals(2, dao.rows.size)
+        }
+
+    @Test
     fun `different WeeChat relay selectors on one endpoint stay distinct`() =
         runBlocking {
             val dao = InMemoryNetworkDao()
