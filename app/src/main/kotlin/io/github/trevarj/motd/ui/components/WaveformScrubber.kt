@@ -1,8 +1,5 @@
 package io.github.trevarj.motd.ui.components
 
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -10,7 +7,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Path
@@ -25,9 +21,6 @@ import androidx.compose.ui.unit.dp
 import io.github.trevarj.motd.audio.AudioWaveform
 
 private const val WAVEFORM_SAMPLE_COUNT = 48
-private const val WAVE_CYCLE_DURATION_MILLIS = 1_400
-private const val WAVE_CYCLES = 1.5f
-private const val WAVE_TRAVEL = 0.12f
 
 /** Compact audio timeline used by both received audio and staged voice-message previews. */
 @Composable
@@ -39,7 +32,6 @@ fun WaveformScrubber(
     enabled: Boolean,
     modifier: Modifier = Modifier,
     waveform: AudioWaveform? = null,
-    playing: Boolean = false,
 ) {
     val fraction = value.coerceIn(0f, 1f)
     val samples =
@@ -52,27 +44,11 @@ fun WaveformScrubber(
                     ?: waveformBars(seed, WAVEFORM_SAMPLE_COUNT),
             )
         }
-    val waveProgress = remember { Animatable(0f) }
     val ribbonPath = remember { Path() }
     val sampleHeights = remember(samples.size) { FloatArray(samples.size) }
-    val sampleOffsets = remember(samples.size) { FloatArray(samples.size) }
     val playedColor = MaterialTheme.colorScheme.tertiary
     val remainingColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.24f)
     val disabledColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
-
-    LaunchedEffect(playing) {
-        if (!playing) {
-            waveProgress.snapTo(0f)
-            return@LaunchedEffect
-        }
-        while (true) {
-            waveProgress.snapTo(0f)
-            waveProgress.animateTo(
-                targetValue = 1f,
-                animationSpec = tween(durationMillis = WAVE_CYCLE_DURATION_MILLIS, easing = LinearEasing),
-            )
-        }
-    }
 
     Canvas(
         modifier =
@@ -114,32 +90,19 @@ fun WaveformScrubber(
 
         val centerY = size.height / 2f
         val maximumHalfHeight = (centerY - 4.dp.toPx()).coerceAtLeast(0f)
-        val maximumTravel = maximumHalfHeight * WAVE_TRAVEL
         val lastIndex = samples.lastIndex
-        val phase = waveProgress.value * (Math.PI * 2.0)
 
         samples.forEachIndexed { index, sample ->
-            val xFraction = index.toFloat() / lastIndex
             sampleHeights[index] = maximumHalfHeight * sample
-            sampleOffsets[index] =
-                if (playing) {
-                    (
-                        kotlin.math.sin(
-                            xFraction * Math.PI * 2.0 * WAVE_CYCLES - phase,
-                        ) * maximumTravel
-                    ).toFloat()
-                } else {
-                    0f
-                }
         }
 
         ribbonPath.reset()
         var previousX = 0f
-        var previousY = centerY + sampleOffsets[0] - sampleHeights[0]
+        var previousY = centerY - sampleHeights[0]
         ribbonPath.moveTo(previousX, previousY)
         for (index in 1..lastIndex) {
             val x = size.width * index / lastIndex
-            val y = centerY + sampleOffsets[index] - sampleHeights[index]
+            val y = centerY - sampleHeights[index]
             val controlOffset = (x - previousX) / 2f
             ribbonPath.cubicTo(
                 previousX + controlOffset,
@@ -153,11 +116,11 @@ fun WaveformScrubber(
             previousY = y
         }
         previousX = size.width
-        previousY = centerY + sampleOffsets[lastIndex] + sampleHeights[lastIndex]
+        previousY = centerY + sampleHeights[lastIndex]
         ribbonPath.lineTo(previousX, previousY)
         for (index in (lastIndex - 1) downTo 0) {
             val x = size.width * index / lastIndex
-            val y = centerY + sampleOffsets[index] + sampleHeights[index]
+            val y = centerY + sampleHeights[index]
             val controlOffset = (previousX - x) / 2f
             ribbonPath.cubicTo(
                 previousX - controlOffset,

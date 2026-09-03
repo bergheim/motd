@@ -300,7 +300,6 @@ private fun AudioAttachmentPlayer(
                     seed = attachment.playbackId,
                     enabled = active && !loading && error == null && duration != null && duration > 0,
                     waveform = waveform,
-                    playing = playing,
                     modifier = Modifier.testTag("audio_player_scrubber"),
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {

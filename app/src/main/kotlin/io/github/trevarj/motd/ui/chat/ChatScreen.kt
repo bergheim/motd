@@ -3902,7 +3902,6 @@ internal fun VoiceComposerPanel(
                         seed = preview.playbackId,
                         enabled = progress == null && previewActive && !playbackState.loading,
                         waveform = staged.waveform,
-                        playing = previewPlaying,
                         modifier = Modifier.fillMaxWidth().testTag("voice_preview_scrubber"),
                     )
                     Row(verticalAlignment = Alignment.CenterVertically) {

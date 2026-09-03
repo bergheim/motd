@@ -1,9 +1,6 @@
 package io.github.trevarj.motd.ui.components
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -34,15 +31,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.semantics.ProgressBarRangeInfo
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.progressBarRangeInfo
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -71,10 +60,6 @@ fun AudioMiniPlayer(
     var showDetails by remember(state.activeId) { mutableStateOf(false) }
     val duration = state.durationMs ?: attachment.durationMs
     val played = duration?.takeIf { it > 0 }?.let { state.positionMs.toFloat() / it } ?: 0f
-    val buffered =
-        state.loadingFraction
-            ?: duration?.takeIf { it > 0 }?.let { state.bufferedMs.toFloat() / it }
-            ?: 0f
     val originLabel = state.origin?.contextLabel(state.networkName, includeNetwork)
     val context =
         if (attachment.voice) {
@@ -157,11 +142,13 @@ fun AudioMiniPlayer(
                 overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.width(6.dp))
-            BufferedProgressScrubber(
-                played = played,
-                buffered = buffered,
+            WaveformScrubber(
+                value = played,
+                onValueChange = { fraction -> duration?.let { onSeek((fraction * it).toLong()) } },
+                onValueChangeFinished = {},
+                seed = attachment.playbackId,
                 enabled = duration != null && duration > 0 && !state.loading,
-                onSeek = { fraction -> duration?.let { onSeek((fraction * it).toLong()) } },
+                waveform = state.waveform,
                 modifier = Modifier.width(64.dp).testTag("audio_mini_scrubber"),
             )
             Spacer(Modifier.width(6.dp))
@@ -209,58 +196,6 @@ fun AudioMiniPlayer(
                 origin = state.origin,
             )
         }
-    }
-}
-
-@Composable
-private fun BufferedProgressScrubber(
-    played: Float,
-    buffered: Float,
-    enabled: Boolean,
-    onSeek: (Float) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val playedFraction = played.coerceIn(0f, 1f)
-    val bufferedFraction = buffered.coerceIn(playedFraction, 1f)
-    val remainingColor = MaterialTheme.colorScheme.outlineVariant
-    val bufferedColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.45f)
-    val playedColor = MaterialTheme.colorScheme.primary
-    Canvas(
-        modifier =
-            modifier
-                .height(MINI_PLAYER_HEIGHT)
-                .semantics {
-                    contentDescription = "Audio position"
-                    progressBarRangeInfo = ProgressBarRangeInfo(playedFraction, 0f..1f)
-                    setProgress { target ->
-                        if (!enabled) return@setProgress false
-                        onSeek(target.coerceIn(0f, 1f))
-                        true
-                    }
-                }.pointerInput(enabled) {
-                    if (!enabled) return@pointerInput
-                    awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
-
-                        fun update(x: Float) = onSeek((x / size.width.coerceAtLeast(1)).coerceIn(0f, 1f))
-                        update(down.position.x)
-                        down.consume()
-                        while (true) {
-                            val event = awaitPointerEvent()
-                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                            update(change.position.x)
-                            val pressed = change.pressed
-                            change.consume()
-                            if (!pressed) break
-                        }
-                    }
-                },
-    ) {
-        val y = size.height / 2f
-        val trackWidth = 4.dp.toPx()
-        drawLine(remainingColor, Offset.Zero.copy(y = y), Offset(size.width, y), trackWidth, StrokeCap.Round)
-        drawLine(bufferedColor, Offset.Zero.copy(y = y), Offset(size.width * bufferedFraction, y), trackWidth, StrokeCap.Round)
-        drawLine(playedColor, Offset.Zero.copy(y = y), Offset(size.width * playedFraction, y), trackWidth, StrokeCap.Round)
     }
 }
 
