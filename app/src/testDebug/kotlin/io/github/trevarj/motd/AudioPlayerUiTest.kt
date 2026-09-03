@@ -89,6 +89,27 @@ class AudioPlayerUiTest {
         compose.onNodeWithText("12:34 PM").assertIsDisplayed()
     }
 
+    @Test fun voice_audio_player_remains_compact() {
+        val attachment = audio().copy(voice = true, durationMs = 60_000)
+        compose.setContent {
+            MotdTheme(dynamicColor = false) {
+                AudioAttachmentPlayers(
+                    attachments = listOf(attachment),
+                    playbackState = AudioPlaybackState(),
+                    cacheStatuses = mapOf(attachment.playbackId to AudioCacheStatus.CACHED),
+                    networkId = null,
+                    isSelf = false,
+                    onToggle = { _, _ -> },
+                    onSeek = { _, _ -> },
+                )
+            }
+        }
+
+        val bounds = compose.onNodeWithTag("audio_player").getUnclippedBoundsInRoot()
+        val height = bounds.bottom - bounds.top
+        assertTrue("voice player height was $height", height <= 84.dp)
+    }
+
     @Test fun mini_player_scrubber_uses_the_full_player_height() {
         val attachment = audio()
         compose.setContent {
@@ -147,7 +168,6 @@ class AudioPlayerUiTest {
             }
         }
 
-        compose.onNodeWithText("Voice message").assertIsDisplayed()
         compose.onAllNodesWithTag("audio_speed").assertCountEquals(0)
         compose.onNodeWithTag("audio_mini_speed").assertIsDisplayed().performClick()
         compose.runOnIdle { assertTrue(requestedSpeed == 1.5f) }

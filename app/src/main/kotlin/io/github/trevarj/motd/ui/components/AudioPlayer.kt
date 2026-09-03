@@ -210,7 +210,7 @@ private fun AudioAttachmentPlayer(
         tonalElevation = 1.dp,
     ) {
         Row(
-            Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(
@@ -279,13 +279,15 @@ private fun AudioAttachmentPlayer(
                 modifier = Modifier.weight(1f).padding(start = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Text(
-                    text = if (attachment.voice) "Voice message" else attachment.title,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
+                if (!attachment.voice) {
+                    Text(
+                        text = attachment.title,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
                 val scrubDuration = (duration ?: 1L).coerceAtLeast(1L)
                 WaveformScrubber(
                     value = (scrubValue / scrubDuration).coerceIn(0f, 1f),
