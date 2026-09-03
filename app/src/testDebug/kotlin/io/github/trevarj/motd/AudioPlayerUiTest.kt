@@ -147,6 +147,7 @@ class AudioPlayerUiTest {
             }
         }
 
+        compose.onNodeWithText("Voice message").assertIsDisplayed()
         compose.onAllNodesWithTag("audio_speed").assertCountEquals(0)
         compose.onNodeWithTag("audio_mini_speed").assertIsDisplayed().performClick()
         compose.runOnIdle { assertTrue(requestedSpeed == 1.5f) }

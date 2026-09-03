@@ -1,5 +1,8 @@
 package io.github.trevarj.motd.ui.components
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -7,10 +10,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.contentDescription
@@ -20,7 +24,10 @@ import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.unit.dp
 import io.github.trevarj.motd.audio.AudioWaveform
 
-private const val WAVEFORM_BAR_COUNT = 48
+private const val WAVEFORM_SAMPLE_COUNT = 48
+private const val WAVE_CYCLE_DURATION_MILLIS = 1_400
+private const val WAVE_CYCLES = 1.5f
+private const val WAVE_TRAVEL = 0.12f
 
 /** Compact audio timeline used by both received audio and staged voice-message previews. */
 @Composable
@@ -31,20 +38,41 @@ fun WaveformScrubber(
     seed: String,
     enabled: Boolean,
     modifier: Modifier = Modifier,
-    bufferedValue: Float = 0f,
     waveform: AudioWaveform? = null,
+    playing: Boolean = false,
 ) {
     val fraction = value.coerceIn(0f, 1f)
-    val bufferedFraction = bufferedValue.coerceIn(fraction, 1f)
-    val bars =
+    val samples =
         remember(seed, waveform) {
-            waveform?.normalized?.resampleBars(WAVEFORM_BAR_COUNT)
-                ?: waveformBars(seed, WAVEFORM_BAR_COUNT)
+            normalizeWaveformHeights(
+                waveform
+                    ?.normalized
+                    ?.takeIf { it.isNotEmpty() }
+                    ?.resampleBars(WAVEFORM_SAMPLE_COUNT)
+                    ?: waveformBars(seed, WAVEFORM_SAMPLE_COUNT),
+            )
         }
-    val playedColor = MaterialTheme.colorScheme.primary
-    val bufferedColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.45f)
-    val remainingColor = MaterialTheme.colorScheme.outlineVariant
+    val waveProgress = remember { Animatable(0f) }
+    val ribbonPath = remember { Path() }
+    val sampleHeights = remember(samples.size) { FloatArray(samples.size) }
+    val sampleOffsets = remember(samples.size) { FloatArray(samples.size) }
+    val playedColor = MaterialTheme.colorScheme.tertiary
+    val remainingColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.24f)
     val disabledColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
+
+    LaunchedEffect(playing) {
+        if (!playing) {
+            waveProgress.snapTo(0f)
+            return@LaunchedEffect
+        }
+        while (true) {
+            waveProgress.snapTo(0f)
+            waveProgress.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(durationMillis = WAVE_CYCLE_DURATION_MILLIS, easing = LinearEasing),
+            )
+        }
+    }
 
     Canvas(
         modifier =
@@ -82,27 +110,80 @@ fun WaveformScrubber(
                     }
                 },
     ) {
-        val step = size.width / bars.size
-        val strokeWidth = (step * 0.5f).coerceAtLeast(2f)
-        bars.forEachIndexed { index, heightFraction ->
-            val x = step * (index + 0.5f)
-            val barHeight = size.height * heightFraction
-            val color =
-                when {
-                    !enabled -> disabledColor
-                    x / size.width <= fraction -> playedColor
-                    x / size.width <= bufferedFraction -> bufferedColor
-                    else -> remainingColor
+        if (samples.size < 2 || size.width <= 0f || size.height <= 0f) return@Canvas
+
+        val centerY = size.height / 2f
+        val maximumHalfHeight = (centerY - 4.dp.toPx()).coerceAtLeast(0f)
+        val maximumTravel = maximumHalfHeight * WAVE_TRAVEL
+        val lastIndex = samples.lastIndex
+        val phase = waveProgress.value * (Math.PI * 2.0)
+
+        samples.forEachIndexed { index, sample ->
+            val xFraction = index.toFloat() / lastIndex
+            sampleHeights[index] = maximumHalfHeight * sample
+            sampleOffsets[index] =
+                if (playing) {
+                    (
+                        kotlin.math.sin(
+                            xFraction * Math.PI * 2.0 * WAVE_CYCLES - phase,
+                        ) * maximumTravel
+                    ).toFloat()
+                } else {
+                    0f
                 }
-            drawLine(
-                color = color,
-                start = Offset(x, (size.height - barHeight) / 2f),
-                end = Offset(x, (size.height + barHeight) / 2f),
-                strokeWidth = strokeWidth,
-                cap = StrokeCap.Round,
+        }
+
+        ribbonPath.reset()
+        var previousX = 0f
+        var previousY = centerY + sampleOffsets[0] - sampleHeights[0]
+        ribbonPath.moveTo(previousX, previousY)
+        for (index in 1..lastIndex) {
+            val x = size.width * index / lastIndex
+            val y = centerY + sampleOffsets[index] - sampleHeights[index]
+            val controlOffset = (x - previousX) / 2f
+            ribbonPath.cubicTo(
+                previousX + controlOffset,
+                previousY,
+                x - controlOffset,
+                y,
+                x,
+                y,
             )
+            previousX = x
+            previousY = y
+        }
+        previousX = size.width
+        previousY = centerY + sampleOffsets[lastIndex] + sampleHeights[lastIndex]
+        ribbonPath.lineTo(previousX, previousY)
+        for (index in (lastIndex - 1) downTo 0) {
+            val x = size.width * index / lastIndex
+            val y = centerY + sampleOffsets[index] + sampleHeights[index]
+            val controlOffset = (previousX - x) / 2f
+            ribbonPath.cubicTo(
+                previousX - controlOffset,
+                previousY,
+                x + controlOffset,
+                y,
+                x,
+                y,
+            )
+            previousX = x
+            previousY = y
+        }
+        ribbonPath.close()
+
+        drawPath(ribbonPath, if (enabled) remainingColor else disabledColor)
+        if (enabled && fraction > 0f) {
+            clipRect(right = size.width * fraction) {
+                drawPath(ribbonPath, playedColor)
+            }
         }
     }
+}
+
+internal fun normalizeWaveformHeights(samples: List<Float>): List<Float> {
+    val maximum = samples.maxOrNull()?.takeIf { it > 0f } ?: return samples
+    return samples.map { (it / maximum).coerceIn(0.08f, 1f) }
 }
 
 internal fun List<Float>.resampleBars(count: Int): List<Float> {

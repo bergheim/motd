@@ -26,6 +26,15 @@ class WaveformScrubberTest {
     }
 
     @Test
+    fun `waveform heights zoom to the available range`() {
+        assertEquals(
+            listOf(0.25f, 0.5f, 1f),
+            normalizeWaveformHeights(listOf(1f, 2f, 4f)),
+        )
+        assertEquals(emptyList<Float>(), normalizeWaveformHeights(emptyList()))
+    }
+
+    @Test
     fun `voice speed cycles through compact player options`() {
         assertEquals(1.5f, nextVoiceSpeed(1f))
         assertEquals(2f, nextVoiceSpeed(1.5f))

@@ -23,7 +23,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.filled.ExpandMore
@@ -69,6 +68,8 @@ import io.github.trevarj.motd.audio.AudioWaveform
 import io.github.trevarj.motd.audio.formatAudioDuration
 import io.github.trevarj.motd.ui.chat.formatBytes
 import io.github.trevarj.motd.ui.theme.MotdMotion
+import io.github.trevarj.motd.ui.theme.MotdShapes
+import io.github.trevarj.motd.ui.theme.MotdSizes
 import io.github.trevarj.motd.ui.theme.SheetSystemBars
 
 private const val MAX_COLLAPSED_AUDIO_PLAYERS = 3
@@ -131,8 +132,8 @@ fun AudioAttachmentPlayers(
                         onLongPress = onLongPress,
                         modifier =
                             Modifier
-                                .fillMaxWidth(0.60f)
-                                .widthIn(max = 216.dp)
+                                .fillMaxWidth(0.82f)
+                                .widthIn(max = 320.dp)
                                 .testTag("audio_player"),
                     )
                 }
@@ -178,13 +179,6 @@ private fun AudioAttachmentPlayer(
     val needsDownload = !active && cacheStatus != AudioCacheStatus.CACHED
     val duration = (if (active) playbackState.durationMs else attachment.durationMs) ?: attachment.durationMs
     val position = if (active) playbackState.positionMs else 0L
-    val bufferedFraction =
-        if (active && duration != null && duration > 0) {
-            playbackState.loadingFraction
-                ?: (playbackState.bufferedMs.toFloat() / duration).coerceIn(0f, 1f)
-        } else {
-            0f
-        }
     // Do not replace the rendered peaks when playback starts or when analysis completes. The
     // seeded fallback is deterministic, and a newly available waveform is picked up next time
     // this message enters composition.
@@ -211,22 +205,22 @@ private fun AudioAttachmentPlayer(
                 onClick = {},
                 onLongClick = onLongPress ?: { showDetails = true },
             ),
-        shape = RoundedCornerShape(8.dp),
+        shape = MotdShapes.card,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         tonalElevation = 1.dp,
     ) {
         Row(
-            Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.Top,
+            Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(
                 onClick = {
                     if (attachment.cleartextHttp && !active) confirmHttp = true else onToggle(attachment, networkId)
                 },
-                modifier = Modifier.size(42.dp),
+                modifier = Modifier.size(MotdSizes.touchTarget),
             ) {
                 Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary) {
-                    Box(Modifier.size(34.dp), contentAlignment = Alignment.Center) {
+                    Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
                         val glyph =
                             when {
                                 loading -> AudioToggleGlyph.LOADING
@@ -235,8 +229,8 @@ private fun AudioAttachmentPlayer(
                                 needsDownload -> AudioToggleGlyph.DOWNLOAD
                                 else -> AudioToggleGlyph.PLAY
                             }
-                        // Crossfade the glyph under the user's finger; the container is a fixed
-                        // 34dp so no size transform is needed.
+                        // Crossfade the glyph under the user's finger; the fixed container needs
+                        // no size transform.
                         AnimatedContent(
                             targetState = glyph,
                             transitionSpec = {
@@ -281,42 +275,39 @@ private fun AudioAttachmentPlayer(
                     }
                 }
             }
-            Column(Modifier.weight(1f).padding(start = 6.dp)) {
-                if (!attachment.voice) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            attachment.title,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium,
-                        )
-                    }
-                }
+            Column(
+                modifier = Modifier.weight(1f).padding(start = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = if (attachment.voice) "Voice message" else attachment.title,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
                 val scrubDuration = (duration ?: 1L).coerceAtLeast(1L)
-                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    WaveformScrubber(
-                        value = (scrubValue / scrubDuration).coerceIn(0f, 1f),
-                        onValueChange = { fraction ->
-                            scrubbing = true
-                            scrubValue = fraction * scrubDuration
-                        },
-                        onValueChangeFinished = {
-                            onSeek(attachment, scrubValue.toLong())
-                            scrubbing = false
-                        },
-                        seed = attachment.playbackId,
-                        enabled = active && !loading && error == null && duration != null && duration > 0,
-                        bufferedValue = bufferedFraction,
-                        waveform = waveform,
-                        modifier = Modifier.testTag("audio_player_scrubber"),
-                    )
-                }
+                WaveformScrubber(
+                    value = (scrubValue / scrubDuration).coerceIn(0f, 1f),
+                    onValueChange = { fraction ->
+                        scrubbing = true
+                        scrubValue = fraction * scrubDuration
+                    },
+                    onValueChangeFinished = {
+                        onSeek(attachment, scrubValue.toLong())
+                        scrubbing = false
+                    },
+                    seed = attachment.playbackId,
+                    enabled = active && !loading && error == null && duration != null && duration > 0,
+                    waveform = waveform,
+                    playing = playing,
+                    modifier = Modifier.testTag("audio_player_scrubber"),
+                )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         error?.let { "Couldn’t play · $it" }
                             ?: "${formatAudioDuration(position)} / ${formatAudioDuration(duration)}",
-                        modifier = Modifier.weight(1f, fill = false),
+                        modifier = Modifier.weight(1f),
                         style = MaterialTheme.typography.labelSmall,
                         color = if (error == null) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
                         maxLines = 1,
