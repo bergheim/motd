@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -213,63 +214,78 @@ private fun AudioAttachmentPlayer(
             Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(
-                onClick = {
-                    if (attachment.cleartextHttp && !active) confirmHttp = true else onToggle(attachment, networkId)
-                },
-                modifier = Modifier.size(MotdSizes.touchTarget),
-            ) {
-                Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary) {
-                    Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
-                        val glyph =
-                            when {
-                                loading -> AudioToggleGlyph.LOADING
-                                error != null -> AudioToggleGlyph.ERROR
-                                playing -> AudioToggleGlyph.PLAYING
-                                needsDownload -> AudioToggleGlyph.DOWNLOAD
-                                else -> AudioToggleGlyph.PLAY
-                            }
-                        // Crossfade the glyph under the user's finger; the fixed container needs
-                        // no size transform.
-                        AnimatedContent(
-                            targetState = glyph,
-                            transitionSpec = {
-                                fadeIn(MotdMotion.microFadeIn) togetherWith fadeOut(MotdMotion.microFadeOut)
-                            },
+            Box(Modifier.size(MotdSizes.touchTarget), contentAlignment = Alignment.Center) {
+                if (attachment.voice) {
+                    RadialPlaybackWave(
+                        playbackId = attachment.playbackId,
+                        waveform = playbackState.waveform ?: waveform,
+                        positionMs = position,
+                        durationMs = duration,
+                        playing = playing,
+                        modifier = Modifier.fillMaxSize().testTag("audio_player_radial_wave"),
+                    )
+                }
+                IconButton(
+                    onClick = {
+                        if (attachment.cleartextHttp && !active) confirmHttp = true else onToggle(attachment, networkId)
+                    },
+                    modifier = Modifier.fillMaxSize(),
+                ) {
+                    Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primary) {
+                        Box(
+                            Modifier.size(if (attachment.voice) 32.dp else 40.dp),
                             contentAlignment = Alignment.Center,
-                            label = "audio_toggle",
-                        ) { state ->
-                            if (state == AudioToggleGlyph.LOADING) {
-                                playbackState.loadingFraction?.let { fraction ->
-                                    CircularProgressIndicator(
-                                        progress = { fraction },
+                        ) {
+                            val glyph =
+                                when {
+                                    loading -> AudioToggleGlyph.LOADING
+                                    error != null -> AudioToggleGlyph.ERROR
+                                    playing -> AudioToggleGlyph.PLAYING
+                                    needsDownload -> AudioToggleGlyph.DOWNLOAD
+                                    else -> AudioToggleGlyph.PLAY
+                                }
+                            // Crossfade the glyph under the user's finger; the fixed container needs
+                            // no size transform.
+                            AnimatedContent(
+                                targetState = glyph,
+                                transitionSpec = {
+                                    fadeIn(MotdMotion.microFadeIn) togetherWith fadeOut(MotdMotion.microFadeOut)
+                                },
+                                contentAlignment = Alignment.Center,
+                                label = "audio_toggle",
+                            ) { state ->
+                                if (state == AudioToggleGlyph.LOADING) {
+                                    playbackState.loadingFraction?.let { fraction ->
+                                        CircularProgressIndicator(
+                                            progress = { fraction },
+                                            modifier = Modifier.size(20.dp),
+                                            color = MaterialTheme.colorScheme.onPrimary,
+                                            strokeWidth = 2.5.dp,
+                                        )
+                                    } ?: CircularProgressIndicator(
                                         modifier = Modifier.size(20.dp),
                                         color = MaterialTheme.colorScheme.onPrimary,
                                         strokeWidth = 2.5.dp,
                                     )
-                                } ?: CircularProgressIndicator(
-                                    modifier = Modifier.size(20.dp),
-                                    color = MaterialTheme.colorScheme.onPrimary,
-                                    strokeWidth = 2.5.dp,
-                                )
-                            } else {
-                                Icon(
-                                    imageVector =
-                                        when (state) {
-                                            AudioToggleGlyph.ERROR -> Icons.Filled.Refresh
-                                            AudioToggleGlyph.PLAYING -> Icons.Filled.Pause
-                                            AudioToggleGlyph.DOWNLOAD -> Icons.Outlined.Download
-                                            else -> Icons.Filled.PlayArrow
-                                        },
-                                    contentDescription =
-                                        when (state) {
-                                            AudioToggleGlyph.ERROR -> "Retry audio"
-                                            AudioToggleGlyph.PLAYING -> "Pause audio"
-                                            AudioToggleGlyph.DOWNLOAD -> "Download audio"
-                                            else -> "Play audio"
-                                        },
-                                    tint = MaterialTheme.colorScheme.onPrimary,
-                                )
+                                } else {
+                                    Icon(
+                                        imageVector =
+                                            when (state) {
+                                                AudioToggleGlyph.ERROR -> Icons.Filled.Refresh
+                                                AudioToggleGlyph.PLAYING -> Icons.Filled.Pause
+                                                AudioToggleGlyph.DOWNLOAD -> Icons.Outlined.Download
+                                                else -> Icons.Filled.PlayArrow
+                                            },
+                                        contentDescription =
+                                            when (state) {
+                                                AudioToggleGlyph.ERROR -> "Retry audio"
+                                                AudioToggleGlyph.PLAYING -> "Pause audio"
+                                                AudioToggleGlyph.DOWNLOAD -> "Download audio"
+                                                else -> "Play audio"
+                                            },
+                                        tint = MaterialTheme.colorScheme.onPrimary,
+                                    )
+                                }
                             }
                         }
                     }

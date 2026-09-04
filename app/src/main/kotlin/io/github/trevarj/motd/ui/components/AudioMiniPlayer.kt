@@ -4,12 +4,14 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -60,6 +62,7 @@ fun AudioMiniPlayer(
     var showDetails by remember(state.activeId) { mutableStateOf(false) }
     val duration = state.durationMs ?: attachment.durationMs
     val played = duration?.takeIf { it > 0 }?.let { state.positionMs.toFloat() / it } ?: 0f
+    val controlColor = MaterialTheme.colorScheme.onPrimaryContainer
     val originLabel = state.origin?.contextLabel(state.networkName, includeNetwork)
     val context =
         if (attachment.voice) {
@@ -83,46 +86,63 @@ fun AudioMiniPlayer(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(
-                onClick =
-                    when {
-                        state.loading -> onCancelLoading
-                        state.error != null -> onRetry
-                        else -> onToggle
-                    },
-                modifier =
-                    Modifier.size(30.dp).testTag(
+            Box(Modifier.size(MINI_PLAYER_HEIGHT), contentAlignment = Alignment.Center) {
+                RadialPlaybackWave(
+                    playbackId = state.activeId,
+                    waveform = state.waveform ?: attachment.waveform,
+                    positionMs = state.positionMs,
+                    durationMs = duration,
+                    playing = state.playing,
+                    modifier = Modifier.fillMaxSize().testTag("audio_mini_radial_wave"),
+                )
+                Surface(
+                    modifier = Modifier.size(28.dp),
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                ) {}
+                IconButton(
+                    onClick =
                         when {
-                            state.loading -> "audio_mini_cancel_loading"
-                            state.error != null -> "audio_mini_retry"
-                            else -> "audio_mini_toggle"
+                            state.loading -> onCancelLoading
+                            state.error != null -> onRetry
+                            else -> onToggle
                         },
-                    ),
-            ) {
-                when {
-                    state.loading -> {
-                        state.loadingFraction?.let { fraction ->
-                            CircularProgressIndicator(
-                                progress = { fraction },
+                    modifier =
+                        Modifier.fillMaxSize().testTag(
+                            when {
+                                state.loading -> "audio_mini_cancel_loading"
+                                state.error != null -> "audio_mini_retry"
+                                else -> "audio_mini_toggle"
+                            },
+                        ),
+                ) {
+                    when {
+                        state.loading -> {
+                            state.loadingFraction?.let { fraction ->
+                                CircularProgressIndicator(
+                                    progress = { fraction },
+                                    modifier = Modifier.size(16.dp),
+                                    color = controlColor,
+                                    strokeWidth = 2.dp,
+                                )
+                            } ?: CircularProgressIndicator(
                                 modifier = Modifier.size(16.dp),
+                                color = controlColor,
                                 strokeWidth = 2.dp,
                             )
-                        } ?: CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                        )
-                    }
+                        }
 
-                    state.error != null -> {
-                        Icon(Icons.Filled.Refresh, "Retry audio", Modifier.size(18.dp))
-                    }
+                        state.error != null -> {
+                            Icon(Icons.Filled.Refresh, "Retry audio", Modifier.size(18.dp), tint = controlColor)
+                        }
 
-                    state.playing -> {
-                        Icon(Icons.Filled.Pause, "Pause audio", Modifier.size(18.dp))
-                    }
+                        state.playing -> {
+                            Icon(Icons.Filled.Pause, "Pause audio", Modifier.size(18.dp), tint = controlColor)
+                        }
 
-                    else -> {
-                        Icon(Icons.Filled.PlayArrow, "Play audio", Modifier.size(18.dp))
+                        else -> {
+                            Icon(Icons.Filled.PlayArrow, "Play audio", Modifier.size(18.dp), tint = controlColor)
+                        }
                     }
                 }
             }
@@ -199,4 +219,4 @@ fun AudioMiniPlayer(
     }
 }
 
-private val MINI_PLAYER_HEIGHT = 32.dp
+private val MINI_PLAYER_HEIGHT = 48.dp
